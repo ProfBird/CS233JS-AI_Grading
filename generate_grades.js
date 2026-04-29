@@ -46,6 +46,7 @@ module.exports = async function(analysisReport, lintReport, runtimeReport, confi
     }
 
     const rubricPath = path.join(labDir, config.rubricName);
+    const isXlsm = rubricPath.toLowerCase().endsWith('.xlsm');
     if (!fs.existsSync(rubricPath)) {
         console.error(`ERROR: Rubric file not found at ${rubricPath}`);
         return;
@@ -136,11 +137,14 @@ module.exports = async function(analysisReport, lintReport, runtimeReport, confi
                     }
                 }
                 // Write the grade file and move to next student
-                wb.SheetNames = ['Grade'];
-                wb.Sheets = { 'Grade': sheet };
+                if (!isXlsm) {
+                    wb.SheetNames = ['Grade'];
+                    wb.Sheets = { 'Grade': sheet };
+                }
                 forceRecalc(sheet);
-                const outputPath = path.join(filesDir, `${student}_Grade.xlsx`);
-                xlsx.writeFile(wb, outputPath);
+                const outputExt = isXlsm ? '.xlsm' : '.xlsx';
+                const outputPath = path.join(filesDir, `${student}_Grade${outputExt}`);
+                xlsx.writeFile(wb, outputPath, isXlsm ? { bookType: 'xlsm' } : undefined);
                 console.log(`  PARTIAL: ${student} -> ${path.basename(outputPath)} (extraction failed)`);
                 summary.successful.push(student);
                 generated++;
@@ -290,13 +294,16 @@ module.exports = async function(analysisReport, lintReport, runtimeReport, confi
                 }
             }
 
-            // Keep only the 'Grade' sheet
-            wb.SheetNames = ['Grade'];
-            wb.Sheets = { 'Grade': sheet };
+            // Keep only the 'Grade' sheet (skip for .xlsm — preserve macros and other sheets)
+            if (!isXlsm) {
+                wb.SheetNames = ['Grade'];
+                wb.Sheets = { 'Grade': sheet };
+            }
             forceRecalc(sheet);
 
-            const outputPath = path.join(filesDir, `${student}_Grade.xlsx`);
-            xlsx.writeFile(wb, outputPath);
+            const outputExt = isXlsm ? '.xlsm' : '.xlsx';
+            const outputPath = path.join(filesDir, `${student}_Grade${outputExt}`);
+            xlsx.writeFile(wb, outputPath, isXlsm ? { bookType: 'xlsm' } : undefined);
             console.log(`  OK: ${student} -> ${path.basename(outputPath)}`);
             summary.successful.push(student);
             generated++;

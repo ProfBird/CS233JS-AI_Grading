@@ -1,5 +1,11 @@
 # CS233JS AI Grader — Developer Guide
 
+
+
+[TOC]
+
+
+
 ---
 
 ## Module Dependency Diagram
@@ -75,7 +81,7 @@ graph TD
 
 ---
 
-## Grading Pipeline Flow
+## Startup & Configuration Flow
 
 ```mermaid
 sequenceDiagram
@@ -84,12 +90,6 @@ sequenceDiagram
     participant env as env.json
     participant config as labXX_config.json
     participant labEnv as _env.json
-    participant extract as extract_code.js
-    participant runtime as runtime_check.js
-    participant analyze as analyze_code.js
-    participant lint as lint_code.js
-    participant grades as generate_grades.js
-    participant xlsx as Rubric .xlsx/.xlsm
 
     User->>run_all: node run_all.js [LabXX] [flags]
 
@@ -119,6 +119,15 @@ sequenceDiagram
         run_all->>run_all: delete all extracted_code/ and repo/ dirs
         run_all->>run_all: delete entire repoClonePath tree
     end
+```
+
+## Pipeline Phases 1-2: Code Acquisition & Runtime Check
+
+```mermaid
+sequenceDiagram
+    participant run_all as run_all.js
+    participant extract as extract_code.js
+    participant runtime as runtime_check.js
 
     Note over run_all: === Phase 1: Code Acquisition ===
     run_all->>extract: extractCode(labDir, repoClonePath)
@@ -144,6 +153,17 @@ sequenceDiagram
         runtime->>runtime: serve + check for console errors
     end
     runtime-->>run_all: return runtimeReport[]
+```
+
+## Pipeline Phases 3-5: Analysis, Lint & Grade Generation
+
+```mermaid
+sequenceDiagram
+    participant run_all as run_all.js
+    participant analyze as analyze_code.js
+    participant lint as lint_code.js
+    participant grades as generate_grades.js
+    participant xlsx as Rubric .xlsx/.xlsm
 
     Note over run_all: === Phase 3: Analysis ===
     run_all->>analyze: analyzeCode(students, config, labDir)
@@ -382,11 +402,11 @@ Per-lab machine-specific config. Created on first run per lab. Path to a local d
 ```mermaid
 graph LR
     subgraph "Pipeline Data"
-        students[students[] array]
-        runtimeR[runtimeReport[]]
-        analysisR[analysisReport[]]
-        lintR[lintReport[]]
-        gradeSummary[{ successful, errors }]
+        students["students[] array"]
+        runtimeR["runtimeReport[]"]
+        analysisR["analysisReport[]"]
+        lintR["lintReport[]"]
+        gradeSummary["{ successful, errors }"]
     end
 
     extract --> students

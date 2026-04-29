@@ -21,8 +21,6 @@ const lintCode = require('./lint_code.js');
 const runtimeCheck = require('./runtime_check.js');
 const generateGrades = require('./generate_grades.js');
 
-const baseDir = path.resolve(__dirname, '..');
-
 // --- Help ---
 
 function showHelp() {
@@ -42,7 +40,7 @@ OPTIONS
                    grade generation) but keep existing extracted/cloned code.
                    Use this after fixing grading scripts or config.
 
-  --reclone        Delete all extracted_code directories and re-clone/unzip
+  --reclone        Delete all extracted_code and repo directories, re-clone/unzip
                    from scratch, then run full grading. Use this if student
                    repos have been updated.
 
@@ -68,11 +66,25 @@ EXAMPLES
 
 // --- Helpers ---
 
+const envPath = path.join(__dirname, 'env.json');
+
 function getAvailableLabs() {
-    return fs.readdirSync(baseDir).filter(f => {
-        const isDir = fs.statSync(path.join(baseDir, f)).isDirectory();
-        const hasConfig = fs.existsSync(path.join(__dirname, 'configs', `${f.toLowerCase()}_config.json`));
-        return isDir && hasConfig;
+    // Read env.json to find the root directory containing lab folders
+    let labRoot;
+    try {
+        labRoot = JSON.parse(fs.readFileSync(envPath, 'utf8')).labRoot;
+    } catch (e) {
+        return [];
+    }
+    if (!labRoot || !fs.existsSync(labRoot)) return [];
+
+    const configsDir = path.join(__dirname, 'configs');
+
+    // Scan labRoot for directories with matching configs
+    return fs.readdirSync(labRoot).filter(f => {
+        const fullPath = path.join(labRoot, f);
+        return fs.statSync(fullPath).isDirectory() &&
+               fs.existsSync(path.join(configsDir, `${f.toLowerCase()}_config.json`));
     });
 }
 
@@ -98,12 +110,35 @@ async function main() {
     let reclone = hasRecloneFlag;
     // regrade is true if --regrade OR --reclone is passed (reclone implies regrade)
     let regrade = hasRegradeFlag || hasRecloneFlag;
+    let config, labDir, repoClonePath;
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const askRl = q => new Promise(resolve => rl.question(q, resolve));
 
     try {
-        const labs = getAvailableLabs();
+        // --- Global env: ensure labRoot is configured ---
+        let labRoot;
+        try {
+            labRoot = JSON.parse(fs.readFileSync(envPath, 'utf8')).labRoot;
+        } catch (e) {
+            labRoot = '';
+        }
+        if (!labRoot || !fs.existsSync(labRoot)) {
+            const input = await askRl('Enter the root path containing lab directories: ');
+            if (!input.trim()) {
+                console.error('ERROR: A lab root path is required.');
+                process.exit(1);
+            }
+            labRoot = input.trim();
+            fs.writeFileSync(envPath, JSON.stringify({ labRoot }, null, 2) + '\n', 'utf8');
+            console.log(`  Saved labRoot to env.json`);
+        }
+
+        const labs = fs.readdirSync(labRoot).filter(f => {
+            const fullPath = path.join(labRoot, f);
+            return fs.statSync(fullPath).isDirectory() &&
+                   fs.existsSync(path.join(__dirname, 'configs', `${f.toLowerCase()}_config.json`));
+        });
 
         // If no lab name was provided, show the lab menu
         if (!labName) {
@@ -129,6 +164,37 @@ async function main() {
             }
         }
 
+        // Load lab config
+        const configPath = path.join(__dirname, 'configs', `${labName.toLowerCase()}_config.json`);
+        if (!fs.existsSync(configPath)) {
+            console.error(`ERROR: Config file not found at ${configPath}`);
+            process.exit(1);
+        }
+        config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+        // Resolve lab directory
+        labDir = path.join(labRoot, labName);
+        if (!fs.existsSync(labDir)) {
+            console.error(`ERROR: Directory not found at ${labDir}`);
+            process.exit(1);
+        }
+
+        // Load per-lab env for repoClonePath
+        const labEnvPath = path.join(labDir, '_env.json');
+        let labEnv = {};
+        try { labEnv = JSON.parse(fs.readFileSync(labEnvPath, 'utf8')); } catch (e) {}
+        repoClonePath = labEnv.repoClonePath || '';
+        if (!repoClonePath) {
+            const input = await askRl('Enter path for storing extracted code (outside Google Drive): ');
+            if (!input.trim()) {
+                console.error('ERROR: A code storage path is required.');
+                process.exit(1);
+            }
+            repoClonePath = input.trim();
+            fs.writeFileSync(labEnvPath, JSON.stringify({ repoClonePath }, null, 2) + '\n', 'utf8');
+            console.log(`  Saved repoClonePath to ${labName}/_env.json`);
+        }
+
         // If no flags were specified on the command line, ask
         if (!hasAnyFlag) {
             console.log('\nGrading options:');
@@ -149,42 +215,39 @@ async function main() {
         rl.close();
     }
 
-    const labDir = path.join(baseDir, labName);
-    const configPath = path.join(__dirname, 'configs', `${labName.toLowerCase()}_config.json`);
-
-    if (!fs.existsSync(labDir)) {
-        console.error(`ERROR: Directory not found at ${labDir}`);
-        process.exit(1);
-    }
-    if (!fs.existsSync(configPath)) {
-        console.error(`ERROR: Config file not found at ${configPath}`);
-        process.exit(1);
-    }
-
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-
     const modeLabel = reclone ? 'RECLONE' : (regrade ? 'REGRADE' : 'NORMAL');
     const aiLabel = aiComments ? ' +AI' : '';
     console.log(`\n================================`);
     console.log(`   Grading: ${labName}  [${modeLabel}${aiLabel}]`);
     console.log(`================================\n`);
 
-    // If recloning, delete all extracted_code directories
+    // If recloning, delete all extracted_code and repo directories
     if (reclone) {
-        console.log('--- Clearing previous extractions ---');
+        console.log('--- Clearing previous code ---');
+
+        // Clear old-style dirs inside each student's submission folder
         const entries = fs.readdirSync(labDir);
         for (const entry of entries) {
-            const extractedDir = path.join(labDir, entry, 'extracted_code');
-            if (fs.existsSync(extractedDir)) {
-                fs.rmSync(extractedDir, { recursive: true, force: true });
-                console.log(`  Cleared: ${entry}/extracted_code`);
+            for (const dir of ['extracted_code', 'repo']) {
+                const codeDir = path.join(labDir, entry, dir);
+                if (fs.existsSync(codeDir)) {
+                    fs.rmSync(codeDir, { recursive: true, force: true });
+                    console.log(`  Cleared: ${entry}/${dir}`);
+                }
             }
         }
+
+        // Clear repoClonePath entirely (all student code lives here)
+        if (repoClonePath && fs.existsSync(repoClonePath)) {
+            fs.rmSync(repoClonePath, { recursive: true, force: true });
+            console.log(`  Cleared: ${repoClonePath}`);
+        }
+
         console.log();
     }
 
-    // 1. Extraction (always runs — skips existing unless reclone cleared them)
-    const students = extractCode(labDir);
+    // 1. Code Acquisition (always runs — skips existing unless reclone cleared them)
+    const students = await extractCode(labDir, repoClonePath);
 
     // 2. Runtime Check (browser or build, based on config)
     const runtimeReport = await runtimeCheck(students, config, labDir);

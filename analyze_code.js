@@ -42,7 +42,10 @@ function getAllFiles(dirPath, arrayOfFiles, exclusions = []) {
     files.forEach(function (file) {
         let fullP = path.join(dirPath, file);
         if (exclusions.some(ex => fullP.includes(ex))) return;
-        if (fs.statSync(fullP).isDirectory()) {
+        let stats;
+        try { stats = fs.lstatSync(fullP); } catch (e) { return; }
+        if (stats.isSymbolicLink()) return; // skip symlinks to avoid infinite loops
+        if (stats.isDirectory()) {
             arrayOfFiles = getAllFiles(fullP, arrayOfFiles, exclusions);
         } else {
             arrayOfFiles.push(fullP);
@@ -125,9 +128,12 @@ function dirMatchesGameNames(dir, gameNames) {
 
 function getSubdirs(dirPath) {
     try {
-        return fs.readdirSync(dirPath).filter(f =>
-            !f.startsWith('.') && fs.statSync(path.join(dirPath, f)).isDirectory()
-        );
+        return fs.readdirSync(dirPath).filter(f => {
+            if (f.startsWith('.')) return false;
+            let stats;
+            try { stats = fs.lstatSync(path.join(dirPath, f)); } catch (e) { return false; }
+            return stats.isDirectory() && !stats.isSymbolicLink();
+        });
     } catch(e) { return []; }
 }
 

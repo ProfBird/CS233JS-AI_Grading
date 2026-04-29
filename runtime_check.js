@@ -72,7 +72,10 @@ function findPackageJsonDirs(dirPath, arrayOfDirs = []) {
         }
         files.forEach(file => {
             const fullP = path.join(dirPath, file);
-            if (fs.statSync(fullP).isDirectory() && !file.includes('node_modules') && !file.startsWith('.') && file !== 'dist') {
+            let stats;
+            try { stats = fs.lstatSync(fullP); } catch (e) { return; }
+            if (stats.isSymbolicLink()) return; // skip symlinks to avoid infinite loops
+            if (stats.isDirectory() && !file.includes('node_modules') && !file.startsWith('.') && file !== 'dist') {
                 findPackageJsonDirs(fullP, arrayOfDirs);
             }
         });
@@ -121,7 +124,10 @@ function findAllIndexHtmlDirs(dir, results = []) {
         for (const f of files) {
             if (f === 'node_modules' || f === 'dist' || f.startsWith('.')) continue;
             const full = path.join(dir, f);
-            if (fs.statSync(full).isDirectory()) {
+            let stats;
+            try { stats = fs.lstatSync(full); } catch (e) { continue; }
+            if (stats.isSymbolicLink()) continue; // skip symlinks to avoid infinite loops
+            if (stats.isDirectory()) {
                 findAllIndexHtmlDirs(full, results);
             }
         }

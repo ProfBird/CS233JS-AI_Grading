@@ -17,7 +17,11 @@ function getAllJsFiles(dir, exclusions = []) {
 
             if (isExcluded) continue;
 
-            if (fs.statSync(full).isDirectory()) {
+            let stats;
+            try { stats = fs.lstatSync(full); } catch (e) { continue; }
+            if (stats.isSymbolicLink()) continue; // skip symlinks to avoid infinite loops
+
+            if (stats.isDirectory()) {
                 if (!item.startsWith('.') && item !== '__MACOSX') {
                     results = results.concat(getAllJsFiles(full, exclusions));
                 }

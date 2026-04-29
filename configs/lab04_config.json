@@ -5,26 +5,116 @@
   "summaryCell": "A2",
   "runtimeCheck": "build",
   "lint": {
-    "exclude": ["node_modules", "dist"]
+    "exclude": [
+      "node_modules",
+      "dist"
+    ]
   },
   "analysis": {
     "features": [
-      { "id": "module_imports", "regex": "import\\s+.*from", "fileRegex": "\\.js$" },
-      { "id": "lit_html", "regex": "from\\s+['\"]lit-html['\"]", "fileRegex": "\\.js$" },
-      { "id": "local_storage", "regex": "localStorage\\.", "fileRegex": "\\.js$" }
+      {
+        "id": "module_imports",
+        "regex": "import\\s+.*from",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "lit_html",
+        "regex": "from\\s+['\"]lit-html['\"]",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "local_storage",
+        "regex": "localStorage\\.",
+        "fileRegex": "\\.js$"
+      }
     ]
   },
   "mappings": [
-    { "cell": "C8",  "commentCell": "E8",  "type": "developer_comments", "maxScore": 1 },
-    { "cell": "C9",  "commentCell": "E9",  "type": "manual", "maxScore": 8, "msg": "NEEDS MANUAL CHECK (add, view, delete items)" },
-    { "cell": "C10", "commentCell": "E10", "type": "feature", "featureId": "module_imports", "minCount": 3, "maxScore": 4, "successMsg": "Yes", "failMsg": "Missing or fewer than 3 modules" },
-    { "cell": "C11", "commentCell": "E11", "type": "feature", "featureId": "lit_html", "minCount": 1, "maxScore": 4, "successMsg": "Yes", "failMsg": "lit-html import not found" },
-    { "cell": "C12", "commentCell": "E12", "type": "feature", "featureId": "local_storage", "minCount": 1, "maxScore": 3, "successMsg": "Yes", "failMsg": "localStorage not found" },
-    { "cell": "C13", "commentCell": "E13", "linkCell": "F13", "linkUrlType": "citstudent", "type": "url_check", "maxScore": 3, "urlType": "citstudent" },
-    { "cell": "C14", "commentCell": "E14", "type": "build_check", "maxScore": 1 },
-    { "cell": "C15", "commentCell": "E15", "type": "manual", "maxScore": 2, "msg": "NEEDS MANUAL CHECK (screenshots submitted)" },
-    { "cell": "C16", "commentCell": "E16", "type": "lint", "maxScore": 2 },
-    { "cell": "C20", "commentCell": "E20", "linkCell": "F20", "linkUrlType": "github", "type": "url_check", "maxScore": 10, "urlType": "github" },
-    { "cell": "C21", "commentCell": "E21", "type": "code_review", "maxScore": 2 }
+    {
+      "cell": "C8",
+      "commentCell": "E8",
+      "type": "developer_comments",
+      "maxScore": 1
+    },
+    {
+      "cell": "C9",
+      "commentCell": "E9",
+      "type": "manual",
+      "maxScore": 8,
+      "msg": "NEEDS MANUAL CHECK (add, view, delete items)"
+    },
+    {
+      "cell": "C10",
+      "commentCell": "E10",
+      "type": "feature",
+      "featureId": "module_imports",
+      "minCount": 3,
+      "maxScore": 4,
+      "successMsg": "Yes",
+      "failMsg": "Missing or fewer than 3 modules"
+    },
+    {
+      "cell": "C11",
+      "commentCell": "E11",
+      "type": "feature",
+      "featureId": "lit_html",
+      "minCount": 1,
+      "maxScore": 4,
+      "successMsg": "Yes",
+      "failMsg": "lit-html import not found"
+    },
+    {
+      "cell": "C12",
+      "commentCell": "E12",
+      "type": "feature",
+      "featureId": "local_storage",
+      "minCount": 1,
+      "maxScore": 3,
+      "successMsg": "Yes",
+      "failMsg": "localStorage not found"
+    },
+    {
+      "cell": "C13",
+      "commentCell": "E13",
+      "linkCell": "F13",
+      "linkUrlType": "citstudent",
+      "type": "url_check",
+      "maxScore": 3,
+      "urlType": "citstudent"
+    },
+    {
+      "cell": "C14",
+      "commentCell": "E14",
+      "type": "build_check",
+      "maxScore": 1
+    },
+    {
+      "cell": "C15",
+      "commentCell": "E15",
+      "type": "manual",
+      "maxScore": 2,
+      "msg": "NEEDS MANUAL CHECK (screenshots submitted)"
+    },
+    {
+      "cell": "C16",
+      "commentCell": "E16",
+      "type": "lint",
+      "maxScore": 2
+    },
+    {
+      "cell": "C20",
+      "commentCell": "E20",
+      "linkCell": "F20",
+      "linkUrlType": "github",
+      "type": "url_check",
+      "maxScore": 10,
+      "urlType": "github"
+    },
+    {
+      "cell": "C21",
+      "commentCell": "E21",
+      "type": "code_review",
+      "maxScore": 2
+    }
   ]
 }

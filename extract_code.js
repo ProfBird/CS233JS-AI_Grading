@@ -6,8 +6,25 @@
  */
 
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const { execFileSync } = require('child_process');
+
+// Read a file with a timeout — protects against Google Drive blocking reads on unsynced files
+async function readFileWithTimeout(filePath, timeoutMs = 10000) {
+    let timeoutHandle;
+    const timeoutPromise = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error('Google Drive sync timed out')), timeoutMs);
+    });
+    try {
+        return await Promise.race([
+            fsp.readFile(filePath, 'utf8'),
+            timeoutPromise
+        ]);
+    } finally {
+        clearTimeout(timeoutHandle);
+    }
+}
 
 // Extracts a cloneable GitHub URL from various GitHub URL formats
 // Handles: /owner/repo, /owner/repo.git, /owner/repo/tree/branch/path, etc.
@@ -69,12 +86,19 @@ function getStudents(labDir) {
     return Object.values(students);
 }
 
-function extractUrls(textDir) {
+async function extractUrls(textDir) {
     if (!textDir) return { citstudent: null, github: null };
     const textFile = path.join(textDir, 'onlinetext.html');
     if (!fs.existsSync(textFile)) return { citstudent: null, github: null };
 
-    const content = fs.readFileSync(textFile, 'utf8');
+    let content;
+    try {
+        content = await readFileWithTimeout(textFile, 10000);
+    } catch (e) {
+        // Google Drive timeout — skip this student rather than hanging the pipeline
+        console.log(`  Warning: timeout reading onlinetext.html for a student (Google Drive may be slow) — skipping`);
+        return { citstudent: null, github: null };
+    }
     const urls = { citstudent: null, github: null };
 
     const hrefRegex = /href="(.*?)"/g;
@@ -92,30 +116,40 @@ function extractUrls(textDir) {
     return urls;
 }
 
-function extractStudentCode(student, labDir) {
-    const urls = extractUrls(student.textDir);
-    const unzippedDir = path.join(student.filesDir || labDir, 'extracted_code'); // if no filesDir, put in root (fallback)
-    
+async function extractStudentCode(student, labDir, repoClonePath) {
+    const urls = await extractUrls(student.textDir);
+    // Use 'repo' for GitHub clones, 'extracted_code' for ZIP uploads
+    const codeDirName = student.zipFile ? 'extracted_code' : (urls.github ? 'repo' : 'extracted_code');
+
+    // Determine where to put the code: repoClonePath (outside Google Drive) or fallback to filesDir
+    let codeDir;
+    if (repoClonePath) {
+        const studentDir = path.join(repoClonePath, student.name);
+        codeDir = path.join(studentDir, codeDirName);
+    } else {
+        codeDir = path.join(student.filesDir || labDir, codeDirName);
+    }
+
     // We only skip if the folder exists AND has actual content (not just .git or empty)
-    if (fs.existsSync(unzippedDir)) {
-        const contents = fs.readdirSync(unzippedDir).filter(f => !f.startsWith('.'));
+    if (fs.existsSync(codeDir)) {
+        const contents = fs.readdirSync(codeDir).filter(f => !f.startsWith('.'));
         if (contents.length > 0) {
-            console.log(`  Already extracted: ${student.name}`);
+            student.extractedDir = codeDir;
+            console.log(`  Already ${urls.github ? 'cloned' : 'extracted'}: ${student.name}`);
             return urls;
         }
         // Directory exists but is empty/broken — remove it so we retry
-        console.log(`  Found empty extracted_code for ${student.name}, retrying...`);
-        fs.rmSync(unzippedDir, { recursive: true, force: true });
+        console.log(`  Found empty ${codeDirName} for ${student.name}, retrying...`);
+        fs.rmSync(codeDir, { recursive: true, force: true });
     }
 
-    if (student.filesDir) {
-        fs.mkdirSync(unzippedDir, { recursive: true });
-    }
+    fs.mkdirSync(codeDir, { recursive: true });
 
     if (student.zipFile) {
-        console.log(`  Unzipping for ${student.name}...`);
+        console.log(`  Extracting zip for ${student.name}...`);
         try {
-            execFileSync('unzip', ['-o', student.zipFile, '-d', unzippedDir], { stdio: 'ignore' });
+            execFileSync('unzip', ['-o', student.zipFile, '-d', codeDir], { stdio: 'ignore' });
+            student.extractedDir = codeDir;
         } catch (e) {
             console.log(`  Failed to unzip for ${student.name}`);
             student.error = 'Failed to unzip ZIP file';
@@ -127,12 +161,14 @@ function extractStudentCode(student, labDir) {
             student.error = 'Invalid GitHub URL format';
             return urls;
         }
-        console.log(`  Cloning GitHub repo for ${student.name}...`);
+        console.log(`  Cloning repo for ${student.name}...`);
         try {
-            // --depth 1 to make cloning faster
-            execFileSync('git', ['clone', '--depth', '1', normalizedUrl, unzippedDir], { stdio: 'ignore' });
+            // --depth 1 to make cloning faster; SIGKILL ensures hung processes don't freeze the pipeline
+            execFileSync('git', ['clone', '--depth', '1', normalizedUrl, codeDir], { stdio: 'ignore', timeout: 60_000, killSignal: 'SIGKILL' });
+            student.extractedDir = codeDir;
         } catch (e) {
-            console.log(`  Failed to clone github repo for ${student.name}`);
+            const reason = e.killed ? '(timed out after 60s)' : e.stderr ? e.stderr.toString().trim() : e.message;
+            console.log(`  Failed to clone repo for ${student.name} ${reason}`);
             student.error = 'Failed to clone GitHub repository';
         }
     } else {
@@ -143,33 +179,44 @@ function extractStudentCode(student, labDir) {
     return urls;
 }
 
-module.exports = function(labDir) {
-    console.log("--- Extraction Phase ---");
+module.exports = async function(labDir, repoClonePath) {
+    console.log("--- Code Acquisition Phase ---");
+    if (repoClonePath) {
+        fs.mkdirSync(repoClonePath, { recursive: true });
+    }
     const students = getStudents(labDir);
     const urlsReport = {};
 
-    students.forEach(student => {
-        const urls = extractStudentCode(student, labDir);
-        urlsReport[student.name] = urls;
+    for (const student of students) {
+        try {
+            const urls = await extractStudentCode(student, labDir, repoClonePath);
+            urlsReport[student.name] = urls;
 
-        // Ensure student has extractedDir field for downstream
-        student.extractedDir = student.filesDir ? path.join(student.filesDir, 'extracted_code') : null;
-        student.urls = urls;
+            // Ensure student has extractedDir field for downstream
+            // (set inside extractStudentCode; only compute fallback if it wasn't)
+            if (!student.extractedDir) {
+                student.extractedDir = student.filesDir ? path.join(student.filesDir, 'extracted_code') : null;
+            }
+            student.urls = urls;
 
-        // If the GitHub URL points to a subdirectory (tree URL), adjust extractedDir
-        if (urls.github && student.extractedDir && fs.existsSync(student.extractedDir)) {
-            const subdir = getGithubSubdir(urls.github);
-            if (subdir) {
-                const subdirPath = path.join(student.extractedDir, subdir);
-                if (fs.existsSync(subdirPath)) {
-                    student.extractedDir = subdirPath;
-                    console.log(`  Using subdirectory: ${subdir} for ${student.name}`);
-                } else {
-                    console.log(`  Warning: tree URL subdirectory "${subdir}" not found in cloned repo for ${student.name} — repo may have been reorganized since submission`);
+            // If the GitHub URL points to a subdirectory (tree URL), adjust extractedDir
+            if (urls.github && student.extractedDir && fs.existsSync(student.extractedDir)) {
+                const subdir = getGithubSubdir(urls.github);
+                if (subdir) {
+                    const subdirPath = path.join(student.extractedDir, subdir);
+                    if (fs.existsSync(subdirPath)) {
+                        student.extractedDir = subdirPath;
+                        console.log(`  Using subdirectory: ${subdir} for ${student.name}`);
+                    } else {
+                        console.log(`  Warning: tree URL subdirectory "${subdir}" not found in cloned repo for ${student.name} — repo may have been reorganized since submission`);
+                    }
                 }
             }
+        } catch (e) {
+            console.log(`  ERROR: Failed to process ${student.name}: ${e.message}`);
+            student.error = e.message;
         }
-    });
+    }
 
     return students; // returns array of augmented student objects
 };

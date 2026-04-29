@@ -35,16 +35,19 @@ Per-lab JSON specifying rubric filename, runtime check mode, feature regexes, an
 ### Directory structure
 
 ```
-.. (StudentLabWork parent)
-  └── Lab02/
-      ├── CS233JS_Lab02_Rubric.xlsx
+AI_Grading/   ← this directory
+  ├── run_all.js
+  ├── configs/labXX_config.json    # rubric config, feature regexes, cell mappings
+  ├── env.json                     # labRoot (path to StudentLabWork parent)
+  └── ...
+
+<labRoot>/    (on Google Drive)
+  └── LabXX/
+      ├── _env.json                # repoClonePath (local storage for extracted code)
+      ├── CS233JS_LabXX_Rubric.xlsx
       ├── StudentName_12345_assignsubmission_file/
       └── StudentName_12345_assignsubmission_onlinetext/
           └── onlinetext.html
-AI_Grading/   ← this directory
-  ├── run_all.js
-  ├── configs/lab02_config.json
-  └── ...
 ```
 
 ### Dependencies

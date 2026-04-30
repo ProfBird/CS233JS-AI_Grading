@@ -2,6 +2,28 @@ const http = require('http');
 
 const OLLAMA_BASE = 'http://localhost:11434';
 const TIMEOUT_MS = 8000;
+const MAX_RETRIES = 3;
+
+function httpRequest(method, path, body = null, timeout = TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+        const url = `${OLLAMA_BASE}${path}`;
+        const req = http.request(url, {
+            method,
+            headers: body ? {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body)
+            } : {}
+        }, res => {
+            let raw = '';
+            res.on('data', chunk => raw += chunk);
+            res.on('end', () => resolve({ status: res.statusCode, body: raw }));
+        });
+        req.on('error', reject);
+        req.setTimeout(timeout, () => { req.destroy(); reject(new Error('timeout')); });
+        if (body) req.write(body);
+        req.end();
+    });
+}
 
 // Returns the name of the first available model, or null if Ollama is unreachable or has no models.
 function getAvailableModel() {
@@ -23,7 +45,8 @@ function getAvailableModel() {
     });
 }
 
-// Returns a one-sentence summary string, or null if Ollama is unreachable/slow.
+// Returns a one-sentence summary string, or null on failure.
+// Retries with exponential backoff to handle cold-start delays.
 function generateSummary({ model, student, features, lintErrors, lintWarnings, lintTopIssues, runtimeSuccess, runtimeErrors }) {
     const topIssues = lintTopIssues.length ? ` (${lintTopIssues.slice(0, 3).join(', ')})` : '';
     const prompt =
@@ -40,33 +63,24 @@ function generateSummary({ model, student, features, lintErrors, lintWarnings, l
         stream: false
     });
 
-    return new Promise(resolve => {
-        const req = http.request(
-            `${OLLAMA_BASE}/v1/chat/completions`,
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Content-Length': Buffer.byteLength(body)
-                }
-            },
-            res => {
-                let raw = '';
-                res.on('data', chunk => raw += chunk);
-                res.on('end', () => {
-                    try {
-                        resolve(JSON.parse(raw).choices[0].message.content.trim());
-                    } catch {
-                        resolve(null);
-                    }
-                });
+    async function attempt(n) {
+        try {
+            const res = await httpRequest('POST', '/v1/chat/completions', body);
+            if (res.status === 200) {
+                return JSON.parse(res.body).choices[0].message.content.trim();
             }
-        );
-        req.on('error', () => resolve(null));
-        req.setTimeout(TIMEOUT_MS, () => { req.destroy(); resolve(null); });
-        req.write(body);
-        req.end();
-    });
+        } catch (e) {
+            /* retry on timeout or network error */
+        }
+        if (n < MAX_RETRIES - 1) {
+            const delay = Math.pow(2, n) * 1000;
+            await new Promise(r => setTimeout(r, delay));
+            return attempt(n + 1);
+        }
+        return null;
+    }
+
+    return attempt(0);
 }
 
 module.exports = { getAvailableModel, generateSummary };

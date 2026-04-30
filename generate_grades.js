@@ -1,8 +1,11 @@
 /**
  * generate_grades.js
- * 
+ *
  * Generates graded spreadsheets for each student based on the config cell mappings
- * and the outputs of the analysis and linting phases.
+ * and the analysis/lint/runtime data attached to each student object.
+ *
+ * Handlers are registered via registerHandler() — external modules can add new types
+ * without editing this file.
  */
 
 const fs = require('fs');
@@ -10,11 +13,13 @@ const path = require('path');
 let xlsx;
 try {
     xlsx = require('xlsx');
-} catch(e) {
+} catch (e) {
     console.error("Please run `npm install xlsx` in AI_Grading directory.");
     process.exit(1);
 }
 const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('./ollama_comments');
+
+// --- Cell helpers ---
 
 function setCellValue(sheet, cellRef, value) {
     sheet[cellRef] = { v: value, t: typeof value === 'number' ? 'n' : 's' };
@@ -30,7 +35,165 @@ function forceRecalc(sheet) {
     }
 }
 
-module.exports = async function(analysisReport, lintReport, runtimeReport, config, labDir, opts = {}) {
+// --- Handler Registry ---
+
+const _registry = new Map();
+const VALID_MAPPING_TYPES = new Set();
+
+/**
+ * Register a handler for a mapping type.
+ * @param {string} type  — mapping type name (must match "type" in config mappings)
+ * @param {function} handlerFn — (map, student) => { score, comment }
+ */
+function registerHandler(type, handlerFn) {
+    if (_registry.has(type)) {
+        throw new Error(`Handler "${type}" is already registered`);
+    }
+    _registry.set(type, handlerFn);
+    VALID_MAPPING_TYPES.add(type);
+}
+
+function getHandler(type) {
+    return _registry.get(type);
+}
+
+// --- Built-in Handlers ---
+
+registerHandler('feature', (map, student) => {
+    const features = (student.analysis && student.analysis.features) || {};
+    const count = typeof features[map.featureId] === 'number'
+        ? features[map.featureId]
+        : (features[map.featureId] ? 1 : 0);
+    const minRequired = map.minCount || 1;
+    if (count >= minRequired) {
+        return { score: map.maxScore, comment: `${map.successMsg || 'Yes'} (${count} found)` };
+    }
+    return { score: 0, comment: `${map.failMsg || 'Missing'} (only ${count} found)` };
+});
+
+registerHandler('part1_completed', (map, student) => {
+    const pp = (student.analysis && student.analysis.partPresence) || {};
+    const partId = map.partId || 'part1';
+    if (pp[partId]) {
+        return { score: map.maxScore, comment: 'Part files found' };
+    }
+    return { score: 0, comment: 'Part files not found' };
+});
+
+registerHandler('part_completed', (map, student) => {
+    const pp = (student.analysis && student.analysis.partPresence) || {};
+    const partId = map.partId || 'part1';
+    if (pp[partId]) {
+        return { score: map.maxScore, comment: `${partId} files found` };
+    }
+    return { score: 0, comment: `${partId} files not found` };
+});
+
+registerHandler('apps_in_repo', (map, student) => {
+    const a = student.analysis || {};
+    const pp = a.partPresence || {};
+    if (pp.allPresent && a.urls && a.urls.github) {
+        return { score: map.maxScore, comment: 'Yes (Both apps found in GitHub repo)' };
+    }
+    if (!a.urls || !a.urls.github) {
+        return { score: 0, comment: 'Missing GitHub repository' };
+    }
+    const partIds = Object.keys(pp).filter(k => k !== 'allPresent');
+    if (partIds.length === 0) {
+        return { score: 0, comment: 'Missing app folders' };
+    }
+    const status = partIds.map(id => `${id}: ${pp[id] ? 'Yes' : 'No'}`).join(', ');
+    return { score: 0, comment: `Missing folders (${status})` };
+});
+
+registerHandler('developer_comments', (map, student) => {
+    const a = student.analysis || {};
+    if (a.hasDeveloperComments) {
+        return { score: map.maxScore, comment: 'Yes' };
+    }
+    return { score: 0, comment: 'Missing name/date comments' };
+});
+
+registerHandler('code_review', (map, student) => {
+    const a = student.analysis || {};
+    if (a.hasCodeReview) {
+        return { score: map.maxScore, comment: 'Yes' };
+    }
+    return { score: 0, comment: 'Not found in submission' };
+});
+
+registerHandler('url_check', (map, student) => {
+    const a = student.analysis || {};
+    const url = a.urls && a.urls[map.urlType];
+    if (url) {
+        return { score: '', comment: `NEEDS CHECK: ${url}` };
+    }
+    return { score: 0, comment: `No ${map.urlType} URL provided` };
+});
+
+registerHandler('lint', (map, student) => {
+    const lint = student.lint || {};
+    if (lint.jsFiles > 0) {
+        const totalIssues = lint.errors + lint.warnings;
+        const topIssues = (lint.messages || []).slice(0, 3).join(', ');
+        if (totalIssues === 0) {
+            return { score: map.maxScore, comment: 'Excellent - no lint issues' };
+        } else if (totalIssues <= 10) {
+            return { score: map.maxScore, comment: `Good - ${totalIssues} minor issues (${topIssues})` };
+        } else if (totalIssues <= 30) {
+            return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${totalIssues} issues (${topIssues})` };
+        } else {
+            return { score: 0, comment: `${totalIssues} issues (${topIssues})` };
+        }
+    }
+    return { score: '', comment: 'No JS files to lint' };
+});
+
+registerHandler('build_check', (map, student) => {
+    const rt = student.runtimeCheck || {};
+    if (rt.success) {
+        return { score: map.maxScore, comment: 'No runtime errors' };
+    }
+    const errors = rt.errors || [];
+    return { score: 0, comment: errors.length ? `Errors found: ${errors.join(', ')}` : 'Build failed' };
+});
+
+registerHandler('manual', (map, student) => {
+    return { score: map.maxScore != null ? map.maxScore : '', comment: map.msg || 'NEEDS MANUAL CHECK' };
+});
+
+/**
+ * Per-part feature handler — reads from analysis.partFeatures[partId][featureId].
+ * Used by the unified featureCounts pipeline. Config mappings can also use this
+ * type directly by specifying partId and featureId.
+ */
+registerHandler('part_feature', (map, student) => {
+    const { partId, featureId, minCount = 1, maxScore, successMsg = 'Yes', failMsg = 'Missing' } = map;
+    const partCounts = student.analysis && student.analysis.partFeatures && student.analysis.partFeatures[partId];
+    if (partCounts === null || partCounts === undefined) {
+        return { score: 0, comment: `${failMsg} (folder not found)` };
+    }
+    const count = partCounts[featureId] || 0;
+    if (count >= minCount) {
+        return { score: maxScore, comment: `${successMsg} (${count} found)` };
+    }
+    return { score: 0, comment: `${failMsg} (only ${count} found)` };
+});
+
+// --- Mapping types that can produce a score even when code extraction failed ---
+
+// Types that report an extraction error rather than 'N/A' when code could not be obtained.
+// Only github url_check qualifies — it's the source of the extraction failure.
+// citstudent and other url_check types are unrelated to code extraction.
+const CODE_SOURCE_TYPES = new Set(['apps_in_repo', 'part1_completed', 'part_completed']);
+
+function isCodeSourceType(map) {
+    return CODE_SOURCE_TYPES.has(map.type) || (map.type === 'url_check' && map.urlType === 'github');
+}
+
+// --- Main export ---
+
+module.exports = async function(students, config, labDir, opts = {}) {
     console.log("--- Grade Generation Phase ---");
 
     let aiModel = null;
@@ -48,24 +211,23 @@ module.exports = async function(analysisReport, lintReport, runtimeReport, confi
     const rubricPath = path.join(labDir, config.rubricName);
     const isXlsm = rubricPath.toLowerCase().endsWith('.xlsm');
     if (!fs.existsSync(rubricPath)) {
-        console.error(`ERROR: Rubric file not found at ${rubricPath}`);
-        return;
+        const err = new Error(`Rubric file not found at ${rubricPath}`);
+        err.code = 'RUBRIC_NOT_FOUND';
+        err.rubricPath = rubricPath;
+        throw err;
     }
 
     const summary = { successful: [], errors: [] };
     let generated = 0;
     let skipped = 0;
 
-    for (const entry of analysisReport) {
-        const student = entry.student;
-        const results = entry.results;
-
-        // Use filesDir from the analysis report (resolved by extract_code.js)
-        let filesDir = entry.filesDir || null;
+    for (const student of students) {
+        const analysis = student.analysis || {};
+        const filesDir = student.filesDir;
 
         if (!filesDir) {
-            console.log(`  SKIP: ${student} - no _file directory found`);
-            summary.errors.push({ student, issue: 'No _file directory found.' });
+            console.log(`  SKIP: ${student.name} - no _file directory found`);
+            summary.errors.push({ student: student.name, issue: 'No _file directory found.' });
             skipped++;
             continue;
         }
@@ -80,21 +242,21 @@ module.exports = async function(analysisReport, lintReport, runtimeReport, confi
 
             if (config.summaryCell) {
                 let summaryText;
-                if (results.error) {
-                    summaryText = `Issue: ${results.error}`;
+                if (analysis.error) {
+                    summaryText = `Issue: ${analysis.error}`;
                 } else if (aiModel) {
-                    const lintEntry = lintReport.find(l => l.student === student) || { errors: 0, warnings: 0, messages: [] };
-                    const runtimeEntry = runtimeReport.find(b => b.student === student) || { success: false, errors: [] };
-                    process.stdout.write(`    Generating AI summary for ${student}... `);
+                    const lint = student.lint || { errors: 0, warnings: 0, messages: [] };
+                    const rt = student.runtimeCheck || { success: false, errors: [] };
+                    process.stdout.write(`    Generating AI summary for ${student.name}... `);
                     const aiResult = await ollamaGenerateSummary({
                         model: aiModel,
-                        student,
-                        features: results.features || {},
-                        lintErrors: lintEntry.errors,
-                        lintWarnings: lintEntry.warnings,
-                        lintTopIssues: lintEntry.messages || [],
-                        runtimeSuccess: runtimeEntry.success,
-                        runtimeErrors: runtimeEntry.errors || []
+                        student: student.name,
+                        features: analysis.features || {},
+                        lintErrors: lint.errors,
+                        lintWarnings: lint.warnings,
+                        lintTopIssues: lint.messages || [],
+                        runtimeSuccess: rt.success,
+                        runtimeErrors: rt.errors || []
                     });
                     if (aiResult) {
                         console.log('OK');
@@ -109,192 +271,83 @@ module.exports = async function(analysisReport, lintReport, runtimeReport, confi
                 setCellValue(sheet, config.summaryCell, summaryText);
             }
 
-            const lintEntry = lintReport.find(l => l.student === student) || { errors: 0, warnings: 0, jsFiles: 0, messages: [] };
-            const runtimeEntry = runtimeReport.find(b => b.student === student) || { success: false, errors: ['No runtime data'] };
-
-            // If code could not be extracted, write the reason to the relevant cell and mark everything else N/A
-            if (results.extractionError) {
+            // If code could not be extracted, write extraction-available info to relevant cells,
+            // mark everything else N/A
+            if (analysis.extractionError) {
                 for (const map of config.mappings) {
-                    const isCodeSourceMap = map.type === 'apps_in_repo' ||
-                        map.type === 'part1_completed' ||
-                        (map.type === 'url_check' && map.urlType === 'github');
-                    if (isCodeSourceMap) {
+                    if (isCodeSourceType(map)) {
                         setCellValue(sheet, map.cell, 0);
-                        if (map.commentCell) setCellValue(sheet, map.commentCell, `ERROR: ${results.extractionError}`);
+                        if (map.commentCell) setCellValue(sheet, map.commentCell, `ERROR: ${analysis.extractionError}`);
                     } else {
                         if (map.cell) setCellValue(sheet, map.cell, 0);
                         if (map.commentCell) setCellValue(sheet, map.commentCell, 'N/A (code unavailable)');
                     }
                 }
-                // Also mark part feature cells N/A
-                if (config.parts) {
-                    for (const part of config.parts) {
-                        if (!part.featureCounts) continue;
-                        for (const fc of part.featureCounts) {
-                            if (fc.cell) setCellValue(sheet, fc.cell, 0);
-                            if (fc.commentCell) setCellValue(sheet, fc.commentCell, 'N/A (code unavailable)');
-                        }
+                for (const part of (config.parts || [])) {
+                    if (!part.featureCounts) continue;
+                    for (const fc of part.featureCounts) {
+                        if (fc.cell) setCellValue(sheet, fc.cell, 0);
+                        if (fc.commentCell) setCellValue(sheet, fc.commentCell, 'N/A (code unavailable)');
                     }
                 }
-                // Write the grade file and move to next student
                 if (!isXlsm) {
                     wb.SheetNames = ['Grade'];
                     wb.Sheets = { 'Grade': sheet };
                 }
                 forceRecalc(sheet);
                 const outputExt = isXlsm ? '.xlsm' : '.xlsx';
-                const outputPath = path.join(filesDir, `${student}_Grade${outputExt}`);
+                const outputPath = path.join(filesDir, `${student.name}_Grade${outputExt}`);
                 xlsx.writeFile(wb, outputPath, isXlsm ? { bookType: 'xlsm' } : undefined);
-                console.log(`  PARTIAL: ${student} -> ${path.basename(outputPath)} (extraction failed)`);
-                summary.successful.push(student);
+                console.log(`  PARTIAL: ${student.name} -> ${path.basename(outputPath)} (extraction failed)`);
+                summary.successful.push(student.name);
                 generated++;
                 continue;
             }
 
+            // Normal grading
             for (const map of config.mappings) {
-                let score = 0;
-                let comment = '';
+                const handler = getHandler(map.type);
+                let score, comment;
 
-                switch (map.type) {
-                    case 'feature':
-                        const count = (results.features && typeof results.features[map.featureId] === 'number') 
-                                        ? results.features[map.featureId] 
-                                        : (results.features && results.features[map.featureId] ? 1 : 0);
-                        const minRequired = map.minCount || 1;
-                        if (count >= minRequired) {
-                            score = map.maxScore;
-                            comment = map.successMsg ? `${map.successMsg} (${count} found)` : `Yes (${count} found)`;
-                        } else {
-                            score = 0;
-                            comment = map.failMsg ? `${map.failMsg} (only ${count} found)` : `Missing (only ${count} found)`;
-                        }
-                        break;
-                    case 'part1_completed':
-                        if (results.part1Completed) {
-                            score = map.maxScore;
-                            comment = 'Part 1 files found';
-                        } else {
-                            score = 0;
-                            comment = 'Part 1 files not found';
-                        }
-                        break;
-                    case 'apps_in_repo':
-                        if (results.bothAppsPresent && results.urls && results.urls.github) {
-                            score = map.maxScore;
-                            comment = 'Yes (Both apps found in GitHub repo)';
-                        } else if (!results.urls || !results.urls.github) {
-                            score = 0;
-                            comment = 'Missing GitHub repository';
-                        } else {
-                            score = 0;
-                            comment = `Missing folders (Part 1: ${results.part1Completed ? 'Yes' : 'No'}, Part 2: ${results.part2Completed ? 'Yes' : 'No'})`;
-                        }
-                        break;
-                    case 'developer_comments':
-                        if (results.hasDeveloperComments) {
-                            score = map.maxScore;
-                            comment = 'Yes';
-                        } else {
-                            score = 0;
-                            comment = 'Missing name/date comments';
-                        }
-                        break;
-                    case 'code_review':
-                        if (results.hasCodeReview) {
-                            score = map.maxScore;
-                            comment = 'Yes';
-                        } else {
-                            score = 0;
-                            comment = 'Not found in submission';
-                        }
-                        break;
-                    case 'url_check':
-                        const url = results.urls && results.urls[map.urlType];
-                        if (url) {
-                            score = ''; // leave blank for manual grading
-                            comment = `NEEDS CHECK: ${url}`;
-                        } else {
-                            score = 0;
-                            comment = `No ${map.urlType} URL provided`;
-                        }
-                        break;
-                    case 'lint':
-                        if (lintEntry.jsFiles > 0) {
-                            const totalIssues = lintEntry.errors + lintEntry.warnings;
-                            if (totalIssues === 0) {
-                                score = map.maxScore;
-                                comment = 'Excellent - no lint issues';
-                            } else if (totalIssues <= 10) {
-                                score = map.maxScore;
-                                comment = `Good - ${totalIssues} minor issues (${lintEntry.messages.slice(0, 3).join(', ')})`;
-                            } else if (totalIssues <= 30) {
-                                score = Math.max(1, Math.floor(map.maxScore / 2));
-                                comment = `${totalIssues} issues (${lintEntry.messages.slice(0, 3).join(', ')})`;
-                            } else {
-                                score = 0;
-                                comment = `${totalIssues} issues (${lintEntry.messages.slice(0, 3).join(', ')})`;
-                            }
-                        } else {
-                            score = '';
-                            comment = 'No JS files to lint';
-                        }
-                        break;
-                    case 'build_check':
-                        if (runtimeEntry.success) {
-                            score = map.maxScore;
-                            comment = 'No runtime errors';
-                        } else {
-                            score = 0;
-                            comment = `Errors found: ${runtimeEntry.errors.join(', ')}`;
-                        }
-                        break;
-                    case 'manual':
-                        score = map.maxScore || '';
-                        comment = map.msg || 'NEEDS MANUAL CHECK';
-                        break;
-                    default:
-                        score = 0;
-                        comment = `ERROR: Unknown mapping type "${map.type}" — check config`;
-                        console.warn(`  WARNING: Unknown map.type "${map.type}" for ${student}`);
-                        break;
+                if (handler) {
+                    const result = handler(map, student);
+                    score = result.score;
+                    comment = result.comment;
+                } else {
+                    score = 0;
+                    comment = `ERROR: Unknown mapping type "${map.type}" — check config`;
+                    console.warn(`  WARNING: Unknown map.type "${map.type}" for ${student.name}`);
                 }
 
                 if (map.cell) setCellValue(sheet, map.cell, score);
                 if (map.commentCell) setCellValue(sheet, map.commentCell, comment);
-                if (map.linkCell && map.linkUrlType && results.urls && results.urls[map.linkUrlType]) {
-                    setCellValue(sheet, map.linkCell, results.urls[map.linkUrlType]);
+                if (map.linkCell && map.linkUrlType && analysis.urls && analysis.urls[map.linkUrlType]) {
+                    setCellValue(sheet, map.linkCell, analysis.urls[map.linkUrlType]);
                 }
             }
 
-            // Per-part feature counts (e.g. classes in part1 vs part2)
-            if (config.parts && results.partFeatures) {
+            // Per-part feature counts — processed through handler pipeline
+            if (config.parts && analysis.partFeatures) {
                 for (const part of config.parts) {
-                    const partCounts = results.partFeatures[part.id];
                     if (!part.featureCounts) continue;
                     for (const fc of part.featureCounts) {
-                        let count, comment, score;
-                        if (partCounts === null) {
-                            // Folder for this part was not found
-                            score = 0;
-                            comment = `${fc.failMsg || 'Missing'} (folder not found)`;
-                        } else {
-                            count = partCounts[fc.featureId] || 0;
-                            const minRequired = fc.minCount || 1;
-                            if (count >= minRequired) {
-                                score = fc.maxScore;
-                                comment = fc.successMsg ? `${fc.successMsg} (${count} found)` : `Yes (${count} found)`;
-                            } else {
-                                score = 0;
-                                comment = fc.failMsg ? `${fc.failMsg} (only ${count} found)` : `Missing (only ${count} found)`;
-                            }
-                        }
-                        if (fc.cell) setCellValue(sheet, fc.cell, score);
-                        if (fc.commentCell) setCellValue(sheet, fc.commentCell, comment);
+                        const virtualMap = {
+                            type: 'part_feature',
+                            partId: part.id,
+                            featureId: fc.featureId,
+                            minCount: fc.minCount || 1,
+                            maxScore: fc.maxScore,
+                            successMsg: fc.successMsg,
+                            failMsg: fc.failMsg
+                        };
+                        const handler = getHandler('part_feature');
+                        const result = handler(virtualMap, student);
+                        if (fc.cell) setCellValue(sheet, fc.cell, result.score);
+                        if (fc.commentCell) setCellValue(sheet, fc.commentCell, result.comment);
                     }
                 }
             }
 
-            // Keep only the 'Grade' sheet (skip for .xlsm — preserve macros and other sheets)
             if (!isXlsm) {
                 wb.SheetNames = ['Grade'];
                 wb.Sheets = { 'Grade': sheet };
@@ -302,15 +355,15 @@ module.exports = async function(analysisReport, lintReport, runtimeReport, confi
             forceRecalc(sheet);
 
             const outputExt = isXlsm ? '.xlsm' : '.xlsx';
-            const outputPath = path.join(filesDir, `${student}_Grade${outputExt}`);
+            const outputPath = path.join(filesDir, `${student.name}_Grade${outputExt}`);
             xlsx.writeFile(wb, outputPath, isXlsm ? { bookType: 'xlsm' } : undefined);
-            console.log(`  OK: ${student} -> ${path.basename(outputPath)}`);
-            summary.successful.push(student);
+            console.log(`  OK: ${student.name} -> ${path.basename(outputPath)}`);
+            summary.successful.push(student.name);
             generated++;
 
         } catch (err) {
-            console.log(`  ERROR: ${student} - ${err.message}`);
-            summary.errors.push({ student, issue: `Spreadsheet generation error: ${err.message}` });
+            console.log(`  ERROR: ${student.name} - ${err.message}`);
+            summary.errors.push({ student: student.name, issue: `Spreadsheet generation error: ${err.message}` });
             skipped++;
         }
     }
@@ -318,3 +371,8 @@ module.exports = async function(analysisReport, lintReport, runtimeReport, confi
     console.log(`\nGenerated ${generated} spreadsheets, skipped ${skipped}.`);
     return summary;
 };
+
+module.exports.registerHandler = registerHandler;
+module.exports.getHandler = getHandler;
+module.exports.VALID_MAPPING_TYPES = VALID_MAPPING_TYPES;
+module.exports.isCodeSourceType = isCodeSourceType;

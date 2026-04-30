@@ -8,6 +8,7 @@
     "exclude": ["part1", "part_1", "node_modules", "dist"]
   },
   "analysis": {
+    "customAnalyzer": "lab02_analyzer.js",
     "features": [
       { "id": "modules", "regex": "import\\s+.*from", "fileRegex": "\\.js$" },
       { "id": "arrowFunctions", "regex": "=>", "fileRegex": "\\.js$" },

@@ -2,6 +2,7 @@
  * lint_code.js
  *
  * Lints the extracted code, ignoring paths defined in the config.
+ * Attaches results directly to each student object as student.lint.
  */
 
 const fs = require('fs');
@@ -19,7 +20,7 @@ function getAllJsFiles(dir, exclusions = []) {
 
             let stats;
             try { stats = fs.lstatSync(full); } catch (e) { continue; }
-            if (stats.isSymbolicLink()) continue; // skip symlinks to avoid infinite loops
+            if (stats.isSymbolicLink()) continue;
 
             if (stats.isDirectory()) {
                 if (!item.startsWith('.') && item !== '__MACOSX') {
@@ -39,13 +40,11 @@ async function lintFiles(jsFiles, eslintConfigFile, extractedDir) {
     let ESLint;
     try {
         ({ ESLint } = require(path.join(__dirname, 'node_modules', 'eslint')));
-    } catch(e) {
+    } catch (e) {
         return { errors: 0, warnings: 0, messages: ['ESLint not installed'], ruleCounts: {} };
     }
 
     try {
-        // cwd must be set to the student's extracted dir so ESLint treats those files
-        // as within its "base path" (ESLint v9 flat config requirement).
         const eslint = new ESLint({
             overrideConfigFile: eslintConfigFile,
             cwd: extractedDir
@@ -57,7 +56,6 @@ async function lintFiles(jsFiles, eslintConfigFile, extractedDir) {
     }
 }
 
-// Human-friendly descriptions for common ESLint rule IDs
 const ruleDescriptions = {
     'no-unused-vars': 'unused variables',
     'no-undef': 'undefined variables',
@@ -131,44 +129,48 @@ function parseLintOutput(results) {
 
 module.exports = async function(students, config, labDir) {
     console.log("--- Linting Phase ---");
-    const lintReport = [];
 
     const aiGradingDir = __dirname;
     const eslintConfigFile = path.join(aiGradingDir, 'eslint.config.mjs');
     if (!fs.existsSync(eslintConfigFile)) {
-        console.warn(`WARNING: No eslint.config.mjs found in AI_Grading. Linting may fail.`);
+        console.warn('WARNING: No eslint.config.mjs found in AI_Grading. Linting may fail.');
     }
 
     const exclusions = (config.lint && config.lint.exclude) ? config.lint.exclude : [];
 
     for (const student of students) {
         if (!student.extractedDir || !fs.existsSync(student.extractedDir)) {
-            lintReport.push({ student: student.name, jsFiles: 0, errors: 0, warnings: 0, messages: [], ruleCounts: {} });
+            student.lint = { jsFiles: 0, errors: 0, warnings: 0, messages: [], ruleCounts: {} };
             continue;
         }
 
         const jsFiles = getAllJsFiles(student.extractedDir, exclusions);
         if (jsFiles.length === 0) {
             console.log(`  SKIP LINT: ${student.name} - no JS files found to lint`);
-            lintReport.push({ student: student.name, jsFiles: 0, errors: 0, warnings: 0, messages: [], ruleCounts: {} });
+            student.lint = { jsFiles: 0, errors: 0, warnings: 0, messages: [], ruleCounts: {} };
             continue;
         }
 
         const result = await lintFiles(jsFiles, eslintConfigFile, student.extractedDir);
         console.log(`  ${student.name}: ${jsFiles.length} files, ${result.errors} errors, ${result.warnings} warnings`);
 
-        lintReport.push({
-            student: student.name,
+        student.lint = {
             jsFiles: jsFiles.length,
             errors: result.errors,
             warnings: result.warnings,
             messages: result.messages,
             ruleCounts: result.ruleCounts || {}
-        });
+        };
     }
 
-    fs.writeFileSync(path.join(labDir, 'lint_report.json'), JSON.stringify(lintReport, null, 2));
-    console.log(`Created lint_report.json for ${lintReport.length} students.`);
-
-    return lintReport;
+    const report = students.map(s => ({
+        student: s.name,
+        jsFiles: s.lint ? s.lint.jsFiles : 0,
+        errors: s.lint ? s.lint.errors : 0,
+        warnings: s.lint ? s.lint.warnings : 0,
+        messages: s.lint ? s.lint.messages : [],
+        ruleCounts: (s.lint && s.lint.ruleCounts) || {}
+    }));
+    fs.writeFileSync(path.join(labDir, 'lint_report.json'), JSON.stringify(report, null, 2));
+    console.log(`Created lint_report.json for ${report.length} students.`);
 };

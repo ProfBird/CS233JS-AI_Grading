@@ -1,11 +1,12 @@
 /**
  * runtime_check.js
- * 
+ *
  * Checks student apps for runtime errors using one of two methods:
  *   "browser" — serves each app and opens in headless Chrome to capture console errors
  *   "build"   — runs npm install + npm run build
- * 
+ *
  * The method is set per-lab in the config via config.runtimeCheck ("browser" or "build").
+ * Attaches results directly to each student object as student.runtimeCheck.
  */
 
 const fs = require('fs');
@@ -18,7 +19,7 @@ const execAsync = util.promisify(exec);
 // ========== Browser-based check ==========
 
 let puppeteer;
-try { puppeteer = require('puppeteer'); } catch(e) { /* loaded on demand */ }
+try { puppeteer = require('puppeteer'); } catch (e) { /* loaded on demand */ }
 
 function serveDir(dir) {
     return new Promise((resolve, reject) => {
@@ -27,7 +28,6 @@ function serveDir(dir) {
             if (urlPath === '/') urlPath = '/index.html';
             const resolved = path.resolve(path.join(dir, urlPath));
             const root = path.resolve(dir);
-            // Prevent path traversal outside the served directory
             if (!resolved.startsWith(root + path.sep) && resolved !== root) {
                 res.writeHead(403);
                 res.end('Forbidden');
@@ -74,7 +74,7 @@ function findPackageJsonDirs(dirPath, arrayOfDirs = []) {
             const fullP = path.join(dirPath, file);
             let stats;
             try { stats = fs.lstatSync(fullP); } catch (e) { return; }
-            if (stats.isSymbolicLink()) return; // skip symlinks to avoid infinite loops
+            if (stats.isSymbolicLink()) return;
             if (stats.isDirectory() && !file.includes('node_modules') && !file.startsWith('.') && file !== 'dist') {
                 findPackageJsonDirs(fullP, arrayOfDirs);
             }
@@ -114,7 +114,6 @@ async function checkBuild(extractedDir) {
     return { success: allOk, errors };
 }
 
-// Find all directories containing index.html (recursive, skipping node_modules/dist)
 function findAllIndexHtmlDirs(dir, results = []) {
     try {
         const files = fs.readdirSync(dir);
@@ -126,12 +125,12 @@ function findAllIndexHtmlDirs(dir, results = []) {
             const full = path.join(dir, f);
             let stats;
             try { stats = fs.lstatSync(full); } catch (e) { continue; }
-            if (stats.isSymbolicLink()) continue; // skip symlinks to avoid infinite loops
+            if (stats.isSymbolicLink()) continue;
             if (stats.isDirectory()) {
                 findAllIndexHtmlDirs(full, results);
             }
         }
-    } catch(e) {}
+    } catch (e) {}
     return results;
 }
 
@@ -143,35 +142,34 @@ module.exports = async function(students, config, labDir) {
 
     if (mode === 'browser' && !puppeteer) {
         console.error('  ERROR: Puppeteer not installed. Run: npm install puppeteer');
-        return students.map(s => ({ student: s.name, success: false, errors: ['Puppeteer not installed'] }));
+        students.forEach(s => {
+            s.runtimeCheck = { success: false, errors: ['Puppeteer not installed'] };
+        });
+        return;
     }
 
-    // For browser mode, launch a single browser instance and reuse it
     let browser;
     if (mode === 'browser') {
         browser = await puppeteer.launch({
-            headless: true
+            headless: 'shell'
         });
     }
 
-    const report = [];
-
     for (const student of students) {
         if (!student.extractedDir || !fs.existsSync(student.extractedDir) || student.error) {
-            report.push({ student: student.name, success: false, errors: [] });
+            student.runtimeCheck = { success: false, errors: [] };
             continue;
         }
 
         if (mode === 'build') {
             const result = await checkBuild(student.extractedDir);
-            report.push({ student: student.name, ...result });
+            student.runtimeCheck = { ...result };
             if (result.success) {
-                console.log(`  ✅ ${student.name}: Build successful`);
+                console.log(`  OK: ${student.name}: Build successful`);
             } else {
-                console.log(`  ❌ ${student.name}: Build failed (${result.errors.join(', ')})`);
+                console.log(`  FAIL: ${student.name}: Build failed (${result.errors.join(', ')})`);
             }
         } else {
-            // Browser mode: find ALL directories with index.html and check each
             const htmlDirs = findAllIndexHtmlDirs(student.extractedDir);
             const allErrors = [];
             let allSuccess = true;
@@ -194,23 +192,20 @@ module.exports = async function(students, config, labDir) {
                     allSuccess = false;
                     continue;
                 }
-                const jsErrors = [];       // JS runtime exceptions
-                const resourceErrors = [];  // Failed .js/.css loads
+                const jsErrors = [];
+                const resourceErrors = [];
                 let pageLoaded = false;
 
                 try {
                     const page = await browser.newPage();
 
-                    // Track actual JS runtime exceptions
                     page.on('pageerror', err => {
                         jsErrors.push(err.message || String(err));
                     });
 
-                    // Track failed resource requests — only flag scripts and stylesheets
                     page.on('requestfailed', request => {
                         const url = request.url();
                         const resourceType = request.resourceType();
-                        // Only report missing scripts and stylesheets as real errors
                         if (resourceType === 'script' || resourceType === 'stylesheet') {
                             const filename = url.split('/').pop().split('?')[0];
                             resourceErrors.push(`Missing ${resourceType}: ${filename}`);
@@ -226,7 +221,6 @@ module.exports = async function(students, config, labDir) {
                         pageLoaded = true;
                     }
 
-                    // Wait for any delayed JS to execute
                     await new Promise(r => setTimeout(r, 2000));
                     await page.close();
                 } catch (err) {
@@ -246,19 +240,22 @@ module.exports = async function(students, config, labDir) {
                 }
             }
 
-            report.push({ student: student.name, success: allSuccess, errors: allErrors });
+            student.runtimeCheck = { success: allSuccess, errors: allErrors };
             if (allSuccess) {
-                console.log(`  ✅ ${student.name}: No console errors`);
+                console.log(`  OK: ${student.name}: No console errors`);
             } else {
-                console.log(`  ❌ ${student.name}: ${allErrors.join('; ')}`);
+                console.log(`  FAIL: ${student.name}: ${allErrors.join('; ')}`);
             }
         }
     }
 
     if (browser) await browser.close();
 
+    const report = students.map(s => ({
+        student: s.name,
+        success: s.runtimeCheck ? s.runtimeCheck.success : false,
+        errors: s.runtimeCheck ? s.runtimeCheck.errors : []
+    }));
     fs.writeFileSync(path.join(labDir, 'runtime_report.json'), JSON.stringify(report, null, 2));
     console.log(`Created runtime_report.json for ${report.length} students.`);
-
-    return report;
 };

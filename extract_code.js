@@ -182,7 +182,14 @@ async function extractStudentCode(student, labDir, repoClonePath) {
 module.exports = async function(labDir, repoClonePath) {
     console.log("--- Code Acquisition Phase ---");
     if (repoClonePath) {
-        fs.mkdirSync(repoClonePath, { recursive: true });
+        try {
+            fs.mkdirSync(repoClonePath, { recursive: true });
+        } catch (e) {
+            const err = new Error(e.message);
+            err.code = 'CODE_STORAGE_ERROR';
+            err.repoClonePath = repoClonePath;
+            throw err;
+        }
     }
     const students = getStudents(labDir);
     const urlsReport = {};

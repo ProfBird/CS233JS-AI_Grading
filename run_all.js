@@ -2,6 +2,7 @@
  * run_all.js
  *
  * Master orchestrator script for CS233JS lab grading.
+ * Each pipeline phase attaches results directly to student objects.
  *
  * Usage:
  *   node run_all.js                           -> interactive menu
@@ -20,6 +21,8 @@ const analyzeCode = require('./analyze_code.js');
 const lintCode = require('./lint_code.js');
 const runtimeCheck = require('./runtime_check.js');
 const generateGrades = require('./generate_grades.js');
+
+const { VALID_MAPPING_TYPES } = generateGrades;
 
 // --- Help ---
 
@@ -64,28 +67,97 @@ EXAMPLES
 `);
 }
 
+// --- Config validation ---
+
+const VALID_RUNTIME_MODES = new Set(['browser', 'build']);
+
+// Validate that a cell reference looks like "A1" or "AA23"
+function isValidCellRef(ref) {
+    return typeof ref === 'string' && /^[A-Z]+\d+$/.test(ref);
+}
+
+function validateConfig(config, labName) {
+    const errors = [];
+
+    if (!config.rubricName || typeof config.rubricName !== 'string') {
+        errors.push(`Missing or invalid "rubricName" (must be a string)`);
+    }
+
+    if (!config.runtimeCheck) {
+        errors.push(`Missing "runtimeCheck" (must be "${[...VALID_RUNTIME_MODES].join('" or "')}")`);
+    } else if (!VALID_RUNTIME_MODES.has(config.runtimeCheck)) {
+        errors.push(`Invalid runtimeCheck "${config.runtimeCheck}" (must be one of: ${[...VALID_RUNTIME_MODES].join(', ')})`);
+    }
+
+    if (!Array.isArray(config.mappings) || config.mappings.length === 0) {
+        errors.push(`Missing or empty "mappings" array`);
+    } else {
+        config.mappings.forEach((map, i) => {
+            const prefix = `mappings[${i}]`;
+            if (!map.type) {
+                errors.push(`${prefix}: missing "type"`);
+            } else if (!VALID_MAPPING_TYPES.has(map.type)) {
+                errors.push(`${prefix}: unknown type "${map.type}"`);
+            }
+            if (map.cell && !isValidCellRef(map.cell)) {
+                errors.push(`${prefix}.cell: "${map.cell}" is not a valid cell reference`);
+            }
+            if (map.commentCell && !isValidCellRef(map.commentCell)) {
+                errors.push(`${prefix}.commentCell: "${map.commentCell}" is not a valid cell reference`);
+            }
+        });
+    }
+
+    if (config.analysis && config.analysis.customAnalyzer && typeof config.analysis.customAnalyzer !== 'string') {
+        errors.push(`"analysis.customAnalyzer" must be a string (file path relative to configs/)`);
+    }
+
+    if (config.analysis && Array.isArray(config.analysis.features)) {
+        config.analysis.features.forEach((feat, i) => {
+            const prefix = `analysis.features[${i}]`;
+            if (!feat.id) errors.push(`${prefix}: missing "id"`);
+            if (!feat.regex) errors.push(`${prefix}: missing "regex"`);
+        });
+    }
+
+    if (config.parts) {
+        if (!Array.isArray(config.parts)) {
+            errors.push(`"parts" must be an array`);
+        } else {
+            config.parts.forEach((part, i) => {
+                const prefix = `parts[${i}]`;
+                if (!part.id) errors.push(`${prefix}: missing "id"`);
+                if (part.rubricTitleRow == null) errors.push(`${prefix}: missing "rubricTitleRow"`);
+                if (!part.folderPattern) errors.push(`${prefix}: missing "folderPattern"`);
+            });
+        }
+    }
+
+    if (errors.length > 0) {
+        console.error(`\nERROR: Config validation failed for ${labName}:`);
+        errors.forEach(e => console.error(`  - ${e}`));
+        console.error();
+        process.exit(1);
+    }
+}
+
 // --- Helpers ---
 
-const envPath = path.join(__dirname, 'env.json');
+const localConfigPath = path.join(__dirname, 'local-config.json');
 
-function getAvailableLabs() {
-    // Read env.json to find the root directory containing lab folders
-    let labRoot;
+function readLocalConfig() {
     try {
-        labRoot = JSON.parse(fs.readFileSync(envPath, 'utf8')).labRoot;
-    } catch (e) {
-        return [];
-    }
-    if (!labRoot || !fs.existsSync(labRoot)) return [];
+        return JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
+    } catch (e) {}
+    // Migrate from old env.json if local-config.json doesn't exist yet
+    try {
+        return JSON.parse(fs.readFileSync(path.join(__dirname, 'env.json'), 'utf8'));
+    } catch (e) {}
+    return {};
+}
 
-    const configsDir = path.join(__dirname, 'configs');
-
-    // Scan labRoot for directories with matching configs
-    return fs.readdirSync(labRoot).filter(f => {
-        const fullPath = path.join(labRoot, f);
-        return fs.statSync(fullPath).isDirectory() &&
-               fs.existsSync(path.join(configsDir, `${f.toLowerCase()}_config.json`));
-    });
+function saveLocalConfig(cfg) {
+    fs.writeFileSync(localConfigPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
 }
 
 // --- Main ---
@@ -93,7 +165,6 @@ function getAvailableLabs() {
 async function main() {
     const args = process.argv.slice(2);
 
-    // Handle --help
     if (args.includes('--help') || args.includes('-h')) {
         showHelp();
         process.exit(0);
@@ -108,30 +179,49 @@ async function main() {
 
     let labName = positional[0];
     let reclone = hasRecloneFlag;
-    // regrade is true if --regrade OR --reclone is passed (reclone implies regrade)
     let regrade = hasRegradeFlag || hasRecloneFlag;
     let config, labDir, repoClonePath;
+    let skipRubric = false;
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const askRl = q => new Promise(resolve => rl.question(q, resolve));
 
     try {
-        // --- Global env: ensure labRoot is configured ---
-        let labRoot;
-        try {
-            labRoot = JSON.parse(fs.readFileSync(envPath, 'utf8')).labRoot;
-        } catch (e) {
-            labRoot = '';
-        }
+        const localConfig = readLocalConfig();
+        let labRoot = localConfig.labRoot || '';
+        let codeRoot = localConfig.codeRoot || '';
+        let configChanged = false;
+
         if (!labRoot || !fs.existsSync(labRoot)) {
-            const input = await askRl('Enter the root path containing lab directories: ');
+            const input = await askRl(
+                'Lab root — path to the Google Drive folder containing your lab directories\n' +
+                '  (e.g. /Volumes/GoogleDrive/StudentLabWork): '
+            );
             if (!input.trim()) {
                 console.error('ERROR: A lab root path is required.');
                 process.exit(1);
             }
             labRoot = input.trim();
-            fs.writeFileSync(envPath, JSON.stringify({ labRoot }, null, 2) + '\n', 'utf8');
-            console.log(`  Saved labRoot to env.json`);
+            configChanged = true;
+        }
+
+        if (!codeRoot) {
+            const input = await askRl(
+                'Code storage root — path to a LOCAL folder (outside Google Drive) where student\n' +
+                '  code will be cloned or unzipped. A subfolder per lab is created automatically\n' +
+                '  (e.g. /Users/brian/GradingCode): '
+            );
+            if (!input.trim()) {
+                console.error('ERROR: A code storage root path is required.');
+                process.exit(1);
+            }
+            codeRoot = input.trim();
+            configChanged = true;
+        }
+
+        if (configChanged) {
+            saveLocalConfig({ labRoot, codeRoot });
+            console.log(`  Saved lab root and code storage root to local-config.json`);
         }
 
         const labs = fs.readdirSync(labRoot).filter(f => {
@@ -140,7 +230,6 @@ async function main() {
                    fs.existsSync(path.join(__dirname, 'configs', `${f.toLowerCase()}_config.json`));
         });
 
-        // If no lab name was provided, show the lab menu
         if (!labName) {
             console.log('\n╔══════════════════════════════════╗');
             console.log('║     CS233JS AI Grader v1.0       ║');
@@ -164,38 +253,84 @@ async function main() {
             }
         }
 
-        // Load lab config
         const configPath = path.join(__dirname, 'configs', `${labName.toLowerCase()}_config.json`);
         if (!fs.existsSync(configPath)) {
             console.error(`ERROR: Config file not found at ${configPath}`);
             process.exit(1);
         }
-        config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        try {
+            config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        } catch (e) {
+            console.error(`ERROR: Could not parse config file ${configPath}: ${e.message}`);
+            process.exit(1);
+        }
+        validateConfig(config, labName);
 
-        // Resolve lab directory
         labDir = path.join(labRoot, labName);
         if (!fs.existsSync(labDir)) {
             console.error(`ERROR: Directory not found at ${labDir}`);
             process.exit(1);
         }
 
-        // Load per-lab env for repoClonePath
-        const labEnvPath = path.join(labDir, '_env.json');
-        let labEnv = {};
-        try { labEnv = JSON.parse(fs.readFileSync(labEnvPath, 'utf8')); } catch (e) {}
-        repoClonePath = labEnv.repoClonePath || '';
-        if (!repoClonePath) {
-            const input = await askRl('Enter path for storing extracted code (outside Google Drive): ');
-            if (!input.trim()) {
-                console.error('ERROR: A code storage path is required.');
-                process.exit(1);
+        // Per-lab extraction path: <codeRoot>/<labName>/ keeps different labs' code separate
+        repoClonePath = path.join(codeRoot, labName);
+
+        // Validate codeRoot is writable before proceeding — ask for a new one if not
+        let codeRootConfirmed = false;
+        while (!codeRootConfirmed) {
+            try {
+                fs.mkdirSync(repoClonePath, { recursive: true });
+                codeRootConfirmed = true;
+            } catch (e) {
+                console.error(`\nERROR: Cannot write to code storage directory:`);
+                console.error(`  ${repoClonePath}`);
+                console.error(`  ${e.message}\n`);
+                const newRoot = await askRl(
+                    'Enter a writable path for storing cloned/extracted student code\n' +
+                    '  (e.g. /Users/brian/GradingCode): '
+                );
+                if (!newRoot.trim()) {
+                    console.error('ERROR: A code storage root path is required.');
+                    process.exit(1);
+                }
+                codeRoot = newRoot.trim();
+                configChanged = true;
+                repoClonePath = path.join(codeRoot, labName);
             }
-            repoClonePath = input.trim();
-            fs.writeFileSync(labEnvPath, JSON.stringify({ repoClonePath }, null, 2) + '\n', 'utf8');
-            console.log(`  Saved repoClonePath to ${labName}/_env.json`);
+        }
+        if (configChanged) {
+            saveLocalConfig({ labRoot, codeRoot });
+            console.log(`  Saved updated codeRoot to local-config.json\n`);
         }
 
-        // If no flags were specified on the command line, ask
+        // Validate rubric exists before starting the pipeline
+        while (!skipRubric) {
+            const rubricCheckPath = path.join(labDir, config.rubricName);
+            if (fs.existsSync(rubricCheckPath)) {
+                break;
+            } else {
+                console.error(`\nERROR: Rubric file not found at expected path:`);
+                console.error(`  ${rubricCheckPath}`);
+                console.error(`  (Download the rubric from Moodle or check the filename.)\n`);
+                const newName = await askRl(
+                    'Enter the correct rubric filename\n' +
+                    '  (e.g. CS233JS_Lab04_Rubric.xlsm, or type "skip" to continue anyway): '
+                );
+                if (!newName.trim() || newName.trim().toLowerCase() === 'skip') {
+                    console.log('  Continuing without rubric — grade generation will be skipped.\n');
+                    skipRubric = true;
+                    break;
+                }
+                config.rubricName = newName.trim();
+                // Persist to config file on disk
+                const cfgPath = path.join(__dirname, 'configs', `${labName.toLowerCase()}_config.json`);
+                const cfgOnDisk = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+                cfgOnDisk.rubricName = config.rubricName;
+                fs.writeFileSync(cfgPath, JSON.stringify(cfgOnDisk, null, 2) + '\n', 'utf8');
+                console.log(`  Updated rubricName in ${labName.toLowerCase()}_config.json\n`);
+            }
+        }
+
         if (!hasAnyFlag) {
             console.log('\nGrading options:');
             console.log('  1) Normal   — grade new submissions (skip already-extracted)');
@@ -221,11 +356,9 @@ async function main() {
     console.log(`   Grading: ${labName}  [${modeLabel}${aiLabel}]`);
     console.log(`================================\n`);
 
-    // If recloning, delete all extracted_code and repo directories
     if (reclone) {
         console.log('--- Clearing previous code ---');
 
-        // Clear old-style dirs inside each student's submission folder
         const entries = fs.readdirSync(labDir);
         for (const entry of entries) {
             for (const dir of ['extracted_code', 'repo']) {
@@ -237,7 +370,6 @@ async function main() {
             }
         }
 
-        // Clear repoClonePath entirely (all student code lives here)
         if (repoClonePath && fs.existsSync(repoClonePath)) {
             fs.rmSync(repoClonePath, { recursive: true, force: true });
             console.log(`  Cleared: ${repoClonePath}`);
@@ -246,22 +378,28 @@ async function main() {
         console.log();
     }
 
-    // 1. Code Acquisition (always runs — skips existing unless reclone cleared them)
+    // 1. Code Acquisition
     const students = await extractCode(labDir, repoClonePath);
 
-    // 2. Runtime Check (browser or build, based on config)
-    const runtimeReport = await runtimeCheck(students, config, labDir);
+    // 2. Runtime Check — attaches to student.runtimeCheck
+    await runtimeCheck(students, config, labDir);
 
-    // 3. Analysis
-    const analysisReport = analyzeCode(students, config, labDir);
+    // 3. Analysis — attaches to student.analysis
+    analyzeCode(students, config, labDir);
 
-    // 4. Linting
-    const lintReport = await lintCode(students, config, labDir);
+    // 4. Linting — attaches to student.lint
+    await lintCode(students, config, labDir);
 
-    // 5. Generation
-    const generateSummary = await generateGrades(analysisReport, lintReport, runtimeReport, config, labDir, { aiComments, aiModel: aiModelFlag });
+    // 5. Generation — reads from student objects
+    let generateSummary;
+    if (!skipRubric) {
+        generateSummary = await generateGrades(students, config, labDir, { aiComments, aiModel: aiModelFlag });
+    } else {
+        generateSummary = { successful: [], errors: [] };
+        console.log("--- Grade Generation Phase (skipped) ---\n");
+    }
 
-    // 6. Log
+    // 6. Log Summary
     console.log("\n--- Creating Log Summary ---");
     const logLines = [];
     logLines.push(`Grading Summary for ${labName} [${modeLabel}]`);
@@ -269,23 +407,19 @@ async function main() {
     logLines.push(`===================================`);
 
     const errors = [];
-
     if (generateSummary && generateSummary.errors) {
         errors.push(...generateSummary.errors);
     }
+
     students.forEach(student => {
         if (student.error) {
             errors.push({ student: student.name, issue: `Extraction: ${student.error}` });
         }
-    });
-    analysisReport.forEach(report => {
-        if (report.results.error) {
-            errors.push({ student: report.student, issue: `Analysis: ${report.results.error}` });
+        if (student.analysis && student.analysis.error) {
+            errors.push({ student: student.name, issue: `Analysis: ${student.analysis.error}` });
         }
-    });
-    runtimeReport.forEach(report => {
-        if (!report.success && report.errors && report.errors.length > 0) {
-            errors.push({ student: report.student, issue: `Runtime: ${report.errors.join(', ')}` });
+        if (student.runtimeCheck && !student.runtimeCheck.success && student.runtimeCheck.errors && student.runtimeCheck.errors.length > 0) {
+            errors.push({ student: student.name, issue: `Runtime: ${student.runtimeCheck.errors.join(', ')}` });
         }
     });
 

@@ -1,5 +1,11 @@
 # CS233JS AI Grader — User Guide
 
+
+
+[TOC]
+
+
+
 ## Overview
 
 The AI Grader automates grading of student JavaScript lab submissions for CS233JS. It handles both ZIP uploads and GitHub repository submissions, runs analysis/lint/runtime checks, and fills in rubric spreadsheets with scores and comments.
@@ -15,7 +21,7 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
   ```
   npm install
   ```
-  This installs `puppeteer`, `xlsx`, and `eslint`.
+  This installs `puppeteer`, `xlsx`, `eslint`, and `vitest` (test runner).
 
 - **Git** — required for cloning student repositories
 - **unzip** — required for extracting ZIP submissions (pre-installed on macOS/Linux)
@@ -31,24 +37,28 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 AI_Grading/                   ← this tool (git repo)
   ├── run_all.js              ← main entry point
   ├── configs/labXX_config.json   ← per-lab rubric configuration
-  └── env.json                ← machine-specific root path (auto-created)
+  └── local-config.json       ← machine-specific paths (auto-created)
 
 <labRoot>/                    ← your lab data (on Google Drive)
   └── LabXX/
-      ├── _env.json           ← local code storage path (auto-created)
       ├── CS233JS_LabXX_Rubric.xlsx
       ├── StudentName_12345_assignsubmission_file/
       │   └── submission.zip
       └── StudentName_12345_assignsubmission_onlinetext/
           └── onlinetext.html
+
+<codeRoot>/                   ← local folder outside Google Drive
+  └── LabXX/                  ← created automatically per lab
+      └── StudentName/
+          └── repo/  (or extracted_code/)
 ```
 
 ### First-time setup
 
 The first time you run the grader, it will prompt for two paths:
 
-1. **Lab root** — the directory containing your lab folders (e.g., the `StudentLabWork` folder on Google Drive). Saved to `AI_Grading/env.json`.
-2. **Code storage path** — a directory *outside* Google Drive where student code will be extracted/cloned. This avoids the Google Drive sync timeouts that occur when reading/writing many files on the cloud drive. Saved to `<labDir>/_env.json`.
+1. **Lab root** — the Google Drive folder containing your lab directories (e.g., `StudentLabWork`). Saved to `AI_Grading/local-config.json`.
+2. **Code storage root** — a folder *outside* Google Drive where student code will be cloned or unzipped. The grader creates a subfolder for each lab automatically (e.g., `GradingCode/Lab03/`), so you only need to provide the base path once. Saved to `AI_Grading/local-config.json`.
 
 You only need to enter these once — they're saved for future runs.
 
@@ -67,6 +77,13 @@ Shows a menu of available labs and grading modes:
 1. **Normal** — grade new submissions (skips students who already have extracted code)
 2. **Regrade** — re-run all grading phases but keep existing cloned/extracted code
 3. **Reclone** — delete all extracted code, re-clone/unzip from scratch, then re-grade
+
+### Tests
+
+```bash
+npm test                # run smoke tests (Vitest)
+npm run test:watch      # re-run tests on file changes
+```
 
 ### Command-line mode
 
@@ -118,7 +135,7 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 
 ## Tips & Troubleshooting
 
-**Google Drive is slow:** The lab data lives on Google Drive, which can cause file reads to hang. If the pipeline seems stuck, check whether it's waiting on a Google Drive file read. The `repoClonePath` setting moves cloned/extracted code off the cloud drive to avoid this.
+**Google Drive is slow:** The lab data lives on Google Drive, which can cause file reads to hang. If the pipeline seems stuck, check whether it's waiting on a Google Drive file read. The `codeRoot` setting moves cloned/extracted code off the cloud drive to avoid this.
 
 **AI comments not working:** Ensure Ollama is running (`ollama serve`) and at least one model is installed. Run `ollama list` to check. The grader auto-selects the first available model.
 

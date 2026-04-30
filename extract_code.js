@@ -71,18 +71,6 @@ function getStudents(labDir) {
         }
     });
 
-    // For students who only have _onlinetext (no _file dir), create one
-    // so there's a place to clone code and write grade files
-    for (const name of Object.keys(students)) {
-        const student = students[name];
-        if (!student.filesDir && student.textDir) {
-            const fileDirName = student.textDir.replace('_assignsubmission_onlinetext', '_assignsubmission_file');
-            fs.mkdirSync(fileDirName, { recursive: true });
-            student.filesDir = fileDirName;
-            console.log(`  Created _file directory for ${name} (text-only submission)`);
-        }
-    }
-
     return Object.values(students);
 }
 
@@ -121,13 +109,15 @@ async function extractStudentCode(student, labDir, repoClonePath) {
     // Use 'repo' for GitHub clones, 'extracted_code' for ZIP uploads
     const codeDirName = student.zipFile ? 'extracted_code' : (urls.github ? 'repo' : 'extracted_code');
 
-    // Determine where to put the code: repoClonePath (outside Google Drive) or fallback to filesDir
+    // Determine where to put the code: repoClonePath (SubmissionsAndAssessment) or fallback to filesDir
     let codeDir;
     if (repoClonePath) {
         const studentDir = path.join(repoClonePath, student.name);
         codeDir = path.join(studentDir, codeDirName);
+        student.gradeDir = studentDir;
     } else {
         codeDir = path.join(student.filesDir || labDir, codeDirName);
+        student.gradeDir = student.filesDir || null;
     }
 
     // We only skip if the folder exists AND has actual content (not just .git or empty)
@@ -203,6 +193,9 @@ module.exports = async function(labDir, repoClonePath) {
             // (set inside extractStudentCode; only compute fallback if it wasn't)
             if (!student.extractedDir) {
                 student.extractedDir = student.filesDir ? path.join(student.filesDir, 'extracted_code') : null;
+            }
+            if (!student.gradeDir) {
+                student.gradeDir = student.filesDir || null;
             }
             student.urls = urls;
 

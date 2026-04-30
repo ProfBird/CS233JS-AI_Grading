@@ -51,16 +51,25 @@ AI_Grading/   ← this directory
   ├── local-config.json            # labRoot + codeRoot (machine-specific, auto-created)
   └── ...
 
-<labRoot>/    (on Google Drive)
+<labRoot>/    (on Google Drive — raw Moodle downloads only, nothing created here)
   └── LabXX/
-      ├── CS233JS_LabXX_Rubric.xlsx
       ├── StudentName_12345_assignsubmission_file/
+      │   └── (zip files uploaded by student, if any)
       └── StudentName_12345_assignsubmission_onlinetext/
           └── onlinetext.html
 
 <codeRoot>/   (local, outside Google Drive)
-  └── LabXX/  ← created automatically; keeps different labs' code separate
-      └── StudentName/repo/  (or extracted_code/)
+  └── LabXX/  ← created automatically; keeps different labs separate
+      ├── ArtifactsAndRubrics/   ← rubric template + all grader-produced files
+      │   ├── CS233JS_LabXX_Rubric.xlsm
+      │   ├── analysis_report.json
+      │   ├── lint_report.json
+      │   ├── runtime_report.json
+      │   └── grading_log.txt
+      └── SubmissionsAndAssessment/  ← student code + per-student grade spreadsheets
+          └── StudentName/
+              ├── repo/  (GitHub clone)  or  extracted_code/  (unzipped)
+              └── StudentName_Grade.xlsx
 ```
 
 

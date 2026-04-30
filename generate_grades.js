@@ -223,14 +223,15 @@ module.exports = async function(students, config, labDir, opts = {}) {
 
     for (const student of students) {
         const analysis = student.analysis || {};
-        const filesDir = student.filesDir;
+        const gradeDir = student.gradeDir;
 
-        if (!filesDir) {
-            console.log(`  SKIP: ${student.name} - no _file directory found`);
-            summary.errors.push({ student: student.name, issue: 'No _file directory found.' });
+        if (!gradeDir) {
+            console.log(`  SKIP: ${student.name} - no grade output directory found`);
+            summary.errors.push({ student: student.name, issue: 'No grade output directory found.' });
             skipped++;
             continue;
         }
+        fs.mkdirSync(gradeDir, { recursive: true });
 
         try {
             const wb = xlsx.readFile(rubricPath);
@@ -296,7 +297,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
                 }
                 forceRecalc(sheet);
                 const outputExt = isXlsm ? '.xlsm' : '.xlsx';
-                const outputPath = path.join(filesDir, `${student.name}_Grade${outputExt}`);
+                const outputPath = path.join(gradeDir, `${student.name}_Grade${outputExt}`);
                 xlsx.writeFile(wb, outputPath, isXlsm ? { bookType: 'xlsm' } : undefined);
                 console.log(`  PARTIAL: ${student.name} -> ${path.basename(outputPath)} (extraction failed)`);
                 summary.successful.push(student.name);
@@ -355,7 +356,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
             forceRecalc(sheet);
 
             const outputExt = isXlsm ? '.xlsm' : '.xlsx';
-            const outputPath = path.join(filesDir, `${student.name}_Grade${outputExt}`);
+            const outputPath = path.join(gradeDir, `${student.name}_Grade${outputExt}`);
             xlsx.writeFile(wb, outputPath, isXlsm ? { bookType: 'xlsm' } : undefined);
             console.log(`  OK: ${student.name} -> ${path.basename(outputPath)}`);
             summary.successful.push(student.name);

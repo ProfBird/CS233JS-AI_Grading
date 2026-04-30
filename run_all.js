@@ -149,7 +149,11 @@ function readLocalConfig() {
     try {
         return JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
     } catch (e) {}
-    // Migrate from old env.json if local-config.json doesn't exist yet
+    // Fall back to default-config.json (shipped with the repo) as a starting point
+    try {
+        return JSON.parse(fs.readFileSync(path.join(__dirname, 'default-config.json'), 'utf8'));
+    } catch (e) {}
+    // Migrate from old env.json
     try {
         return JSON.parse(fs.readFileSync(path.join(__dirname, 'env.json'), 'utf8'));
     } catch (e) {}
@@ -180,7 +184,7 @@ async function main() {
     let labName = positional[0];
     let reclone = hasRecloneFlag;
     let regrade = hasRegradeFlag || hasRecloneFlag;
-    let config, labDir, repoClonePath;
+    let config, labDir, artifactsDir, submissionsDir;
     let skipRubric = false;
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -272,18 +276,20 @@ async function main() {
             process.exit(1);
         }
 
-        // Per-lab extraction path: <codeRoot>/<labName>/ keeps different labs' code separate
-        repoClonePath = path.join(codeRoot, labName);
+        // Per-lab paths under codeRoot
+        artifactsDir = path.join(codeRoot, labName, 'ArtifactsAndRubrics');
+        submissionsDir = path.join(codeRoot, labName, 'SubmissionsAndAssessment');
 
         // Validate codeRoot is writable before proceeding — ask for a new one if not
         let codeRootConfirmed = false;
         while (!codeRootConfirmed) {
             try {
-                fs.mkdirSync(repoClonePath, { recursive: true });
+                fs.mkdirSync(artifactsDir, { recursive: true });
+                fs.mkdirSync(submissionsDir, { recursive: true });
                 codeRootConfirmed = true;
             } catch (e) {
                 console.error(`\nERROR: Cannot write to code storage directory:`);
-                console.error(`  ${repoClonePath}`);
+                console.error(`  ${path.join(codeRoot, labName)}`);
                 console.error(`  ${e.message}\n`);
                 const newRoot = await askRl(
                     'Enter a writable path for storing cloned/extracted student code\n' +
@@ -295,7 +301,8 @@ async function main() {
                 }
                 codeRoot = newRoot.trim();
                 configChanged = true;
-                repoClonePath = path.join(codeRoot, labName);
+                artifactsDir = path.join(codeRoot, labName, 'ArtifactsAndRubrics');
+                submissionsDir = path.join(codeRoot, labName, 'SubmissionsAndAssessment');
             }
         }
         if (configChanged) {
@@ -305,7 +312,7 @@ async function main() {
 
         // Validate rubric exists before starting the pipeline
         while (!skipRubric) {
-            const rubricCheckPath = path.join(labDir, config.rubricName);
+            const rubricCheckPath = path.join(artifactsDir, config.rubricName);
             if (fs.existsSync(rubricCheckPath)) {
                 break;
             } else {
@@ -359,41 +366,38 @@ async function main() {
     if (reclone) {
         console.log('--- Clearing previous code ---');
 
-        const entries = fs.readdirSync(labDir);
-        for (const entry of entries) {
-            for (const dir of ['extracted_code', 'repo']) {
-                const codeDir = path.join(labDir, entry, dir);
-                if (fs.existsSync(codeDir)) {
-                    fs.rmSync(codeDir, { recursive: true, force: true });
-                    console.log(`  Cleared: ${entry}/${dir}`);
+        if (fs.existsSync(submissionsDir)) {
+            const entries = fs.readdirSync(submissionsDir);
+            for (const entry of entries) {
+                for (const dir of ['extracted_code', 'repo']) {
+                    const codeDir = path.join(submissionsDir, entry, dir);
+                    if (fs.existsSync(codeDir)) {
+                        fs.rmSync(codeDir, { recursive: true, force: true });
+                        console.log(`  Cleared: ${entry}/${dir}`);
+                    }
                 }
             }
-        }
-
-        if (repoClonePath && fs.existsSync(repoClonePath)) {
-            fs.rmSync(repoClonePath, { recursive: true, force: true });
-            console.log(`  Cleared: ${repoClonePath}`);
         }
 
         console.log();
     }
 
     // 1. Code Acquisition
-    const students = await extractCode(labDir, repoClonePath);
+    const students = await extractCode(labDir, submissionsDir);
 
     // 2. Runtime Check — attaches to student.runtimeCheck
-    await runtimeCheck(students, config, labDir);
+    await runtimeCheck(students, config, artifactsDir);
 
     // 3. Analysis — attaches to student.analysis
-    analyzeCode(students, config, labDir);
+    analyzeCode(students, config, artifactsDir);
 
     // 4. Linting — attaches to student.lint
-    await lintCode(students, config, labDir);
+    await lintCode(students, config, artifactsDir);
 
     // 5. Generation — reads from student objects
     let generateSummary;
     if (!skipRubric) {
-        generateSummary = await generateGrades(students, config, labDir, { aiComments, aiModel: aiModelFlag });
+        generateSummary = await generateGrades(students, config, artifactsDir, { aiComments, aiModel: aiModelFlag });
     } else {
         generateSummary = { successful: [], errors: [] };
         console.log("--- Grade Generation Phase (skipped) ---\n");
@@ -434,7 +438,7 @@ async function main() {
         errors.forEach(e => logLines.push(` - ${e.student}: ${e.issue}`));
     }
 
-    const logPath = path.join(labDir, 'grading_log.txt');
+    const logPath = path.join(artifactsDir, 'grading_log.txt');
     fs.writeFileSync(logPath, logLines.join('\n'), 'utf8');
 
     console.log(`\nAll Done! Summary written to ${logPath}\n`);

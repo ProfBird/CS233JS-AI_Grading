@@ -131,3 +131,6 @@ dist
 
 #Claude
 .claude
+
+# Machine-specific config (see default-config.json for the template)
+local-config.json

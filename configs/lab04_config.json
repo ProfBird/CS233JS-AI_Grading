@@ -4,6 +4,13 @@
   "titleText": "Lab 4: Node and Vite",
   "summaryCell": "A2",
   "runtimeCheck": "build",
+  "packageCheck": {
+    "dependencies": ["html-lit", "bootstrap"],
+    "devDependencies": ["vite"]
+  },
+  "repoHygiene": {
+    "excludedFromRepo": ["node_modules", "dist"]
+  },
   "lint": {
     "exclude": [
       "node_modules",
@@ -57,9 +64,8 @@
     {
       "cell": "C10",
       "commentCell": "E10",
-      "type": "manual",
-      "maxScore": 3,
-      "msg": "NEEDS MANUAL CHECK (package.json entries correct)"
+      "type": "package_check",
+      "maxScore": 3
     },
     {
       "cell": "C11",
@@ -107,9 +113,8 @@
       "commentCell": "E20",
       "linkCell": "F20",
       "linkUrlType": "github",
-      "type": "url_check",
-      "maxScore": 2,
-      "urlType": "github"
+      "type": "github_repo",
+      "maxScore": 2
     },
     {
       "cell": "C21",
@@ -128,9 +133,8 @@
     {
       "cell": "C23",
       "commentCell": "E23",
-      "type": "manual",
-      "maxScore": 1,
-      "msg": "NEEDS MANUAL CHECK (non-source files excluded from repo)"
+      "type": "repo_hygiene",
+      "maxScore": 1
     },
     {
       "cell": "C24",

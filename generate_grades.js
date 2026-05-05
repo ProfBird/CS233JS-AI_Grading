@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 let xlsx;
 try {
     xlsx = require('xlsx');
@@ -25,6 +26,18 @@ function setCellValue(sheet, cellRef, value) {
     sheet[cellRef] = { v: value, t: typeof value === 'number' ? 'n' : 's' };
 }
 
+function stripToGradeSheet(wb, sheet) {
+    wb.SheetNames = ['Grade'];
+    wb.Sheets = { 'Grade': sheet };
+    if (wb.Workbook && wb.Workbook.Sheets) {
+        const entry = wb.Workbook.Sheets.find(s => s.name === 'Grade');
+        wb.Workbook.Sheets = entry ? [entry] : [];
+    }
+    if (wb.Workbook && wb.Workbook.WBView) {
+        wb.Workbook.WBView.forEach(v => { v.activeTab = 0; });
+    }
+}
+
 function forceRecalc(sheet) {
     for (const ref of Object.keys(sheet)) {
         if (ref[0] === '!') continue;
@@ -33,6 +46,58 @@ function forceRecalc(sheet) {
             delete cell.v;
         }
     }
+}
+
+// --- Column width helpers ---
+// xlsx community edition does not parse <cols> from xlsm files into !cols.
+// These helpers read the column widths directly from the ZIP XML and apply them.
+
+function readSheetColsXml(filePath, sheetIndex) {
+    const target = `xl/worksheets/sheet${sheetIndex + 1}.xml`;
+    let buf;
+    try { buf = fs.readFileSync(filePath); } catch (e) { return undefined; }
+    let pos = 0;
+    while (pos < buf.length - 30) {
+        if (buf[pos] !== 0x50 || buf[pos+1] !== 0x4B || buf[pos+2] !== 0x03 || buf[pos+3] !== 0x04) {
+            pos++; continue;
+        }
+        const compression = buf.readUInt16LE(pos + 8);
+        const compressedSize = buf.readUInt32LE(pos + 18);
+        const fileNameLen = buf.readUInt16LE(pos + 26);
+        const extraLen = buf.readUInt16LE(pos + 28);
+        const fileName = buf.slice(pos + 30, pos + 30 + fileNameLen).toString();
+        const dataStart = pos + 30 + fileNameLen + extraLen;
+        if (fileName === target) {
+            try {
+                const data = buf.slice(dataStart, dataStart + compressedSize);
+                const xml = (compression === 8 ? zlib.inflateRawSync(data) : data).toString('utf8');
+                const m = xml.match(/<cols[\s\S]*?<\/cols>/);
+                return m ? m[0] : undefined;
+            } catch (e) { return undefined; }
+        }
+        pos = compressedSize > 0 ? dataStart + compressedSize : dataStart + 1;
+    }
+    return undefined;
+}
+
+function parseColsXml(colsXml) {
+    if (!colsXml) return undefined;
+    const cols = [];
+    const re = /<col\s([^/]*?)\/>/g;
+    let m;
+    while ((m = re.exec(colsXml)) !== null) {
+        const attrs = m[1];
+        const min = parseInt(attrs.match(/\bmin="(\d+)"/)?.[1] || '1') - 1;
+        const max = parseInt(attrs.match(/\bmax="(\d+)"/)?.[1] || (min + 1)) - 1;
+        const width = parseFloat(attrs.match(/\bwidth="([^"]+)"/)?.[1] || '0');
+        const hidden = /\bhidden="1"/.test(attrs);
+        for (let i = min; i <= max; i++) {
+            while (cols.length <= i) cols.push(null);
+            cols[i] = width > 0 ? { wch: width } : {};
+            if (hidden) cols[i].hidden = true;
+        }
+    }
+    return cols.length > 0 ? cols : undefined;
 }
 
 // --- Handler Registry ---
@@ -126,7 +191,7 @@ registerHandler('url_check', (map, student) => {
     const a = student.analysis || {};
     const url = a.urls && a.urls[map.urlType];
     if (url) {
-        return { score: '', comment: `NEEDS CHECK: ${url}` };
+        return { score: map.maxScore, comment: `NEEDS CHECK: ${url}` };
     }
     return { score: 0, comment: `No ${map.urlType} URL provided` };
 });
@@ -146,7 +211,7 @@ registerHandler('lint', (map, student) => {
             return { score: 0, comment: `${totalIssues} issues (${topIssues})` };
         }
     }
-    return { score: '', comment: 'No JS files to lint' };
+    return { score: map.maxScore, comment: 'No JS files to lint' };
 });
 
 registerHandler('build_check', (map, student) => {
@@ -159,7 +224,15 @@ registerHandler('build_check', (map, student) => {
 });
 
 registerHandler('manual', (map, student) => {
-    return { score: map.maxScore != null ? map.maxScore : '', comment: map.msg || 'NEEDS MANUAL CHECK' };
+    return { score: map.maxScore, comment: map.msg || 'NEEDS MANUAL CHECK' };
+});
+
+registerHandler('package_check', (map, student) => {
+    const pc = student.analysis && student.analysis.packageCheck;
+    if (!pc) return { score: map.maxScore, comment: 'NEEDS MANUAL CHECK (no package.json check data)' };
+    if (!pc.found) return { score: 0, comment: 'package.json not found' };
+    if (pc.passed) return { score: map.maxScore, comment: 'package.json entries correct' };
+    return { score: 0, comment: pc.issues.join('; ') };
 });
 
 /**
@@ -180,12 +253,24 @@ registerHandler('part_feature', (map, student) => {
     return { score: 0, comment: `${failMsg} (only ${count} found)` };
 });
 
+registerHandler('repo_hygiene', (map, student) => {
+    const rh = student.analysis && student.analysis.repoHygiene;
+    if (!rh) return { score: map.maxScore, comment: 'NEEDS MANUAL CHECK' };
+    if (rh.passed) return { score: map.maxScore, comment: 'No non-source files in repo' };
+    return { score: 0, comment: `Non-source files found in repo: ${rh.foundDirs.join(', ')}` };
+});
+
+registerHandler('github_repo', (map, student) => {
+    const url = student.urls && student.urls.github;
+    if (!url) return { score: 0, comment: 'No GitHub URL provided' };
+    if (student.extractedDir) return { score: map.maxScore, comment: `Yes - ${url}` };
+    return { score: 0, comment: `GitHub URL provided but repo could not be cloned: ${url}` };
+});
+
 // --- Mapping types that can produce a score even when code extraction failed ---
 
 // Types that report an extraction error rather than 'N/A' when code could not be obtained.
-// Only github url_check qualifies — it's the source of the extraction failure.
-// citstudent and other url_check types are unrelated to code extraction.
-const CODE_SOURCE_TYPES = new Set(['apps_in_repo', 'part1_completed', 'part_completed']);
+const CODE_SOURCE_TYPES = new Set(['apps_in_repo', 'part1_completed', 'part_completed', 'github_repo']);
 
 function isCodeSourceType(map) {
     return CODE_SOURCE_TYPES.has(map.type) || (map.type === 'url_check' && map.urlType === 'github');
@@ -217,6 +302,16 @@ module.exports = async function(students, config, labDir, opts = {}) {
         throw err;
     }
 
+    // Read column widths once from the template ZIP (xlsx doesn't parse !cols from xlsm)
+    let templateCols;
+    {
+        const _wb = xlsx.readFile(rubricPath);
+        const gradeIdx = _wb.SheetNames.indexOf('Grade');
+        if (gradeIdx >= 0) {
+            templateCols = parseColsXml(readSheetColsXml(rubricPath, gradeIdx));
+        }
+    }
+
     const summary = { successful: [], errors: [] };
     let generated = 0;
     let skipped = 0;
@@ -236,6 +331,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
         try {
             const wb = xlsx.readFile(rubricPath);
             const sheet = wb.Sheets['Grade'];
+            if (templateCols) sheet['!cols'] = templateCols.map(c => c ? Object.assign({}, c) : null);
 
             if (config.titleCell && config.titleText) {
                 setCellValue(sheet, config.titleCell, config.titleText);
@@ -291,10 +387,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
                         if (fc.commentCell) setCellValue(sheet, fc.commentCell, 'N/A (code unavailable)');
                     }
                 }
-                if (!isXlsm) {
-                    wb.SheetNames = ['Grade'];
-                    wb.Sheets = { 'Grade': sheet };
-                }
+                stripToGradeSheet(wb, sheet);
                 forceRecalc(sheet);
                 const outputExt = isXlsm ? '.xlsm' : '.xlsx';
                 const outputPath = path.join(gradeDir, `${student.name}_Grade${outputExt}`);
@@ -349,10 +442,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
                 }
             }
 
-            if (!isXlsm) {
-                wb.SheetNames = ['Grade'];
-                wb.Sheets = { 'Grade': sheet };
-            }
+            stripToGradeSheet(wb, sheet);
             forceRecalc(sheet);
 
             const outputExt = isXlsm ? '.xlsm' : '.xlsx';

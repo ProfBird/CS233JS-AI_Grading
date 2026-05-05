@@ -220,6 +220,77 @@ function detectPartsPresent(extractedDir, config, partGameNames) {
     return result;
 }
 
+const KNOWN_PKG_SECTIONS = new Set(['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']);
+
+function checkRepoHygiene(extractedDir, hygiene) {
+    if (!hygiene || !Array.isArray(hygiene.excludedFromRepo)) return null;
+
+    const found = [];
+
+    function searchDir(dirPath, depth) {
+        if (depth > 4) return;
+        let entries;
+        try { entries = fs.readdirSync(dirPath); } catch (e) { return; }
+        for (const entry of entries) {
+            const fullPath = path.join(dirPath, entry);
+            let stat;
+            try { stat = fs.lstatSync(fullPath); } catch (e) { continue; }
+            if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+            if (hygiene.excludedFromRepo.includes(entry)) {
+                if (!found.includes(entry)) found.push(entry);
+                // don't recurse into excluded dirs
+            } else {
+                searchDir(fullPath, depth + 1);
+            }
+        }
+    }
+
+    searchDir(extractedDir, 0);
+    return { passed: found.length === 0, foundDirs: found };
+}
+
+function checkPackageJson(extractedDir, packageCheckConfig) {
+    const allFiles = getAllFiles(extractedDir, [], ['node_modules', 'dist', '.git']);
+    const pkgFiles = allFiles.filter(f => path.basename(f) === 'package.json');
+
+    if (pkgFiles.length === 0) {
+        return { found: false, passed: false, issues: ['package.json not found'] };
+    }
+
+    const parsed = [];
+    for (const f of pkgFiles) {
+        try {
+            parsed.push({ path: f, pkg: JSON.parse(fs.readFileSync(f, 'utf8')) });
+        } catch (e) { /* skip unparseable */ }
+    }
+
+    if (parsed.length === 0) {
+        return { found: true, passed: false, issues: ['package.json could not be parsed'] };
+    }
+
+    const issues = [];
+    const allSections = [...KNOWN_PKG_SECTIONS];
+
+    for (const [section, packages] of Object.entries(packageCheckConfig)) {
+        if (!KNOWN_PKG_SECTIONS.has(section) || !Array.isArray(packages)) continue;
+        const wrongSections = allSections.filter(s => s !== section);
+
+        for (const pkgName of packages) {
+            const inCorrect = parsed.some(({ pkg }) => pkg[section] && pkgName in pkg[section]);
+            if (inCorrect) continue;
+
+            const inWrong = wrongSections.find(s => parsed.some(({ pkg }) => pkg[s] && pkgName in pkg[s]));
+            if (inWrong) {
+                issues.push(`"${pkgName}" is in ${inWrong} but should be in ${section}`);
+            } else {
+                issues.push(`"${pkgName}" not found in package.json`);
+            }
+        }
+    }
+
+    return { found: true, passed: issues.length === 0, issues };
+}
+
 module.exports = function(students, config, labDir) {
     console.log("--- Analysis Phase ---");
 
@@ -345,6 +416,20 @@ module.exports = function(students, config, labDir) {
                 }
             } catch (e) {
                 console.warn(`  WARNING: Custom analyzer failed for ${student.name}: ${e.message}`);
+            }
+        }
+
+        if (config.packageCheck) {
+            analysis.packageCheck = checkPackageJson(student.extractedDir, config.packageCheck);
+            if (!analysis.packageCheck.passed) {
+                console.log(`    ${student.name} package.json: ${analysis.packageCheck.issues.join('; ')}`);
+            }
+        }
+
+        if (config.repoHygiene) {
+            analysis.repoHygiene = checkRepoHygiene(student.extractedDir, config.repoHygiene);
+            if (analysis.repoHygiene && !analysis.repoHygiene.passed) {
+                console.log(`    ${student.name} repo hygiene: found ${analysis.repoHygiene.foundDirs.join(', ')}`);
             }
         }
 

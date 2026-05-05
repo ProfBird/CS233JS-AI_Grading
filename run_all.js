@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { spawnSync } = require('child_process');
 const extractCode = require('./extract_code.js');
 const analyzeCode = require('./analyze_code.js');
 const lintCode = require('./lint_code.js');
@@ -120,6 +121,23 @@ function validateConfig(config, labName) {
         });
     }
 
+    if (config.repoHygiene) {
+        if (!config.repoHygiene.excludedFromRepo || !Array.isArray(config.repoHygiene.excludedFromRepo)) {
+            errors.push(`"repoHygiene.excludedFromRepo" must be an array of directory names`);
+        }
+    }
+
+    if (config.packageCheck) {
+        const KNOWN_SECTIONS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
+        for (const [section, packages] of Object.entries(config.packageCheck)) {
+            if (!KNOWN_SECTIONS.includes(section)) {
+                errors.push(`packageCheck: unknown section "${section}" (expected: ${KNOWN_SECTIONS.join(', ')})`);
+            } else if (!Array.isArray(packages)) {
+                errors.push(`packageCheck.${section} must be an array of package names`);
+            }
+        }
+    }
+
     if (config.parts) {
         if (!Array.isArray(config.parts)) {
             errors.push(`"parts" must be an array`);
@@ -198,7 +216,7 @@ async function main() {
 
         if (!labRoot || !fs.existsSync(labRoot)) {
             const input = await askRl(
-                'Lab root — path to the Google Drive folder containing your lab directories\n' +
+                'Lab root - path to the folder containing the students submissions\n' +
                 '  (e.g. /Volumes/GoogleDrive/StudentLabWork): '
             );
             if (!input.trim()) {
@@ -228,11 +246,17 @@ async function main() {
             console.log(`  Saved lab root and code storage root to local-config.json`);
         }
 
-        const labs = fs.readdirSync(labRoot).filter(f => {
-            const fullPath = path.join(labRoot, f);
-            return fs.statSync(fullPath).isDirectory() &&
-                   fs.existsSync(path.join(__dirname, 'configs', `${f.toLowerCase()}_config.json`));
-        });
+        const labs = fs.readdirSync(path.join(__dirname, 'configs'))
+            .filter(f => f.endsWith('_config.json'))
+            .map(f => f.replace(/_config\.json$/i, ''))
+            .map(name => {
+                // Restore original casing from labRoot if the directory exists
+                const match = fs.existsSync(labRoot)
+                    ? fs.readdirSync(labRoot).find(d => d.toLowerCase() === name.toLowerCase())
+                    : null;
+                return match || name.charAt(0).toUpperCase() + name.slice(1);
+            })
+            .sort();
 
         if (!labName) {
             console.log('\n╔══════════════════════════════════╗');
@@ -272,8 +296,27 @@ async function main() {
 
         labDir = path.join(labRoot, labName);
         if (!fs.existsSync(labDir)) {
-            console.error(`ERROR: Directory not found at ${labDir}`);
-            process.exit(1);
+            // Common mistake: user entered the lab subdirectory as labRoot instead of its parent
+            if (path.basename(labRoot).toLowerCase() === labName.toLowerCase()) {
+                const correctedRoot = path.dirname(labRoot);
+                console.log(`\nIt looks like your lab root points to the ${labName} folder itself.`);
+                console.log(`  Entered:   ${labRoot}`);
+                console.log(`  Should be: ${correctedRoot}`);
+                const confirm = await askRl('Use the parent folder and update your saved settings? (y/n): ');
+                if (confirm.trim().toLowerCase() === 'y') {
+                    labRoot = correctedRoot;
+                    labDir = path.join(labRoot, labName);
+                    saveLocalConfig({ labRoot, codeRoot });
+                    console.log('  Updated lab root saved to local-config.json\n');
+                } else {
+                    console.error('Aborted. Re-run and enter the correct lab root path.');
+                    process.exit(1);
+                }
+            } else {
+                console.error(`ERROR: Directory not found at ${labDir}`);
+                console.error(`  Make sure your lab root (${labRoot}) is the folder that contains the ${labName} subdirectory.`);
+                process.exit(1);
+            }
         }
 
         // Per-lab paths under codeRoot
@@ -379,6 +422,23 @@ async function main() {
             }
         }
 
+        console.log();
+    }
+
+    if (regrade && !reclone && fs.existsSync(submissionsDir)) {
+        console.log('--- Pulling latest code from repositories ---');
+        const entries = fs.readdirSync(submissionsDir);
+        for (const entry of entries) {
+            const repoDir = path.join(submissionsDir, entry, 'repo');
+            if (!fs.existsSync(repoDir)) continue;
+            const result = spawnSync('git', ['pull'], { cwd: repoDir, encoding: 'utf8' });
+            if (result.status === 0) {
+                const summary = (result.stdout || '').trim().split('\n').pop();
+                console.log(`  ${entry}: ${summary}`);
+            } else {
+                console.log(`  ${entry}: pull failed — ${(result.stderr || result.stdout || '').trim()}`);
+            }
+        }
         console.log();
     }
 

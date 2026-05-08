@@ -16,7 +16,7 @@
   "parts": [
     {
       "id": "part1",
-      "rubricTitleRow": 7,
+      "gameNames": ["domino", "dominos", "boston", "boneyard", "all fives", "mexican train", "block", "draw"],
       "folderPattern": "(?:part|pt)\\s*[_-]?\\s*1",
       "featureCounts": [
         { "featureId": "classes", "minCount": 1, "cell": "C8", "commentCell": "E8", "maxScore": 5, "successMsg": "Yes", "failMsg": "Missing" }
@@ -24,7 +24,7 @@
     },
     {
       "id": "part2",
-      "rubricTitleRow": 14,
+      "gameNames": ["dice", "midnight", "ship captain crew", "shipcaptaincrew", "farkle", "yahtzee", "pig", "ten thousand", "tenthousand", "double trouble", "doubletrouble"],
       "folderPattern": "(?:part|pt)\\s*[_-]?\\s*2",
       "featureCounts": [
         { "featureId": "classes", "minCount": 3, "cell": "C16", "commentCell": "E16", "maxScore": 3, "successMsg": "Yes", "failMsg": "Missing" }

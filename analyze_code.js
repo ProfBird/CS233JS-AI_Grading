@@ -8,8 +8,6 @@
 
 const fs = require('fs');
 const path = require('path');
-let xlsx;
-try { xlsx = require('xlsx'); } catch (e) {}
 
 // Strip single-line (//) and multi-line (/* */) comments from JS source.
 // Preserves string/template literal contents to avoid stripping // inside URLs, etc.
@@ -82,20 +80,6 @@ function countFeatures(allFiles, configFeatures) {
     return counts;
 }
 
-function readGameNamesFromRubric(rubricPath, rubricTitleRow) {
-    if (!rubricPath || !xlsx || !fs.existsSync(rubricPath)) return [];
-    try {
-        const wb = xlsx.readFile(rubricPath);
-        const sheet = wb.Sheets['Grade'];
-        const data = xlsx.utils.sheet_to_json(sheet, { header: 1 });
-        const row = data[rubricTitleRow - 1];
-        if (row && row[4]) {
-            return row[4].split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-        }
-    } catch (e) { /* skip */ }
-    return [];
-}
-
 function normalizeDirName(dir) {
     return dir
         .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -141,9 +125,27 @@ function findPartDir(extractedDir, gameNames, folderPattern) {
     const topLevelDirs = getSubdirs(extractedDir);
     if (topLevelDirs.length === 0) return null;
 
+    // Folder-pattern matches (e.g. "Part1"/"Pt2") are the most specific signal — try them first.
+    const patternRegex = folderPattern ? new RegExp(folderPattern, 'i') : null;
+
+    if (patternRegex) {
+        for (const dir of topLevelDirs) {
+            if (patternRegex.test(dir)) return path.join(extractedDir, dir);
+        }
+    }
+
     for (const dir of topLevelDirs) {
         if (dirMatchesGameNames(dir, gameNames)) {
             return path.join(extractedDir, dir);
+        }
+    }
+
+    if (patternRegex) {
+        for (const dir of topLevelDirs) {
+            const subDirs = getSubdirs(path.join(extractedDir, dir));
+            for (const sub of subDirs) {
+                if (patternRegex.test(sub)) return path.join(extractedDir, dir, sub);
+            }
         }
     }
 
@@ -159,19 +161,6 @@ function findPartDir(extractedDir, gameNames, folderPattern) {
     if (topLevelDirs.length === 1) {
         const result = findPartDir(path.join(extractedDir, topLevelDirs[0]), gameNames, folderPattern);
         if (result) return result;
-    }
-
-    if (folderPattern) {
-        const regex = new RegExp(folderPattern, 'i');
-        for (const dir of topLevelDirs) {
-            if (regex.test(dir)) return path.join(extractedDir, dir);
-        }
-        for (const dir of topLevelDirs) {
-            const subDirs = getSubdirs(path.join(extractedDir, dir));
-            for (const sub of subDirs) {
-                if (regex.test(sub)) return path.join(extractedDir, dir, sub);
-            }
-        }
     }
 
     return null;
@@ -294,12 +283,11 @@ function checkPackageJson(extractedDir, packageCheckConfig) {
 module.exports = function(students, config, labDir) {
     console.log("--- Analysis Phase ---");
 
-    const rubricPath = config.rubricName ? path.join(labDir, config.rubricName) : null;
     const partGameNames = {};
     if (config.parts) {
         config.parts.forEach(part => {
-            partGameNames[part.id] = readGameNamesFromRubric(rubricPath, part.rubricTitleRow);
-            console.log(`  Part "${part.id}" game names from rubric: ${partGameNames[part.id].join(', ') || '(none found)'}`);
+            partGameNames[part.id] = (part.gameNames || []).map(s => s.toLowerCase());
+            console.log(`  Part "${part.id}" game names: ${partGameNames[part.id].join(', ') || '(none configured)'}`);
         });
     }
 

@@ -88,7 +88,7 @@ AI_Grading/   ← this directory
   - analysis.features[]: { id, regex, fileRegex } — features to count via regex
   - analysis.customAnalyzer: string (optional) — path (relative to configs/) to a JS module that receives (jsFiles, analysis, config, student) and merges its return into analysis
 
-  - parts[]: { id, rubricTitleRow, folderPattern, featureCounts[] } — multi-part lab config (optional)
+  - parts[]: { id, gameNames[], folderPattern, featureCounts[] } — multi-part lab config (optional). gameNames is the list of expected game/project names for that part; folderPattern is a regex fallback for "Part1/Pt2"-style folder naming.
 
   - mappings[] — rubric cell assignments (types listed below)
     - types: feature | part1_completed | part_completed | apps_in_repo | developer_comments | code_review | url_check | lint | build_check | manual | part_feature

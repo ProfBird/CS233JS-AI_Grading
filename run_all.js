@@ -145,8 +145,9 @@ function validateConfig(config, labName) {
             config.parts.forEach((part, i) => {
                 const prefix = `parts[${i}]`;
                 if (!part.id) errors.push(`${prefix}: missing "id"`);
-                if (part.rubricTitleRow == null) errors.push(`${prefix}: missing "rubricTitleRow"`);
-                if (!part.folderPattern) errors.push(`${prefix}: missing "folderPattern"`);
+                if (!part.folderPattern && !(Array.isArray(part.gameNames) && part.gameNames.length)) {
+                    errors.push(`${prefix}: must define "gameNames" (array) and/or "folderPattern" (regex)`);
+                }
             });
         }
     }

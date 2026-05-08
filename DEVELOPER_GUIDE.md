@@ -368,8 +368,8 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
   "parts": [
     {
       "id": "part1",
-      "rubricTitleRow": 7,
-      "folderPattern": "regex pattern",
+      "gameNames": ["domino", "boston", "boneyard"],
+      "folderPattern": "(?:part|pt)\\s*[_-]?\\s*1",
       "featureCounts": [
         { "featureId": "classes", "minCount": 1, "cell": "C8", "commentCell": "E8", "maxScore": 5 }
       ]

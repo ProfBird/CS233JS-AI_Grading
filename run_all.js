@@ -446,11 +446,11 @@ async function main() {
     // 1. Code Acquisition
     const students = await extractCode(labDir, submissionsDir);
 
-    // 2. Runtime Check — attaches to student.runtimeCheck
-    await runtimeCheck(students, config, artifactsDir);
-
-    // 3. Analysis — attaches to student.analysis
+    // 2. Analysis — attaches to student.analysis (before runtime check to catch repo state before build)
     analyzeCode(students, config, artifactsDir);
+
+    // 3. Runtime Check — attaches to student.runtimeCheck
+    await runtimeCheck(students, config, artifactsDir);
 
     // 4. Linting — attaches to student.lint
     await lintCode(students, config, artifactsDir);

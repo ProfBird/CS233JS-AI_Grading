@@ -33,8 +33,8 @@ npx vitest                  # watch mode
 ### Pipeline (`run_all.js`)
 
 1. **extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`.
-2. **runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: runs `npm install && npm run build`. Attaches to `student.runtimeCheck`.
-3. **analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from rubric title rows. Attaches to `student.analysis`.
+2. **analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`.
+3. **runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: runs `npm install && npm run build`. Attaches to `student.runtimeCheck`.
 4. **lint_code.js** — Runs ESLint (flat config from `eslint.config.mjs`) against each student's `.js` files. Attaches to `student.lint`.
 5. **generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`.
 

@@ -199,16 +199,32 @@ registerHandler('url_check', (map, student) => {
 registerHandler('lint', (map, student) => {
     const lint = student.lint || {};
     if (lint.jsFiles > 0) {
-        const totalIssues = lint.errors + lint.warnings;
-        const topIssues = (lint.messages || []).slice(0, 3).join(', ');
-        if (totalIssues === 0) {
-            return { score: map.maxScore, comment: 'Excellent - no lint issues' };
-        } else if (totalIssues <= 10) {
-            return { score: map.maxScore, comment: `Good - ${totalIssues} minor issues (${topIssues})` };
-        } else if (totalIssues <= 30) {
-            return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${totalIssues} issues (${topIssues})` };
+        const severity = map.severity; // 'errors', 'warnings', or undefined (all)
+
+        if (severity === 'errors') {
+            const count = lint.errors || 0;
+            const topIssues = (lint.errorMessages || lint.messages || []).slice(0, 3).join(', ');
+            if (count === 0) return { score: map.maxScore, comment: 'No syntax errors' };
+            return { score: 0, comment: `${count} error${count !== 1 ? 's' : ''} found (${topIssues})` };
+        }
+
+        let count, topIssues;
+        if (severity === 'warnings') {
+            count = lint.warnings || 0;
+            topIssues = (lint.warningMessages || lint.messages || []).slice(0, 3).join(', ');
         } else {
-            return { score: 0, comment: `${totalIssues} issues (${topIssues})` };
+            count = (lint.errors || 0) + (lint.warnings || 0);
+            topIssues = (lint.messages || []).slice(0, 3).join(', ');
+        }
+
+        if (count === 0) {
+            return { score: map.maxScore, comment: 'Excellent - no lint issues' };
+        } else if (count <= 10) {
+            return { score: map.maxScore, comment: `Good - ${count} minor issues (${topIssues})` };
+        } else if (count <= 30) {
+            return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${count} issues (${topIssues})` };
+        } else {
+            return { score: 0, comment: `${count} issues (${topIssues})` };
         }
     }
     return { score: map.maxScore, comment: 'No JS files to lint' };

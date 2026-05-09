@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 function getAllJsFiles(dir, exclusions = []) {
     let results = [];
@@ -107,8 +108,9 @@ function friendlyRuleName(ruleId) {
 function parseLintOutput(results) {
     let totalErrors = 0;
     let totalWarnings = 0;
-    const messages = [];
     const ruleCounts = {};
+    const errorRuleCounts = {};
+    const warningRuleCounts = {};
 
     for (const file of results) {
         totalErrors += file.errorCount;
@@ -117,23 +119,36 @@ function parseLintOutput(results) {
         for (const msg of file.messages) {
             const rule = msg.ruleId || 'parse-error';
             ruleCounts[rule] = (ruleCounts[rule] || 0) + 1;
+            if (msg.severity === 2) {
+                errorRuleCounts[rule] = (errorRuleCounts[rule] || 0) + 1;
+            } else {
+                warningRuleCounts[rule] = (warningRuleCounts[rule] || 0) + 1;
+            }
         }
     }
 
-    for (const [rule, count] of Object.entries(ruleCounts).sort((a, b) => b[1] - a[1])) {
-        messages.push(`${friendlyRuleName(rule)}: ${count}`);
+    function toMessages(counts) {
+        return Object.entries(counts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([rule, count]) => `${friendlyRuleName(rule)}: ${count}`);
     }
 
-    return { errors: totalErrors, warnings: totalWarnings, messages, ruleCounts };
+    return {
+        errors: totalErrors,
+        warnings: totalWarnings,
+        messages: toMessages(ruleCounts),
+        errorMessages: toMessages(errorRuleCounts),
+        warningMessages: toMessages(warningRuleCounts),
+        ruleCounts
+    };
 }
 
 module.exports = async function(students, config, labDir) {
     console.log("--- Linting Phase ---");
 
-    const aiGradingDir = __dirname;
-    const eslintConfigFile = path.join(aiGradingDir, 'eslint.config.mjs');
+    const eslintConfigFile = path.join(os.homedir(), '.eslint', 'eslint.config.mjs');
     if (!fs.existsSync(eslintConfigFile)) {
-        console.warn('WARNING: No eslint.config.mjs found in AI_Grading. Linting may fail.');
+        console.warn(`WARNING: No eslint.config.mjs found at ${eslintConfigFile}. Linting may fail.`);
     }
 
     const exclusions = (config.lint && config.lint.exclude) ? config.lint.exclude : [];

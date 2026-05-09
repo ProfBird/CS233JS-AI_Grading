@@ -5,7 +5,7 @@
   "summaryCell": "A2",
   "runtimeCheck": "build",
   "packageCheck": {
-    "dependencies": ["html-lit", "bootstrap"],
+    "dependencies": ["lit-html", "bootstrap"],
     "devDependencies": ["vite"]
   },
   "repoHygiene": {
@@ -81,6 +81,7 @@
       "cell": "C12",
       "commentCell": "E12",
       "type": "lint",
+      "severity": "errors",
       "maxScore": 1
     },
     {
@@ -106,6 +107,7 @@
       "cell": "C16",
       "commentCell": "E16",
       "type": "lint",
+      "severity": "warnings",
       "maxScore": 2
     },
     {

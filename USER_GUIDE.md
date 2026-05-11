@@ -36,12 +36,14 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 ```
 AI_Grading/                   ← this tool (git repo)
   ├── run_all.js              ← main entry point
-  ├── configs/labXX_config.json   ← per-lab rubric configuration
-  └── local-config.json       ← machine-specific paths (auto-created)
+  └── configs/
+      ├── local-config.json   ← machine-specific paths (auto-created, gitignored)
+      └── LabXX/
+          ├── labXX_config.json        ← per-lab rubric configuration
+          └── CS233JS_LabXX_Rubric.xlsx  ← rubric template
 
 <labRoot>/                    ← your lab data (on Google Drive)
   └── LabXX/
-      ├── CS233JS_LabXX_Rubric.xlsx
       ├── StudentName_12345_assignsubmission_file/
       │   └── submission.zip
       └── StudentName_12345_assignsubmission_onlinetext/
@@ -57,8 +59,8 @@ AI_Grading/                   ← this tool (git repo)
 
 The first time you run the grader, it will prompt for two paths:
 
-1. **Lab root** — the Google Drive folder containing your lab directories (e.g., `StudentLabWork`). Saved to `AI_Grading/local-config.json`.
-2. **Code storage root** — a folder *outside* Google Drive where student code will be cloned or unzipped. The grader creates a subfolder for each lab automatically (e.g., `GradingCode/Lab03/`), so you only need to provide the base path once. Saved to `AI_Grading/local-config.json`.
+1. **Lab root** — the Google Drive folder containing your lab directories (e.g., `StudentLabWork`). Saved to `AI_Grading/configs/local-config.json`.
+2. **Code storage root** — a folder *outside* Google Drive where student code will be cloned or unzipped. The grader creates a subfolder for each lab automatically (e.g., `GradingCode/Lab03/`), so you only need to provide the base path once. Saved to `AI_Grading/configs/local-config.json`.
 
 You only need to enter these once — they're saved for future runs.
 

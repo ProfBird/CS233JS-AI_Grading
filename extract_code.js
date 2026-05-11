@@ -10,6 +10,9 @@ const fsp = fs.promises;
 const path = require('path');
 const { execFileSync } = require('child_process');
 
+const CODE_DIR = 'extracted_code';
+const REPO_DIR = 'repo';
+
 // Read a file with a timeout — protects against Google Drive blocking reads on unsynced files
 async function readFileWithTimeout(filePath, timeoutMs = 10000) {
     let timeoutHandle;
@@ -106,8 +109,7 @@ async function extractUrls(textDir) {
 
 async function extractStudentCode(student, labDir, repoClonePath) {
     const urls = await extractUrls(student.textDir);
-    // Use 'repo' for GitHub clones, 'extracted_code' for ZIP uploads
-    const codeDirName = student.zipFile ? 'extracted_code' : (urls.github ? 'repo' : 'extracted_code');
+    const codeDirName = student.zipFile ? CODE_DIR : (urls.github ? REPO_DIR : CODE_DIR);
 
     // Determine where to put the code: repoClonePath (SubmissionsAndAssessment) or fallback to filesDir
     let codeDir;
@@ -192,7 +194,7 @@ module.exports = async function(labDir, repoClonePath) {
             // Ensure student has extractedDir field for downstream
             // (set inside extractStudentCode; only compute fallback if it wasn't)
             if (!student.extractedDir) {
-                student.extractedDir = student.filesDir ? path.join(student.filesDir, 'extracted_code') : null;
+                student.extractedDir = student.filesDir ? path.join(student.filesDir, CODE_DIR) : null;
             }
             if (!student.gradeDir) {
                 student.gradeDir = student.filesDir || null;
@@ -220,3 +222,6 @@ module.exports = async function(labDir, repoClonePath) {
 
     return students; // returns array of augmented student objects
 };
+
+module.exports.CODE_DIR = CODE_DIR;
+module.exports.REPO_DIR = REPO_DIR;

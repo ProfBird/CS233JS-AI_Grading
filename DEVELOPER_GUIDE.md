@@ -36,8 +36,8 @@ graph TD
     end
 
     subgraph "Configuration"
-        local_config[local-config.json]
-        lab_configs[configs/labXX_config.json]
+        local_config[configs/local-config.json]
+        lab_configs[configs/LabXX/labXX_config.json]
         eslint_config[eslint.config.mjs]
     end
 
@@ -85,8 +85,8 @@ graph TD
 sequenceDiagram
     participant User
     participant run_all as run_all.js
-    participant lc as local-config.json
-    participant config as labXX_config.json
+    participant lc as configs/local-config.json
+    participant config as configs/LabXX/labXX_config.json
 
     User->>run_all: node run_all.js [LabXX] [flags]
 
@@ -98,7 +98,7 @@ sequenceDiagram
     end
 
     Note over run_all: === Lab Selection ===
-    run_all->>run_all: scan labRoot for directories with matching configs
+    run_all->>run_all: scan configs/ subdirs for matching labXX_config.json
 
     alt no labName arg
         User->>run_all: select lab from menu
@@ -209,8 +209,8 @@ sequenceDiagram
 The entry point. Handles CLI argument parsing, interactive menus, env configuration, and orchestrates the five pipeline phases.
 
 **Key behaviors:**
-- Reads `labRoot` and `codeRoot` from `AI_Grading/local-config.json` (prompts & saves if missing; migrates from old `env.json` automatically)
-- Scans `labRoot` for subdirectories matching configs for the lab menu
+- Reads `labRoot` and `codeRoot` from `AI_Grading/configs/local-config.json` (prompts & saves if missing; migrates from old `env.json` automatically)
+- Scans `configs/` for subdirectories containing a matching `labXX_config.json` to build the lab menu
 - Computes `repoClonePath = <codeRoot>/<labName>` so different labs' extracted code stays in separate subdirectories
 - `--reclone` wipes both old-style dirs (inside submission folders) and the `<codeRoot>/<labName>` tree
 - Validates config on startup — checks required keys, known mapping types, cell reference format, part structure, feature definitions
@@ -266,7 +266,7 @@ Regex-based analysis of student JavaScript files.
 - `findPartDir()` — multi-pass search for part subdirectories (game name matching, folder pattern fallback)
 - Checks for developer comments (name/date markers in files) and code review documents
 - `detectPartsPresent()` — scans extracted directory for part subdirectories; auto-detects `part1`, `part2`, etc. even without explicit `parts` config. Results stored in `analysis.partPresence`
-- **Custom analyzer hook** — `config.analysis.customAnalyzer` specifies a JS module (relative to `configs/`) that receives `(jsFiles, analysis, config, student)` and can mutate `analysis` directly. Enables lab-specific checks beyond regex (e.g., Lab02's `modules` feature requires both `import` AND `export`, implemented in `configs/lab02_analyzer.js`)
+- **Custom analyzer hook** — `config.analysis.customAnalyzer` specifies a JS module (relative to `configs/LabXX/`) that receives `(jsFiles, analysis, config, student)` and can mutate `analysis` directly. Enables lab-specific checks beyond regex (e.g., Lab02's `modules` feature requires both `import` AND `export`, implemented in `configs/Lab02/lab02_analyzer.js`)
 
 ### `lint_code.js` — ESLint Runner
 
@@ -325,7 +325,7 @@ Usage: `node rubric_to_md.js path/to/Rubric.xlsm [output.md]`
 
 ## Configuration Reference
 
-### `local-config.json` (AI_Grading root)
+### `configs/local-config.json`
 
 ```json
 {
@@ -334,7 +334,7 @@ Usage: `node rubric_to_md.js path/to/Rubric.xlsm [output.md]`
 }
 ```
 
-Machine-specific. Created on first run. Both paths are prompted for interactively if missing:
+Machine-specific. Gitignored. Created on first run. Both paths are prompted for interactively if missing:
 
 | Field | Description |
 |---|---|
@@ -343,7 +343,7 @@ Machine-specific. Created on first run. Both paths are prompted for interactivel
 
 On first run after upgrading from the old `env.json` / `_env.json` layout, `labRoot` is read from `env.json` automatically; `codeRoot` will be prompted for once and saved.
 
-### `configs/labXX_config.json` schema
+### `configs/LabXX/labXX_config.json` schema
 
 ```json
 {
@@ -390,16 +390,17 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
 | `runtimeCheck` | Yes | `"build"` or `"browser"` |
 | `lint.exclude` | No | Path substrings to skip during linting |
 | `analysis.features` | Yes | Array of features to detect via regex |
-| `analysis.customAnalyzer` | No | Path (relative to `configs/`) to a JS module for lab-specific analysis |
+| `analysis.customAnalyzer` | No | Path (relative to `configs/LabXX/`) to a JS module for lab-specific analysis |
 | `parts` | No | Multi-part lab configuration |
 | `mappings` | Yes | Array of rubric cell assignments |
 
 ## Adding a New Lab
 
-1. Create `configs/labXX_config.json` following the schema above
-2. Place the rubric spreadsheet (`CS233JS_LabXX_Rubric.xlsx` or `.xlsm`) in the lab directory on Google Drive
-3. (Optional) Create `configs/labXX_analyzer.js` if the lab needs custom analysis beyond what regex-based feature counting provides. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`
-4. Run `node run_all.js` — the new lab will appear in the menu automatically (the menu scans `labRoot` for directories with matching configs)
+1. Create `configs/LabXX/` (e.g., `configs/Lab05/`)
+2. Create `configs/LabXX/labXX_config.json` following the schema above
+3. Copy the rubric spreadsheet (`CS233JS_LabXX_Rubric.xlsx` or `.xlsm`) into `configs/LabXX/`
+4. (Optional) Create `configs/LabXX/labXX_analyzer.js` if the lab needs custom analysis beyond regex-based feature counting. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`
+5. Run `node run_all.js` — the new lab will appear in the menu automatically (the menu scans `configs/` subdirectories for a matching `labXX_config.json`)
 
 ## Data Flow
 

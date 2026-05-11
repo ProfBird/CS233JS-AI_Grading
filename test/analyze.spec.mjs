@@ -8,7 +8,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import analyzeCode from '../analyze_code.js';
-import lab02Analyzer from '../configs/lab02_analyzer.js';
+import lab02Analyzer from '../configs/Lab02/lab02_analyzer.js';
 
 const { stripComments, normalizeDirName } = analyzeCode;
 

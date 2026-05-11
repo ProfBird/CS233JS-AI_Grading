@@ -293,7 +293,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
         }
     }
 
-    const rubricPath = path.join(labDir, config.rubricName);
+    const rubricPath = path.join(opts.rubricDir || labDir, config.rubricName);
     const isXlsm = rubricPath.toLowerCase().endsWith('.xlsm');
     if (!fs.existsSync(rubricPath)) {
         const err = new Error(`Rubric file not found at ${rubricPath}`);

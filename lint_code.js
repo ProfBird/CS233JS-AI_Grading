@@ -8,6 +8,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const LINT_REPORT = 'lint_report.json';
+
 function getAllJsFiles(dir, exclusions = []) {
     let results = [];
     try {
@@ -171,6 +173,6 @@ module.exports = async function(students, config, labDir) {
         messages: s.lint ? s.lint.messages : [],
         ruleCounts: (s.lint && s.lint.ruleCounts) || {}
     }));
-    fs.writeFileSync(path.join(labDir, 'lint_report.json'), JSON.stringify(report, null, 2));
-    console.log(`Created lint_report.json for ${report.length} students.`);
+    fs.writeFileSync(path.join(labDir, LINT_REPORT), JSON.stringify(report, null, 2));
+    console.log(`Created ${LINT_REPORT} for ${report.length} students.`);
 };

@@ -133,4 +133,4 @@ dist
 .claude
 
 # Machine-specific config (see default-config.json for the template)
-local-config.json
+configs/local-config.json

@@ -11,6 +11,8 @@ const path = require('path');
 let xlsx;
 try { xlsx = require('xlsx'); } catch (e) {}
 
+const ANALYSIS_REPORT = 'analysis_report.json';
+
 // Strip single-line (//) and multi-line (/* */) comments from JS source.
 // Preserves string/template literal contents to avoid stripping // inside URLs, etc.
 // NOTE: block comments are stripped first to prevent apostrophes in JSDoc comments
@@ -291,10 +293,12 @@ function checkPackageJson(extractedDir, packageCheckConfig) {
     return { found: true, passed: issues.length === 0, issues };
 }
 
-module.exports = function(students, config, labDir) {
+module.exports = function(students, config, labDir, configDir = null) {
     console.log("--- Analysis Phase ---");
 
-    const rubricPath = config.rubricName ? path.join(labDir, config.rubricName) : null;
+    const rubricPath = config.rubricName
+        ? path.join(configDir || labDir, config.rubricName)
+        : null;
     const partGameNames = {};
     if (config.parts) {
         config.parts.forEach(part => {
@@ -306,7 +310,7 @@ module.exports = function(students, config, labDir) {
     // Load custom analyzer if configured
     let customAnalyzer = null;
     if (config.analysis && config.analysis.customAnalyzer) {
-        const analyzerPath = path.resolve(__dirname, 'configs', config.analysis.customAnalyzer);
+        const analyzerPath = path.resolve(configDir || path.join(__dirname, 'configs'), config.analysis.customAnalyzer);
         if (fs.existsSync(analyzerPath)) {
             try {
                 customAnalyzer = require(analyzerPath);
@@ -441,8 +445,8 @@ module.exports = function(students, config, labDir) {
         results: s.analysis || {},
         filesDir: s.filesDir
     }));
-    fs.writeFileSync(path.join(labDir, 'analysis_report.json'), JSON.stringify(report, null, 2));
-    console.log(`Created analysis_report.json for ${report.length} students.`);
+    fs.writeFileSync(path.join(labDir, ANALYSIS_REPORT), JSON.stringify(report, null, 2));
+    console.log(`Created ${ANALYSIS_REPORT} for ${report.length} students.`);
 };
 
 module.exports.stripComments = stripComments;

@@ -132,20 +132,28 @@ function parseLintOutput(results) {
 module.exports = async function(students, config, labDir) {
     console.log("--- Linting Phase ---");
 
-    const eslintConfigFile = path.join(labDir, 'eslint.config.mjs');
-    if (!fs.existsSync(eslintConfigFile)) {
-        const labName = path.basename(labDir);
-        const labSpecific = path.join(__dirname, 'configs', labName, 'eslint.config.mjs');
-        const defaultConfig = path.join(__dirname, 'configs', 'eslint.config.mjs');
-        const source = fs.existsSync(labSpecific) ? labSpecific
-                     : fs.existsSync(defaultConfig) ? defaultConfig
-                     : null;
-        if (source) {
-            fs.copyFileSync(source, eslintConfigFile);
-            console.log(`  Copied eslint.config.mjs from ${path.relative(__dirname, source)} to ${labName}/`);
-        } else {
-            console.warn(`WARNING: No eslint.config.mjs found in ${labDir} or configs/. Linting may fail.`);
-        }
+    // labDir is the ArtifactsAndRubrics subdir; derive the lab name from one level up
+    const labRoot = path.dirname(labDir);
+    const labName = path.basename(labRoot);
+
+    // Grader uses config from inside AI_Grading/ so that node_modules (globals, etc.) resolve correctly.
+    // Priority: configs/LabXX/eslint.config.mjs > configs/eslint.config.mjs
+    const labSpecific = path.join(__dirname, 'configs', labName, 'eslint.config.mjs');
+    const defaultConfig = path.join(__dirname, 'configs', 'eslint.config.mjs');
+    const eslintConfigFile = fs.existsSync(labSpecific) ? labSpecific
+                           : fs.existsSync(defaultConfig) ? defaultConfig
+                           : null;
+    if (!eslintConfigFile) {
+        console.warn(`WARNING: No eslint.config.mjs found in configs/${labName}/ or configs/. Linting may fail.`);
+    }
+
+    // Also copy to the lab folder so VS Code can find it when browsing student code.
+    const vsCodeCopy = path.join(labRoot, 'eslint.config.mjs');
+    if (eslintConfigFile && !fs.existsSync(vsCodeCopy)) {
+        try {
+            fs.copyFileSync(eslintConfigFile, vsCodeCopy);
+            console.log(`  Copied eslint.config.mjs to ${labName}/ (for VS Code)`);
+        } catch (e) { /* non-fatal */ }
     }
 
     const exclusions = (config.lint && config.lint.exclude) ? config.lint.exclude : [];

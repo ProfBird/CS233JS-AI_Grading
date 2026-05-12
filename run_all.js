@@ -454,19 +454,35 @@ async function main() {
     // 1. Code Acquisition
     const students = await extractCode(labDir, submissionsDir);
 
+    // In normal mode, skip students whose grade spreadsheet already exists
+    let toGrade = students;
+    if (!regrade) {
+        const outputExt = config.rubricName.endsWith('.xlsm') ? '.xlsm' : '.xlsx';
+        const alreadyDone = [];
+        toGrade = students.filter(s => {
+            if (!s.gradeDir) return true;
+            const gradePath = path.join(s.gradeDir, `${s.name}_Grade${outputExt}`);
+            if (fs.existsSync(gradePath)) { alreadyDone.push(s.name); return false; }
+            return true;
+        });
+        if (alreadyDone.length > 0) {
+            console.log(`  Skipping ${alreadyDone.length} already-graded: ${alreadyDone.join(', ')}\n`);
+        }
+    }
+
     // 2. Runtime Check — attaches to student.runtimeCheck
-    await runtimeCheck(students, config, artifactsDir);
+    await runtimeCheck(toGrade, config, artifactsDir);
 
     // 3. Analysis — attaches to student.analysis
-    analyzeCode(students, config, artifactsDir, labConfigDir);
+    analyzeCode(toGrade, config, artifactsDir, labConfigDir);
 
     // 4. Linting — attaches to student.lint
-    await lintCode(students, config, artifactsDir);
+    await lintCode(toGrade, config, artifactsDir);
 
     // 5. Generation — reads from student objects
     let generateSummary;
     if (!skipRubric) {
-        generateSummary = await generateGrades(students, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir });
+        generateSummary = await generateGrades(toGrade, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir });
     } else {
         generateSummary = { successful: [], errors: [] };
         console.log("--- Grade Generation Phase (skipped) ---\n");

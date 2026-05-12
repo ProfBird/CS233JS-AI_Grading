@@ -132,10 +132,20 @@ function parseLintOutput(results) {
 module.exports = async function(students, config, labDir) {
     console.log("--- Linting Phase ---");
 
-    const aiGradingDir = __dirname;
-    const eslintConfigFile = path.join(aiGradingDir, 'eslint.config.mjs');
+    const eslintConfigFile = path.join(labDir, 'eslint.config.mjs');
     if (!fs.existsSync(eslintConfigFile)) {
-        console.warn('WARNING: No eslint.config.mjs found in AI_Grading. Linting may fail.');
+        const labName = path.basename(labDir);
+        const labSpecific = path.join(__dirname, 'configs', labName, 'eslint.config.mjs');
+        const defaultConfig = path.join(__dirname, 'configs', 'eslint.config.mjs');
+        const source = fs.existsSync(labSpecific) ? labSpecific
+                     : fs.existsSync(defaultConfig) ? defaultConfig
+                     : null;
+        if (source) {
+            fs.copyFileSync(source, eslintConfigFile);
+            console.log(`  Copied eslint.config.mjs from ${path.relative(__dirname, source)} to ${labName}/`);
+        } else {
+            console.warn(`WARNING: No eslint.config.mjs found in ${labDir} or configs/. Linting may fail.`);
+        }
     }
 
     const exclusions = (config.lint && config.lint.exclude) ? config.lint.exclude : [];

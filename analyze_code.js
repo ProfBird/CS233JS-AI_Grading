@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 // Strip single-line (//) and multi-line (/* */) comments from JS source.
 // Preserves string/template literal contents to avoid stripping // inside URLs, etc.
@@ -214,27 +215,25 @@ const KNOWN_PKG_SECTIONS = new Set(['dependencies', 'devDependencies', 'peerDepe
 function checkRepoHygiene(extractedDir, hygiene) {
     if (!hygiene || !Array.isArray(hygiene.excludedFromRepo)) return null;
 
-    const found = [];
-
-    function searchDir(dirPath, depth) {
-        if (depth > 4) return;
-        let entries;
-        try { entries = fs.readdirSync(dirPath); } catch (e) { return; }
-        for (const entry of entries) {
-            const fullPath = path.join(dirPath, entry);
-            let stat;
-            try { stat = fs.lstatSync(fullPath); } catch (e) { continue; }
-            if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
-            if (hygiene.excludedFromRepo.includes(entry)) {
-                if (!found.includes(entry)) found.push(entry);
-                // don't recurse into excluded dirs
-            } else {
-                searchDir(fullPath, depth + 1);
-            }
-        }
+    // Confirm this is a git repo — hygiene check only applies to git submissions.
+    try {
+        execFileSync('git', ['rev-parse', '--git-dir'], { cwd: extractedDir, stdio: 'ignore' });
+    } catch (e) {
+        return null; // not a git repo (e.g. zip upload) — skip check
     }
 
-    searchDir(extractedDir, 0);
+    // Use git ls-files to detect committed files inside each excluded folder.
+    // This is correct regardless of pipeline timing: build artifacts created by
+    // the grader (node_modules/, dist/) are never tracked by git, so they won't
+    // be reported even if they exist on disk from a previous run.
+    const found = [];
+    for (const excluded of hygiene.excludedFromRepo) {
+        try {
+            const output = execFileSync('git', ['ls-files', excluded], { cwd: extractedDir }).toString().trim();
+            if (output.length > 0 && !found.includes(excluded)) found.push(excluded);
+        } catch (e) { /* skip if git command fails */ }
+    }
+
     return { passed: found.length === 0, foundDirs: found };
 }
 

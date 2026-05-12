@@ -97,6 +97,12 @@ async function checkBuild(extractedDir) {
 
     for (const pkgDir of packageDirs) {
         const relDir = path.relative(extractedDir, pkgDir) || 'root';
+        // Remove any committed node_modules/ before installing — committed node_modules
+        // may have missing execute bits on .bin/ symlinks, causing npm run build to fail.
+        const nodeModulesDir = path.join(pkgDir, 'node_modules');
+        if (fs.existsSync(nodeModulesDir)) {
+            try { fs.rmSync(nodeModulesDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+        }
         try {
             await execAsync('npm install --no-fund --no-audit --ignore-scripts', { cwd: pkgDir, timeout: 20000 });
         } catch (err) {

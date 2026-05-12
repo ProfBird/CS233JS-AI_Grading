@@ -5,11 +5,19 @@
   "summaryCell": "A2",
   "runtimeCheck": "build",
   "packageCheck": {
-    "dependencies": ["lit-html", "bootstrap"],
-    "devDependencies": ["vite"]
+    "dependencies": [
+      "lit-html",
+      "bootstrap"
+    ],
+    "devDependencies": [
+      "vite"
+    ]
   },
   "repoHygiene": {
-    "excludedFromRepo": ["node_modules", "dist"]
+    "excludedFromRepo": [
+      "node_modules",
+      "dist"
+    ]
   },
   "lint": {
     "exclude": [

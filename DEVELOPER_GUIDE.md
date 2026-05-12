@@ -38,7 +38,7 @@ graph TD
     subgraph "Configuration"
         local_config[configs/local-config.json]
         lab_configs[configs/LabXX/labXX_config.json]
-        eslint_config[configs/eslint.config.mjs]
+        eslint_config[~/.eslint/eslint.config.mjs]
     end
 
     %% Entry → Pipeline
@@ -58,7 +58,6 @@ graph TD
     %% External deps
     runtime --> puppeteer
     grades --> xlsx_npm
-    analyze --> xlsx_npm
     lint --> eslint
     lint -.-> eslint_config
 
@@ -134,30 +133,7 @@ sequenceDiagram
     end
     extract-->>run_all: return students[] array
 
-    Note over run_all: === Phase 2: Runtime Check ===
-    run_all->>runtime: runtimeCheck(students, config, labDir)
-    alt config.runtimeCheck == "build"
-        runtime->>runtime: find package.json dirs
-        runtime->>runtime: npm install && npm run build (20s timeout each)
-    else "browser"
-        runtime->>runtime: launch headless Chrome (Puppeteer)
-        runtime->>runtime: find index.html dirs
-        runtime->>runtime: serve + check for console errors
-    end
-    runtime-->>run_all: (attaches to student.runtimeCheck)
-```
-
-## Pipeline Phases 3-5: Analysis, Lint & Grade Generation
-
-```mermaid
-sequenceDiagram
-    participant run_all as run_all.js
-    participant analyze as analyze_code.js
-    participant lint as lint_code.js
-    participant grades as generate_grades.js
-    participant xlsx as Rubric .xlsx/.xlsm
-
-    Note over run_all: === Phase 3: Analysis ===
+    Note over run_all: === Phase 2: Analysis ===
     run_all->>analyze: analyzeCode(students, config, labDir)
     analyze->>analyze: getAllFiles() — recursive directory walk
     analyze->>analyze: countFeatures() — regex matching per feature
@@ -170,10 +146,23 @@ sequenceDiagram
     analyze->>analyze: write analysis_report.json
     analyze-->>run_all: (attaches to student.analysis)
 
+    Note over run_all: === Phase 3: Runtime Check ===
+    run_all->>runtime: runtimeCheck(students, config, labDir)
+    alt config.runtimeCheck == "build"
+        runtime->>runtime: find package.json dirs
+        runtime->>runtime: delete node_modules/ (ensures clean install)
+        runtime->>runtime: npm install && npm run build (20s timeout each)
+    else "browser"
+        runtime->>runtime: launch headless Chrome (Puppeteer)
+        runtime->>runtime: find index.html dirs
+        runtime->>runtime: serve + check for console errors
+    end
+    runtime-->>run_all: (attaches to student.runtimeCheck)
+
     Note over run_all: === Phase 4: Linting ===
     run_all->>lint: lintCode(students, config, labDir)
     lint->>lint: getAllJsFiles() — recursive .js file collection
-    lint->>lint: ESLint.lintFiles() against eslint.config.mjs
+    lint->>lint: ESLint.lintFiles() against ~/.eslint/eslint.config.mjs
     lint->>lint: write lint_report.json
     lint-->>run_all: (attaches to student.lint)
 
@@ -247,7 +236,7 @@ Two modes, controlled by `config.runtimeCheck`:
 
 **`"build"` mode:**
 - Recursively finds `package.json` files (skipping `node_modules`, hidden, and `dist` dirs)
-- For each: runs `npm install --no-fund --no-audit --ignore-scripts` then `npm run build`
+- For each: deletes any existing `node_modules/` (prevents committed `node_modules` from having broken `.bin/` symlinks), then runs `npm install --no-fund --no-audit --ignore-scripts` then `npm run build`
 - Both commands have a 20-second timeout
 
 **`"browser"` mode:**
@@ -273,8 +262,7 @@ Regex-based analysis of student JavaScript files.
 
 Runs ESLint v9+ with flat config.
 
-- Config resolution order: `configs/LabXX/eslint.config.mjs` (lab-specific override) → `configs/eslint.config.mjs` (default). The config must live inside AI_Grading so that `node_modules` dependencies (e.g. `globals`) resolve correctly via Node's standard upward walk.
-- On first run for a lab, the selected config is also copied to `<codeRoot>/LabXX/eslint.config.mjs` so VS Code can display lint markers when browsing student code. This copy is not used by the grader itself.
+- Uses `~/.eslint/eslint.config.mjs` — the same config VS Code uses, so lint results are consistent between the grader and the editor. `globals.browser` and `globals.node` are included via the `globals` npm package installed in `~/.eslint/`.
 - `getAllJsFiles()` collects `.js` files recursively, respecting per-lab exclusions (e.g., `node_modules`, `dist`, `part1`)
 - Outputs human-readable rule descriptions (42 rules mapped)
 - Writes `lint_report.json`
@@ -296,10 +284,13 @@ Reads the rubric template and writes per-student graded spreadsheets.
 | `developer_comments` | Yes | Score if name/date markers found |
 | `code_review` | Yes | Score if review document found |
 | `url_check` | Partial | Writes URL for manual verification; score left blank |
-| `lint` | Yes | Score based on ESLint issue count |
+| `lint` | Yes | Score based on ESLint issue count. Optional `severity: "errors"` reports only errors (binary pass/fail); `severity: "warnings"` reports only warnings (graduated). Default uses combined total. |
 | `build_check` | Yes | Score based on build/run success |
 | `manual` | No | Writes "NEEDS MANUAL CHECK" — instructor fills in |
 | `part_feature` | Yes | Per-part feature check — reads `analysis.partFeatures[partId][featureId]` |
+| `repo_hygiene` | Yes | Score if no excluded folders (e.g. `node_modules`, `dist`) are committed to the repo; checked via `git ls-files` |
+| `github_repo` | Yes | Score if a GitHub URL was provided and the repo was successfully cloned |
+| `package_check` | Yes | Score if `package.json` contains the expected `dependencies` and `devDependencies` |
 
 **Per-part feature pipeline:** `featureCounts` entries in `config.parts[].featureCounts` are converted to `part_feature`-type virtual mappings and processed through the same handler pipeline. This means per-part and top-level scoring share the same logic; no separate code path is needed.
 
@@ -362,6 +353,9 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
   "lint": {
     "exclude": ["node_modules", "dist"]
   },
+  "repoHygiene": {
+    "excludedFromRepo": ["node_modules", "dist"]
+  },
   "analysis": {
     "features": [
       {
@@ -397,6 +391,7 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
 | `runtimeCheck` | Yes | `"build"` or `"browser"` |
 | `variations` | No | Lab version groups (A/B/C) and the app each group implements. Each variation object holds at least `appName`; future field-based variations (e.g., feature lists) can be added alongside `appName`. For multi-part labs where each part has its own variation, put `variations` inside each `parts[]` entry instead of at the top level. The student's group letter comes from the "Developer's lab version" field at the top of the Code Review form. |
 | `lint.exclude` | No | Path substrings to skip during linting |
+| `repoHygiene.excludedFromRepo` | No | Folder names that should not be committed to the repo (e.g. `node_modules`, `dist`). Checked via `git ls-files`; only applies to git-cloned submissions. |
 | `analysis.features` | Yes | Array of features to detect via regex |
 | `analysis.customAnalyzer` | No | Path (relative to `configs/LabXX/`) to a JS module for lab-specific analysis |
 | `parts` | No | Multi-part lab configuration |
@@ -407,7 +402,7 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
 1. Create `configs/LabXX/` (e.g., `configs/Lab05/`)
 2. Create `configs/LabXX/labXX_config.json` following the schema above
 3. Copy the rubric spreadsheet (`CS233JS_LabXX_Rubric.xlsx` or `.xlsm`) into `configs/LabXX/`
-4. (Optional) Create `configs/LabXX/eslint.config.mjs` if this lab needs different lint rules than the default `configs/eslint.config.mjs`
+4. ESLint config is shared across all labs via `~/.eslint/eslint.config.mjs` — no per-lab config needed. Edit that file if lint rules need to change globally.
 5. (Optional) Create `configs/LabXX/labXX_analyzer.js` if the lab needs custom analysis beyond regex-based feature counting. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`
 6. Run `node run_all.js` — the new lab will appear in the menu automatically (the menu scans `configs/` subdirectories for a matching `labXX_config.json`)
 

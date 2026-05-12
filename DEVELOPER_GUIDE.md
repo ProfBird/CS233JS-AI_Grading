@@ -38,7 +38,7 @@ graph TD
     subgraph "Configuration"
         local_config[configs/local-config.json]
         lab_configs[configs/LabXX/labXX_config.json]
-        eslint_config[eslint.config.mjs]
+        eslint_config[configs/eslint.config.mjs]
     end
 
     %% Entry → Pipeline
@@ -214,6 +214,7 @@ The entry point. Handles CLI argument parsing, interactive menus, env configurat
 - Computes `repoClonePath = <codeRoot>/<labName>` so different labs' extracted code stays in separate subdirectories
 - `--reclone` wipes both old-style dirs (inside submission folders) and the `<codeRoot>/<labName>` tree
 - Validates config on startup — checks required keys, known mapping types, cell reference format, part structure, feature definitions
+- In **normal mode**, filters out students whose grade spreadsheet (`StudentName_Grade.xlsm/.xlsx`) already exists before passing the array to any pipeline phase — only new students are processed
 - Each phase attaches data directly to the shared `students` array; `generate_grades` reads from the student objects
 - Writes `grading_log.txt` to `labDir` on completion
 
@@ -272,7 +273,8 @@ Regex-based analysis of student JavaScript files.
 
 Runs ESLint v9+ with flat config.
 
-- Loads ESLint from `eslint.config.mjs` in the AI_Grading directory
+- Config resolution order: `configs/LabXX/eslint.config.mjs` (lab-specific override) → `configs/eslint.config.mjs` (default). The config must live inside AI_Grading so that `node_modules` dependencies (e.g. `globals`) resolve correctly via Node's standard upward walk.
+- On first run for a lab, the selected config is also copied to `<codeRoot>/LabXX/eslint.config.mjs` so VS Code can display lint markers when browsing student code. This copy is not used by the grader itself.
 - `getAllJsFiles()` collects `.js` files recursively, respecting per-lab exclusions (e.g., `node_modules`, `dist`, `part1`)
 - Outputs human-readable rule descriptions (42 rules mapped)
 - Writes `lint_report.json`
@@ -301,7 +303,7 @@ Reads the rubric template and writes per-student graded spreadsheets.
 
 **Per-part feature pipeline:** `featureCounts` entries in `config.parts[].featureCounts` are converted to `part_feature`-type virtual mappings and processed through the same handler pipeline. This means per-part and top-level scoring share the same logic; no separate code path is needed.
 
-**Macro support:** When the rubric is `.xlsm`, all sheets are preserved and VBA macros are written back. When `.xlsx`, only the `Grade` sheet is kept.
+**Macro/button preservation (`.xlsm` only):** SheetJS strips drawing objects and VBA data when re-writing. After SheetJS writes the output file, `adm-zip` is used to: (1) copy drawing XML, VML, and control-property ZIP entries from the template; (2) patch the Grade sheet XML to re-inject `<drawing>` / `<legacyDrawing>` / `<controls>` elements and any missing namespace declarations; (3) re-add all non-Grade sheets as `state="veryHidden"` — required because the VBA binary references every original sheet module by code name, and Excel refuses to load the VBA project if any referenced sheet is missing. The hidden sheets contain no cell data (just a `codeName` attribute) to avoid shared-string index mismatches. When `.xlsx`, only the `Grade` sheet is kept and no post-processing is needed.
 
 **AI summaries:** With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`.
 
@@ -399,8 +401,9 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
 1. Create `configs/LabXX/` (e.g., `configs/Lab05/`)
 2. Create `configs/LabXX/labXX_config.json` following the schema above
 3. Copy the rubric spreadsheet (`CS233JS_LabXX_Rubric.xlsx` or `.xlsm`) into `configs/LabXX/`
-4. (Optional) Create `configs/LabXX/labXX_analyzer.js` if the lab needs custom analysis beyond regex-based feature counting. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`
-5. Run `node run_all.js` — the new lab will appear in the menu automatically (the menu scans `configs/` subdirectories for a matching `labXX_config.json`)
+4. (Optional) Create `configs/LabXX/eslint.config.mjs` if this lab needs different lint rules than the default `configs/eslint.config.mjs`
+5. (Optional) Create `configs/LabXX/labXX_analyzer.js` if the lab needs custom analysis beyond regex-based feature counting. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`
+6. Run `node run_all.js` — the new lab will appear in the menu automatically (the menu scans `configs/` subdirectories for a matching `labXX_config.json`)
 
 ## Data Flow
 

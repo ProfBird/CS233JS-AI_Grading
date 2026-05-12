@@ -21,7 +21,7 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
   ```
   npm install
   ```
-  This installs `puppeteer`, `xlsx`, `eslint`, and `vitest` (test runner).
+  This installs `puppeteer`, `xlsx`, `adm-zip`, `globals`, `eslint`, and `vitest` (test runner).
 
 - **Git** — required for cloning student repositories
 - **unzip** — required for extracting ZIP submissions (pre-installed on macOS/Linux)
@@ -76,7 +76,7 @@ node run_all.js
 
 Shows a menu of available labs and grading modes:
 
-1. **Normal** — grade new submissions (skips students who already have extracted code)
+1. **Normal** — grade new submissions (skips students who already have a grade spreadsheet)
 2. **Regrade** — re-run all grading phases but keep existing cloned/extracted code
 3. **Reclone** — delete all extracted code, re-clone/unzip from scratch, then re-grade
 

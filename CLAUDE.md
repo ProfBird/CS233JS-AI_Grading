@@ -38,17 +38,21 @@ npx vitest                  # watch mode
 4. **lint_code.js** — Runs ESLint (flat config from `eslint.config.mjs`) against each student's `.js` files. Attaches to `student.lint`.
 5. **generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`.
 
-### Config files (`configs/labXX_config.json`)
+### Config files (`configs/LabXX/labXX_config.json`)
 
-Per-lab JSON specifying rubric filename, runtime check mode, feature regexes, and cell mappings. The `parts` key (optional) handles multi-part labs with per-part feature counts.
+Per-lab JSON specifying rubric filename, runtime check mode, feature regexes, and cell mappings. The `parts` key (optional) handles multi-part labs with per-part feature counts. The rubric template (`.xlsx`/`.xlsm`) is stored alongside the config in the same `configs/LabXX/` directory.
 
 ### Directory structure
 
 ```
 AI_Grading/   ← this directory
   ├── run_all.js
-  ├── configs/labXX_config.json    # rubric config, feature regexes, cell mappings
-  ├── local-config.json            # labRoot + codeRoot (machine-specific, auto-created)
+  ├── configs/
+  │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
+  │   └── LabXX/
+  │       ├── labXX_config.json    # rubric config, feature regexes, cell mappings
+  │       ├── CS233JS_LabXX_Rubric.xlsm  # rubric template (tracked in git)
+  │       └── labXX_analyzer.js   # optional custom analyzer (if any)
   └── ...
 
 <labRoot>/    (on Google Drive — raw Moodle downloads only, nothing created here)
@@ -60,8 +64,7 @@ AI_Grading/   ← this directory
 
 <codeRoot>/   (local, outside Google Drive)
   └── LabXX/  ← created automatically; keeps different labs separate
-      ├── ArtifactsAndRubrics/   ← rubric template + all grader-produced files
-      │   ├── CS233JS_LabXX_Rubric.xlsm
+      ├── ArtifactsAndRubrics/   ← grader-produced files (reports, log)
       │   ├── analysis_report.json
       │   ├── lint_report.json
       │   ├── runtime_report.json
@@ -76,7 +79,7 @@ AI_Grading/   ← this directory
 - `--reclone` implies `--regrade`.
 - Each pipeline phase attaches data to the shared `students` array; `generate_grades` consumes the combined output.
 
-### Config schema (configs/labXX_config.json)
+### Config schema (configs/LabXX/labXX_config.json)
 
   - rubricName: string — rubric filename in the lab directory
 
@@ -86,7 +89,7 @@ AI_Grading/   ← this directory
   - titleCell, titleText: (optional) — cell and text for lab title
 
   - analysis.features[]: { id, regex, fileRegex } — features to count via regex
-  - analysis.customAnalyzer: string (optional) — path (relative to configs/) to a JS module that receives (jsFiles, analysis, config, student) and merges its return into analysis
+  - analysis.customAnalyzer: string (optional) — path (relative to configs/LabXX/) to a JS module that receives (jsFiles, analysis, config, student) and merges its return into analysis
 
   - parts[]: { id, gameNames[], folderPattern, featureCounts[] } — multi-part lab config (optional). gameNames is the list of expected game/project names for that part; folderPattern is a regex fallback for "Part1/Pt2"-style folder naming.
 

@@ -8,7 +8,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+let xlsx;
+try { xlsx = require('xlsx'); } catch (e) {}
+
+const ANALYSIS_REPORT = 'analysis_report.json';
 
 // Strip single-line (//) and multi-line (/* */) comments from JS source.
 // Preserves string/template literal contents to avoid stripping // inside URLs, etc.
@@ -81,6 +84,20 @@ function countFeatures(allFiles, configFeatures) {
     return counts;
 }
 
+function readGameNamesFromRubric(rubricPath, rubricTitleRow) {
+    if (!rubricPath || !xlsx || !fs.existsSync(rubricPath)) return [];
+    try {
+        const wb = xlsx.readFile(rubricPath);
+        const sheet = wb.Sheets['Grade'];
+        const data = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+        const row = data[rubricTitleRow - 1];
+        if (row && row[4]) {
+            return row[4].split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+        }
+    } catch (e) { /* skip */ }
+    return [];
+}
+
 function normalizeDirName(dir) {
     return dir
         .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -126,27 +143,9 @@ function findPartDir(extractedDir, gameNames, folderPattern) {
     const topLevelDirs = getSubdirs(extractedDir);
     if (topLevelDirs.length === 0) return null;
 
-    // Folder-pattern matches (e.g. "Part1"/"Pt2") are the most specific signal — try them first.
-    const patternRegex = folderPattern ? new RegExp(folderPattern, 'i') : null;
-
-    if (patternRegex) {
-        for (const dir of topLevelDirs) {
-            if (patternRegex.test(dir)) return path.join(extractedDir, dir);
-        }
-    }
-
     for (const dir of topLevelDirs) {
         if (dirMatchesGameNames(dir, gameNames)) {
             return path.join(extractedDir, dir);
-        }
-    }
-
-    if (patternRegex) {
-        for (const dir of topLevelDirs) {
-            const subDirs = getSubdirs(path.join(extractedDir, dir));
-            for (const sub of subDirs) {
-                if (patternRegex.test(sub)) return path.join(extractedDir, dir, sub);
-            }
         }
     }
 
@@ -162,6 +161,19 @@ function findPartDir(extractedDir, gameNames, folderPattern) {
     if (topLevelDirs.length === 1) {
         const result = findPartDir(path.join(extractedDir, topLevelDirs[0]), gameNames, folderPattern);
         if (result) return result;
+    }
+
+    if (folderPattern) {
+        const regex = new RegExp(folderPattern, 'i');
+        for (const dir of topLevelDirs) {
+            if (regex.test(dir)) return path.join(extractedDir, dir);
+        }
+        for (const dir of topLevelDirs) {
+            const subDirs = getSubdirs(path.join(extractedDir, dir));
+            for (const sub of subDirs) {
+                if (regex.test(sub)) return path.join(extractedDir, dir, sub);
+            }
+        }
     }
 
     return null;
@@ -215,25 +227,27 @@ const KNOWN_PKG_SECTIONS = new Set(['dependencies', 'devDependencies', 'peerDepe
 function checkRepoHygiene(extractedDir, hygiene) {
     if (!hygiene || !Array.isArray(hygiene.excludedFromRepo)) return null;
 
-    // Confirm this is a git repo — hygiene check only applies to git submissions.
-    try {
-        execFileSync('git', ['rev-parse', '--git-dir'], { cwd: extractedDir, stdio: 'ignore' });
-    } catch (e) {
-        return null; // not a git repo (e.g. zip upload) — skip check
-    }
-
-    // Use git ls-files to detect committed files inside each excluded folder.
-    // This is correct regardless of pipeline timing: build artifacts created by
-    // the grader (node_modules/, dist/) are never tracked by git, so they won't
-    // be reported even if they exist on disk from a previous run.
     const found = [];
-    for (const excluded of hygiene.excludedFromRepo) {
-        try {
-            const output = execFileSync('git', ['ls-files', excluded], { cwd: extractedDir }).toString().trim();
-            if (output.length > 0 && !found.includes(excluded)) found.push(excluded);
-        } catch (e) { /* skip if git command fails */ }
+
+    function searchDir(dirPath, depth) {
+        if (depth > 4) return;
+        let entries;
+        try { entries = fs.readdirSync(dirPath); } catch (e) { return; }
+        for (const entry of entries) {
+            const fullPath = path.join(dirPath, entry);
+            let stat;
+            try { stat = fs.lstatSync(fullPath); } catch (e) { continue; }
+            if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+            if (hygiene.excludedFromRepo.includes(entry)) {
+                if (!found.includes(entry)) found.push(entry);
+                // don't recurse into excluded dirs
+            } else {
+                searchDir(fullPath, depth + 1);
+            }
+        }
     }
 
+    searchDir(extractedDir, 0);
     return { passed: found.length === 0, foundDirs: found };
 }
 
@@ -279,21 +293,24 @@ function checkPackageJson(extractedDir, packageCheckConfig) {
     return { found: true, passed: issues.length === 0, issues };
 }
 
-module.exports = function(students, config, labDir) {
+module.exports = function(students, config, labDir, configDir = null) {
     console.log("--- Analysis Phase ---");
 
+    const rubricPath = config.rubricName
+        ? path.join(configDir || labDir, config.rubricName)
+        : null;
     const partGameNames = {};
     if (config.parts) {
         config.parts.forEach(part => {
-            partGameNames[part.id] = (part.gameNames || []).map(s => s.toLowerCase());
-            console.log(`  Part "${part.id}" game names: ${partGameNames[part.id].join(', ') || '(none configured)'}`);
+            partGameNames[part.id] = readGameNamesFromRubric(rubricPath, part.rubricTitleRow);
+            console.log(`  Part "${part.id}" game names from rubric: ${partGameNames[part.id].join(', ') || '(none found)'}`);
         });
     }
 
     // Load custom analyzer if configured
     let customAnalyzer = null;
     if (config.analysis && config.analysis.customAnalyzer) {
-        const analyzerPath = path.resolve(__dirname, 'configs', config.analysis.customAnalyzer);
+        const analyzerPath = path.resolve(configDir || path.join(__dirname, 'configs'), config.analysis.customAnalyzer);
         if (fs.existsSync(analyzerPath)) {
             try {
                 customAnalyzer = require(analyzerPath);
@@ -428,8 +445,8 @@ module.exports = function(students, config, labDir) {
         results: s.analysis || {},
         filesDir: s.filesDir
     }));
-    fs.writeFileSync(path.join(labDir, 'analysis_report.json'), JSON.stringify(report, null, 2));
-    console.log(`Created analysis_report.json for ${report.length} students.`);
+    fs.writeFileSync(path.join(labDir, ANALYSIS_REPORT), JSON.stringify(report, null, 2));
+    console.log(`Created ${ANALYSIS_REPORT} for ${report.length} students.`);
 };
 
 module.exports.stripComments = stripComments;

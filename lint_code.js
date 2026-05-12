@@ -7,7 +7,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
+
+const LINT_REPORT = 'lint_report.json';
 
 function getAllJsFiles(dir, exclusions = []) {
     let results = [];
@@ -108,9 +109,8 @@ function friendlyRuleName(ruleId) {
 function parseLintOutput(results) {
     let totalErrors = 0;
     let totalWarnings = 0;
+    const messages = [];
     const ruleCounts = {};
-    const errorRuleCounts = {};
-    const warningRuleCounts = {};
 
     for (const file of results) {
         totalErrors += file.errorCount;
@@ -119,36 +119,33 @@ function parseLintOutput(results) {
         for (const msg of file.messages) {
             const rule = msg.ruleId || 'parse-error';
             ruleCounts[rule] = (ruleCounts[rule] || 0) + 1;
-            if (msg.severity === 2) {
-                errorRuleCounts[rule] = (errorRuleCounts[rule] || 0) + 1;
-            } else {
-                warningRuleCounts[rule] = (warningRuleCounts[rule] || 0) + 1;
-            }
         }
     }
 
-    function toMessages(counts) {
-        return Object.entries(counts)
-            .sort((a, b) => b[1] - a[1])
-            .map(([rule, count]) => `${friendlyRuleName(rule)}: ${count}`);
+    for (const [rule, count] of Object.entries(ruleCounts).sort((a, b) => b[1] - a[1])) {
+        messages.push(`${friendlyRuleName(rule)}: ${count}`);
     }
 
-    return {
-        errors: totalErrors,
-        warnings: totalWarnings,
-        messages: toMessages(ruleCounts),
-        errorMessages: toMessages(errorRuleCounts),
-        warningMessages: toMessages(warningRuleCounts),
-        ruleCounts
-    };
+    return { errors: totalErrors, warnings: totalWarnings, messages, ruleCounts };
 }
 
 module.exports = async function(students, config, labDir) {
     console.log("--- Linting Phase ---");
 
-    const eslintConfigFile = path.join(os.homedir(), '.eslint', 'eslint.config.mjs');
+    const eslintConfigFile = path.join(labDir, 'eslint.config.mjs');
     if (!fs.existsSync(eslintConfigFile)) {
-        console.warn(`WARNING: No eslint.config.mjs found at ${eslintConfigFile}. Linting may fail.`);
+        const labName = path.basename(labDir);
+        const labSpecific = path.join(__dirname, 'configs', labName, 'eslint.config.mjs');
+        const defaultConfig = path.join(__dirname, 'configs', 'eslint.config.mjs');
+        const source = fs.existsSync(labSpecific) ? labSpecific
+                     : fs.existsSync(defaultConfig) ? defaultConfig
+                     : null;
+        if (source) {
+            fs.copyFileSync(source, eslintConfigFile);
+            console.log(`  Copied eslint.config.mjs from ${path.relative(__dirname, source)} to ${labName}/`);
+        } else {
+            console.warn(`WARNING: No eslint.config.mjs found in ${labDir} or configs/. Linting may fail.`);
+        }
     }
 
     const exclusions = (config.lint && config.lint.exclude) ? config.lint.exclude : [];
@@ -186,6 +183,6 @@ module.exports = async function(students, config, labDir) {
         messages: s.lint ? s.lint.messages : [],
         ruleCounts: (s.lint && s.lint.ruleCounts) || {}
     }));
-    fs.writeFileSync(path.join(labDir, 'lint_report.json'), JSON.stringify(report, null, 2));
-    console.log(`Created lint_report.json for ${report.length} students.`);
+    fs.writeFileSync(path.join(labDir, LINT_REPORT), JSON.stringify(report, null, 2));
+    console.log(`Created ${LINT_REPORT} for ${report.length} students.`);
 };

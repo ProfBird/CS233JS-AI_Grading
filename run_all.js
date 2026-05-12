@@ -24,6 +24,11 @@ const runtimeCheck = require('./runtime_check.js');
 const generateGrades = require('./generate_grades.js');
 
 const { VALID_MAPPING_TYPES } = generateGrades;
+const { CODE_DIR, REPO_DIR } = extractCode;
+
+const ARTIFACTS_DIR = 'ArtifactsAndRubrics';
+const SUBMISSIONS_DIR = 'SubmissionsAndAssessment';
+const LOG_FILE = 'grading_log.txt';
 
 // --- Help ---
 
@@ -145,9 +150,8 @@ function validateConfig(config, labName) {
             config.parts.forEach((part, i) => {
                 const prefix = `parts[${i}]`;
                 if (!part.id) errors.push(`${prefix}: missing "id"`);
-                if (!part.folderPattern && !(Array.isArray(part.gameNames) && part.gameNames.length)) {
-                    errors.push(`${prefix}: must define "gameNames" (array) and/or "folderPattern" (regex)`);
-                }
+                if (part.rubricTitleRow == null) errors.push(`${prefix}: missing "rubricTitleRow"`);
+                if (!part.folderPattern) errors.push(`${prefix}: missing "folderPattern"`);
             });
         }
     }
@@ -162,7 +166,7 @@ function validateConfig(config, labName) {
 
 // --- Helpers ---
 
-const localConfigPath = path.join(__dirname, 'local-config.json');
+const localConfigPath = path.join(__dirname, 'configs', 'local-config.json');
 
 function readLocalConfig() {
     try {
@@ -203,7 +207,7 @@ async function main() {
     let labName = positional[0];
     let reclone = hasRecloneFlag;
     let regrade = hasRegradeFlag || hasRecloneFlag;
-    let config, labDir, artifactsDir, submissionsDir;
+    let config, labDir, labConfigDir, artifactsDir, submissionsDir;
     let skipRubric = false;
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -247,15 +251,19 @@ async function main() {
             console.log(`  Saved lab root and code storage root to local-config.json`);
         }
 
-        const labs = fs.readdirSync(path.join(__dirname, 'configs'))
-            .filter(f => f.endsWith('_config.json'))
-            .map(f => f.replace(/_config\.json$/i, ''))
+        const configsDir = path.join(__dirname, 'configs');
+        const labs = fs.readdirSync(configsDir)
+            .filter(f => {
+                const subdir = path.join(configsDir, f);
+                try { return fs.statSync(subdir).isDirectory(); } catch (e) { return false; }
+            })
+            .filter(name => fs.existsSync(path.join(configsDir, name, `${name.toLowerCase()}_config.json`)))
             .map(name => {
                 // Restore original casing from labRoot if the directory exists
                 const match = fs.existsSync(labRoot)
                     ? fs.readdirSync(labRoot).find(d => d.toLowerCase() === name.toLowerCase())
                     : null;
-                return match || name.charAt(0).toUpperCase() + name.slice(1);
+                return match || name;
             })
             .sort();
 
@@ -282,7 +290,8 @@ async function main() {
             }
         }
 
-        const configPath = path.join(__dirname, 'configs', `${labName.toLowerCase()}_config.json`);
+        labConfigDir = path.join(__dirname, 'configs', labName);
+        const configPath = path.join(labConfigDir, `${labName.toLowerCase()}_config.json`);
         if (!fs.existsSync(configPath)) {
             console.error(`ERROR: Config file not found at ${configPath}`);
             process.exit(1);
@@ -321,8 +330,8 @@ async function main() {
         }
 
         // Per-lab paths under codeRoot
-        artifactsDir = path.join(codeRoot, labName, 'ArtifactsAndRubrics');
-        submissionsDir = path.join(codeRoot, labName, 'SubmissionsAndAssessment');
+        artifactsDir = path.join(codeRoot, labName, ARTIFACTS_DIR);
+        submissionsDir = path.join(codeRoot, labName, SUBMISSIONS_DIR);
 
         // Validate codeRoot is writable before proceeding — ask for a new one if not
         let codeRootConfirmed = false;
@@ -345,8 +354,8 @@ async function main() {
                 }
                 codeRoot = newRoot.trim();
                 configChanged = true;
-                artifactsDir = path.join(codeRoot, labName, 'ArtifactsAndRubrics');
-                submissionsDir = path.join(codeRoot, labName, 'SubmissionsAndAssessment');
+                artifactsDir = path.join(codeRoot, labName, ARTIFACTS_DIR);
+                submissionsDir = path.join(codeRoot, labName, SUBMISSIONS_DIR);
             }
         }
         if (configChanged) {
@@ -356,13 +365,13 @@ async function main() {
 
         // Validate rubric exists before starting the pipeline
         while (!skipRubric) {
-            const rubricCheckPath = path.join(artifactsDir, config.rubricName);
+            const rubricCheckPath = path.join(labConfigDir, config.rubricName);
             if (fs.existsSync(rubricCheckPath)) {
                 break;
             } else {
                 console.error(`\nERROR: Rubric file not found at expected path:`);
                 console.error(`  ${rubricCheckPath}`);
-                console.error(`  (Download the rubric from Moodle or check the filename.)\n`);
+                console.error(`  (Copy the rubric template into configs/${labName}/ or check the filename.)\n`);
                 const newName = await askRl(
                     'Enter the correct rubric filename\n' +
                     '  (e.g. CS233JS_Lab04_Rubric.xlsm, or type "skip" to continue anyway): '
@@ -374,10 +383,9 @@ async function main() {
                 }
                 config.rubricName = newName.trim();
                 // Persist to config file on disk
-                const cfgPath = path.join(__dirname, 'configs', `${labName.toLowerCase()}_config.json`);
-                const cfgOnDisk = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+                const cfgOnDisk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
                 cfgOnDisk.rubricName = config.rubricName;
-                fs.writeFileSync(cfgPath, JSON.stringify(cfgOnDisk, null, 2) + '\n', 'utf8');
+                fs.writeFileSync(configPath, JSON.stringify(cfgOnDisk, null, 2) + '\n', 'utf8');
                 console.log(`  Updated rubricName in ${labName.toLowerCase()}_config.json\n`);
             }
         }
@@ -413,7 +421,7 @@ async function main() {
         if (fs.existsSync(submissionsDir)) {
             const entries = fs.readdirSync(submissionsDir);
             for (const entry of entries) {
-                for (const dir of ['extracted_code', 'repo']) {
+                for (const dir of [CODE_DIR, REPO_DIR]) {
                     const codeDir = path.join(submissionsDir, entry, dir);
                     if (fs.existsSync(codeDir)) {
                         fs.rmSync(codeDir, { recursive: true, force: true });
@@ -430,7 +438,7 @@ async function main() {
         console.log('--- Pulling latest code from repositories ---');
         const entries = fs.readdirSync(submissionsDir);
         for (const entry of entries) {
-            const repoDir = path.join(submissionsDir, entry, 'repo');
+            const repoDir = path.join(submissionsDir, entry, REPO_DIR);
             if (!fs.existsSync(repoDir)) continue;
             const result = spawnSync('git', ['pull'], { cwd: repoDir, encoding: 'utf8' });
             if (result.status === 0) {
@@ -446,11 +454,11 @@ async function main() {
     // 1. Code Acquisition
     const students = await extractCode(labDir, submissionsDir);
 
-    // 2. Analysis — attaches to student.analysis (before runtime check to catch repo state before build)
-    analyzeCode(students, config, artifactsDir);
-
-    // 3. Runtime Check — attaches to student.runtimeCheck
+    // 2. Runtime Check — attaches to student.runtimeCheck
     await runtimeCheck(students, config, artifactsDir);
+
+    // 3. Analysis — attaches to student.analysis
+    analyzeCode(students, config, artifactsDir, labConfigDir);
 
     // 4. Linting — attaches to student.lint
     await lintCode(students, config, artifactsDir);
@@ -458,7 +466,7 @@ async function main() {
     // 5. Generation — reads from student objects
     let generateSummary;
     if (!skipRubric) {
-        generateSummary = await generateGrades(students, config, artifactsDir, { aiComments, aiModel: aiModelFlag });
+        generateSummary = await generateGrades(students, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir });
     } else {
         generateSummary = { successful: [], errors: [] };
         console.log("--- Grade Generation Phase (skipped) ---\n");
@@ -499,7 +507,7 @@ async function main() {
         errors.forEach(e => logLines.push(` - ${e.student}: ${e.issue}`));
     }
 
-    const logPath = path.join(artifactsDir, 'grading_log.txt');
+    const logPath = path.join(artifactsDir, LOG_FILE);
     fs.writeFileSync(logPath, logLines.join('\n'), 'utf8');
 
     console.log(`\nAll Done! Summary written to ${logPath}\n`);

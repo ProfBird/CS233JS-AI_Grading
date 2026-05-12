@@ -16,6 +16,8 @@ const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
 
+const RUNTIME_REPORT = 'runtime_report.json';
+
 // ========== Browser-based check ==========
 
 let puppeteer;
@@ -156,9 +158,20 @@ module.exports = async function(students, config, labDir) {
 
     let browser;
     if (mode === 'browser') {
-        browser = await puppeteer.launch({
-            headless: 'shell'
-        });
+        try {
+            browser = await puppeteer.launch({ headless: 'shell' });
+        } catch (e) {
+            console.error(`  ERROR: Could not launch Chrome: ${e.message}`);
+            console.error(`  Fix: npx puppeteer browsers install chrome-headless-shell`);
+            students.forEach(s => {
+                s.runtimeCheck = { success: false, errors: ['Chrome could not be launched'] };
+            });
+            fs.writeFileSync(path.join(labDir, RUNTIME_REPORT), JSON.stringify(
+                students.map(s => ({ student: s.name, success: false, errors: s.runtimeCheck.errors })),
+                null, 2
+            ));
+            return;
+        }
     }
 
     for (const student of students) {
@@ -262,6 +275,6 @@ module.exports = async function(students, config, labDir) {
         success: s.runtimeCheck ? s.runtimeCheck.success : false,
         errors: s.runtimeCheck ? s.runtimeCheck.errors : []
     }));
-    fs.writeFileSync(path.join(labDir, 'runtime_report.json'), JSON.stringify(report, null, 2));
-    console.log(`Created runtime_report.json for ${report.length} students.`);
+    fs.writeFileSync(path.join(labDir, RUNTIME_REPORT), JSON.stringify(report, null, 2));
+    console.log(`Created ${RUNTIME_REPORT} for ${report.length} students.`);
 };

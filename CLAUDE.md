@@ -25,6 +25,8 @@ npx vitest                  # watch mode
 
 - **puppeteer** — headless Chrome for browser runtime checks
 - **xlsx** — read/write rubric spreadsheets
+- **adm-zip** — read/write ZIP entries to preserve VBA macros/buttons in `.xlsm` output files
+- **globals** — browser/node global definitions for ESLint flat config
 - **eslint** — v9+ flat config
 - **vitest** (dev) — test runner
 
@@ -35,8 +37,8 @@ npx vitest                  # watch mode
 1. **extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`.
 2. **analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`.
 3. **runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: runs `npm install && npm run build`. Attaches to `student.runtimeCheck`.
-4. **lint_code.js** — Runs ESLint (flat config from `eslint.config.mjs`) against each student's `.js` files. Attaches to `student.lint`.
-5. **generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`.
+4. **lint_code.js** — Runs ESLint (flat config) against each student's `.js` files. Config resolution order: `configs/LabXX/eslint.config.mjs` → `configs/eslint.config.mjs`. The config must live inside AI_Grading so that `node_modules` (e.g. `globals`) resolves correctly. On first run the selected config is also copied to `<codeRoot>/LabXX/` for VS Code. Attaches to `student.lint`.
+5. **generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, uses `adm-zip` after SheetJS writes the file to restore drawing/button XML entries and re-add non-Grade sheets as `veryHidden` (required for VBA module binding). With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`.
 
 ### Config files (`configs/LabXX/labXX_config.json`)
 
@@ -49,9 +51,11 @@ AI_Grading/   ← this directory
   ├── run_all.js
   ├── configs/
   │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
+  │   ├── eslint.config.mjs        # default ESLint config (source; used by grader directly)
   │   └── LabXX/
   │       ├── labXX_config.json    # rubric config, feature regexes, cell mappings
   │       ├── CS233JS_LabXX_Rubric.xlsm  # rubric template (tracked in git)
+  │       ├── eslint.config.mjs   # optional lab-specific ESLint override (takes priority over default)
   │       └── labXX_analyzer.js   # optional custom analyzer (if any)
   └── ...
 
@@ -77,6 +81,7 @@ AI_Grading/   ← this directory
 
 
 - `--reclone` implies `--regrade`.
+- In **normal mode** (no flags), students whose grade spreadsheet already exists are skipped entirely — no runtime check, analysis, linting, or spreadsheet rewrite. Use `--regrade` to re-process them.
 - Each pipeline phase attaches data to the shared `students` array; `generate_grades` consumes the combined output.
 
 ### Config schema (configs/LabXX/labXX_config.json)

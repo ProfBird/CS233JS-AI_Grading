@@ -354,6 +354,11 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
   "titleText": "Lab X: Title",
   "summaryCell": "A2",
   "runtimeCheck": "build" | "browser",
+  "variations": {
+    "A": { "appName": "App Name For Version A" },
+    "B": { "appName": "App Name For Version B" },
+    "C": { "appName": "App Name For Version C" }
+  },
   "lint": {
     "exclude": ["node_modules", "dist"]
   },
@@ -390,6 +395,7 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
 | `titleText` | No | Lab title text |
 | `summaryCell` | No | Cell for the AI-generated or manual summary comment |
 | `runtimeCheck` | Yes | `"build"` or `"browser"` |
+| `variations` | No | Lab version groups (A/B/C) and the app each group implements. Each variation object holds at least `appName`; future field-based variations (e.g., feature lists) can be added alongside `appName`. For multi-part labs where each part has its own variation, put `variations` inside each `parts[]` entry instead of at the top level. The student's group letter comes from the "Developer's lab version" field at the top of the Code Review form. |
 | `lint.exclude` | No | Path substrings to skip during linting |
 | `analysis.features` | Yes | Array of features to detect via regex |
 | `analysis.customAnalyzer` | No | Path (relative to `configs/LabXX/`) to a JS module for lab-specific analysis |

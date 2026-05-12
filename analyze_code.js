@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 let xlsx;
 try { xlsx = require('xlsx'); } catch (e) {}
 
@@ -224,9 +225,149 @@ function detectPartsPresent(extractedDir, config, partGameNames) {
 
 const KNOWN_PKG_SECTIONS = new Set(['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']);
 
+// Common words that appear in many app names and are not useful for distinguishing variations.
+const VARIATION_KEYWORD_STOPWORDS = new Set(['web', 'page', 'app', 'list', 'tool', 'maker', 'mini', 'lite', 'plus']);
+
+/**
+ * Derives search keywords from an appName by keeping words that are at least
+ * 4 chars long and not in the stopword list.
+ * @param {string} appName
+ * @returns {string[]} lowercase keywords
+ */
+function variationKeywords(appName) {
+    return appName.toLowerCase().split(/\W+/).filter(
+        w => w.length >= 4 && !VARIATION_KEYWORD_STOPWORDS.has(w)
+    );
+}
+
+/**
+ * Collects a corpus of searchable text from the repo: HTML title tags,
+ * top-level directory names, package.json name fields, and README content.
+ * @param {string} extractedDir
+ * @returns {string} lowercase combined text
+ */
+function buildVariationCorpus(extractedDir) {
+    const parts = [];
+    // Exclude build artifacts, deps, and directory names that mark distributed
+    // starter/template files — they often contain ALL variation keywords and
+    // would pollute the signal. Match on directory-name components only
+    // (checked via path.basename of each directory entry), not full-path substrings,
+    // to avoid incorrectly excluding repos whose root folder happens to contain
+    // one of these words (e.g., a repo named "LCC-CIT CourseMaterials ...").
+    const hardExclusions = new Set(['node_modules', 'dist', '.git']);
+    const nameExclusionPatterns = [/_starter$/i, /_template$/i, /^filestostudents$/i];
+
+    function isExcluded(fullPath) {
+        const segments = fullPath.split(path.sep);
+        return segments.some(seg =>
+            hardExclusions.has(seg) ||
+            nameExclusionPatterns.some(re => re.test(seg))
+        );
+    }
+
+    // Top-level directory and file names
+    try {
+        for (const entry of fs.readdirSync(extractedDir)) {
+            parts.push(entry);
+        }
+    } catch (e) { /* skip */ }
+
+    // HTML title tags (up to 20 HTML files, skipping excluded dirs)
+    const allFiles = getAllFiles(extractedDir, [], []).filter(f => !isExcluded(f));
+    const htmlFiles = allFiles.filter(f => f.endsWith('.html'));
+    for (const f of htmlFiles.slice(0, 20)) {
+        try {
+            const content = fs.readFileSync(f, 'utf8');
+            const m = content.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+            if (m) parts.push(m[1]);
+        } catch (e) { /* skip */ }
+    }
+
+    // package.json name field
+    const pkgFiles = allFiles.filter(f => path.basename(f) === 'package.json');
+    for (const f of pkgFiles.slice(0, 5)) {
+        try {
+            const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
+            if (pkg.name) parts.push(pkg.name);
+            if (pkg.description) parts.push(pkg.description);
+        } catch (e) { /* skip */ }
+    }
+
+    // README (first 1 000 chars)
+    const readmes = allFiles.filter(f => /README/i.test(path.basename(f)));
+    for (const f of readmes.slice(0, 3)) {
+        try {
+            parts.push(fs.readFileSync(f, 'utf8').substring(0, 1000));
+        } catch (e) { /* skip */ }
+    }
+
+    return parts.join(' ').toLowerCase();
+}
+
+/**
+ * Detects which lab variation a student implemented by matching keywords
+ * from each variation's appName against the code corpus.
+ * Only applies when top-level config.variations exists.
+ * @param {string} extractedDir
+ * @param {Object} variations  config.variations map (letter → { appName })
+ * @returns {{ detected: string|null, appName: string|null, scores: Object }}
+ */
+function checkVersionVariation(extractedDir, variations) {
+    const corpus = buildVariationCorpus(extractedDir);
+    const scores = {};
+
+    for (const [letter, info] of Object.entries(variations)) {
+        if (!info.appName) continue;
+        const keywords = variationKeywords(info.appName);
+        scores[letter] = keywords.filter(kw => corpus.includes(kw)).length;
+    }
+
+    const best = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+    if (best.length === 0 || best[0][1] === 0) {
+        return { detected: null, appName: null, scores };
+    }
+    // Ambiguous if top two scores are tied (and non-zero)
+    if (best.length > 1 && best[0][1] === best[1][1]) {
+        return { detected: null, appName: null, scores, ambiguous: true };
+    }
+    const letter = best[0][0];
+    return { detected: letter, appName: variations[letter].appName, scores };
+}
+
 function checkRepoHygiene(extractedDir, hygiene) {
     if (!hygiene || !Array.isArray(hygiene.excludedFromRepo)) return null;
 
+    // If this is a git repo, use git ls-files to check what's actually tracked.
+    // Scanning the filesystem would falsely flag dirs created by npm install / vite build
+    // during the runtime-check phase (which runs before this analysis phase).
+    const gitDir = path.join(extractedDir, '.git');
+    if (fs.existsSync(gitDir)) {
+        let trackedFiles = '';
+        try {
+            trackedFiles = execFileSync(
+                'git', ['ls-files'],
+                { cwd: extractedDir, stdio: ['ignore', 'pipe', 'ignore'] }
+            ).toString();
+        } catch (e) { /* fall through to empty string */ }
+
+        const trackedPaths = trackedFiles.split('\n').filter(Boolean);
+        const found = [];
+        for (const dirName of hygiene.excludedFromRepo) {
+            const otherExcluded = hygiene.excludedFromRepo.filter(d => d !== dirName);
+            const isFound = trackedPaths.some(filePath => {
+                const parts = filePath.split('/');
+                const idx = parts.indexOf(dirName);
+                if (idx === -1) return false;
+                // Only flag if not nested inside another excluded directory
+                const prefix = parts.slice(0, idx);
+                return !otherExcluded.some(other => prefix.includes(other));
+            });
+            if (isFound && !found.includes(dirName)) found.push(dirName);
+        }
+        return { passed: found.length === 0, foundDirs: found };
+    }
+
+    // Fallback for zip-based submissions: scan the filesystem
     const found = [];
 
     function searchDir(dirPath, depth) {
@@ -234,21 +375,71 @@ function checkRepoHygiene(extractedDir, hygiene) {
         let entries;
         try { entries = fs.readdirSync(dirPath); } catch (e) { return; }
         for (const entry of entries) {
-            const fullPath = path.join(dirPath, entry);
-            let stat;
-            try { stat = fs.lstatSync(fullPath); } catch (e) { continue; }
-            if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
-            if (hygiene.excludedFromRepo.includes(entry)) {
-                if (!found.includes(entry)) found.push(entry);
-                // don't recurse into excluded dirs
-            } else {
-                searchDir(fullPath, depth + 1);
+            if (!hygiene.excludedFromRepo.includes(entry)) {
+                const fullPath = path.join(dirPath, entry);
+                let stat;
+                try { stat = fs.lstatSync(fullPath); } catch (e) { continue; }
+                if (!stat.isSymbolicLink() && stat.isDirectory()) searchDir(fullPath, depth + 1);
+                continue;
             }
+            if (!found.includes(entry)) found.push(entry);
+            // don't recurse into excluded dirs/files
         }
     }
 
     searchDir(extractedDir, 0);
     return { passed: found.length === 0, foundDirs: found };
+}
+
+function extractUsedPackages(extractedDir, pkgJsonPaths) {
+    const exclusions = ['node_modules', 'dist', '.git'];
+    const allFiles = getAllFiles(extractedDir, [], exclusions);
+    const sourceFiles = allFiles.filter(f => /\.(js|mjs|cjs|jsx|ts|tsx)$/.test(f));
+
+    const used = new Set();
+
+    function normalizePkgName(raw) {
+        if (raw.startsWith('@')) return raw.split('/').slice(0, 2).join('/');
+        return raw.split('/')[0];
+    }
+
+    // Patterns that capture a package specifier (not a relative path)
+    const patterns = [
+        /\bfrom\s+['"]([^'"./][^'"]*)['"]/g,           // import ... from 'pkg'
+        /\bimport\s+['"]([^'"./][^'"]*)['"]/g,          // import 'pkg' (side-effect)
+        /\bimport\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/g, // import('pkg') dynamic
+        /\brequire\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/g, // require('pkg')
+    ];
+
+    for (const file of sourceFiles) {
+        try {
+            const content = fs.readFileSync(file, 'utf8');
+            for (const re of patterns) {
+                re.lastIndex = 0;
+                let m;
+                while ((m = re.exec(content)) !== null) {
+                    used.add(normalizePkgName(m[1]));
+                }
+            }
+        } catch (e) { /* skip unreadable files */ }
+    }
+
+    // Also treat the first token in each package.json script as a used CLI tool.
+    // This covers tools like "vite", "vitest", "eslint" that are invoked but not imported.
+    for (const pkgPath of pkgJsonPaths) {
+        try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            for (const scriptVal of Object.values(pkg.scripts || {})) {
+                const tokens = String(scriptVal).trim().split(/\s+/);
+                // skip "npx" / "node" prefixes and pick the actual tool name
+                let toolIdx = 0;
+                if (tokens[toolIdx] === 'npx' || tokens[toolIdx] === 'node') toolIdx++;
+                if (tokens[toolIdx]) used.add(normalizePkgName(tokens[toolIdx]));
+            }
+        } catch (e) { /* skip */ }
+    }
+
+    return used;
 }
 
 function checkPackageJson(extractedDir, packageCheckConfig) {
@@ -286,6 +477,21 @@ function checkPackageJson(extractedDir, packageCheckConfig) {
                 issues.push(`"${pkgName}" is in ${inWrong} but should be in ${section}`);
             } else {
                 issues.push(`"${pkgName}" not found in package.json`);
+            }
+        }
+    }
+
+    // Check for extra packages declared in package.json but never imported or used as CLI tools.
+    const allowedExtras = new Set(Array.isArray(packageCheckConfig.allowedExtras) ? packageCheckConfig.allowedExtras : []);
+    const usedPackages = extractUsedPackages(extractedDir, pkgFiles);
+
+    for (const { pkg } of parsed) {
+        for (const section of KNOWN_PKG_SECTIONS) {
+            if (!pkg[section]) continue;
+            for (const pkgName of Object.keys(pkg[section])) {
+                if (!usedPackages.has(pkgName) && !allowedExtras.has(pkgName)) {
+                    issues.push(`extra package "${pkgName}" in ${section} is never imported`);
+                }
             }
         }
     }
@@ -434,6 +640,18 @@ module.exports = function(students, config, labDir, configDir = null) {
             analysis.repoHygiene = checkRepoHygiene(student.extractedDir, config.repoHygiene);
             if (analysis.repoHygiene && !analysis.repoHygiene.passed) {
                 console.log(`    ${student.name} repo hygiene: found ${analysis.repoHygiene.foundDirs.join(', ')}`);
+            }
+        }
+
+        if (config.variations) {
+            analysis.versionVariation = checkVersionVariation(student.extractedDir, config.variations);
+            const vv = analysis.versionVariation;
+            if (vv.detected) {
+                console.log(`    ${student.name} version: ${vv.detected} (${vv.appName})`);
+            } else if (vv.ambiguous) {
+                console.log(`    ${student.name} version: AMBIGUOUS - ${JSON.stringify(vv.scores)}`);
+            } else {
+                console.log(`    ${student.name} version: UNKNOWN - no variation keywords found`);
             }
         }
 

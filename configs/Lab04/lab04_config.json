@@ -4,6 +4,11 @@
   "titleText": "Lab 4: Node and Vite",
   "summaryCell": "A2",
   "runtimeCheck": "build",
+  "variations": {
+    "A": { "appName": "Web Page Bookmarker" },
+    "B": { "appName": "Expense Tracker" },
+    "C": { "appName": "Grocery List" }
+  },
   "packageCheck": {
     "dependencies": [
       "lit-html",
@@ -16,7 +21,8 @@
   "repoHygiene": {
     "excludedFromRepo": [
       "node_modules",
-      "dist"
+      "dist",
+      ".DS_Store"
     ]
   },
   "lint": {

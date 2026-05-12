@@ -4,6 +4,11 @@
   "titleText": "Lab 2: ES6 Key Features",
   "summaryCell": "A2",
   "runtimeCheck": "build",
+  "variations": {
+    "A": { "appName": "Double Trouble Domino" },
+    "B": { "appName": "Domino Drop" },
+    "C": { "appName": "Boneyard Bluff Domino" }
+  },
   "lint": {
     "exclude": ["part1", "part_1", "node_modules", "dist"]
   },

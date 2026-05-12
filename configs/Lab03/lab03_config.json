@@ -29,6 +29,11 @@
       "id": "part1",
       "rubricTitleRow": 7,
       "folderPattern": "(?:part|pt)\\s*[_-]?\\s*1",
+      "variations": {
+        "A": { "appName": "Double Trouble Domino" },
+        "B": { "appName": "Domino Drop" },
+        "C": { "appName": "Boneyard Bluff Domino" }
+      },
       "featureCounts": [
         {
           "featureId": "classes",
@@ -45,6 +50,11 @@
       "id": "part2",
       "rubricTitleRow": 14,
       "folderPattern": "(?:part|pt)\\s*[_-]?\\s*2",
+      "variations": {
+        "A": { "appName": "Going to Boston" },
+        "B": { "appName": "Midnight" },
+        "C": { "appName": "Threes Away" }
+      },
       "featureCounts": [
         {
           "featureId": "classes",

@@ -1,0 +1,147 @@
+{
+  "rubricName": "CS233JS_Lab05_Rubric.xlsm",
+  "titleCell": "A1",
+  "titleText": "Lab 5: HTML Canvas",
+  "summaryCell": "A2",
+  "runtimeCheck": "both",
+  "repoHygiene": {
+    "excludedFromRepo": [
+      "node_modules",
+      "dist",
+      ".DS_Store"
+    ]
+  },
+  "lint": {
+    "exclude": [
+      "node_modules",
+      "dist"
+    ]
+  },
+  "analysis": {
+    "features": [
+      {
+        "id": "canvas_context",
+        "regex": "getContext\\(['\"]2d['\"]\\)",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "local_storage",
+        "regex": "localStorage",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "lena_js",
+        "regex": "from\\s+['\"]lena",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "canvas_filter",
+        "regex": "\\.filter\\s*=",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "module_imports",
+        "regex": "import\\s+.*from",
+        "fileRegex": "\\.js$"
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "cell": "C7",
+      "commentCell": "E7",
+      "type": "manual",
+      "maxScore": 5,
+      "msg": "NEEDS MANUAL CHECK (profile stored in localStorage)"
+    },
+    {
+      "cell": "C8",
+      "commentCell": "E8",
+      "type": "manual",
+      "maxScore": 3,
+      "msg": "NEEDS MANUAL CHECK (at least 4 filters)"
+    },
+    {
+      "cell": "C9",
+      "commentCell": "E9",
+      "type": "npm_package",
+      "maxScore": 3
+    },
+    {
+      "cell": "C10",
+      "commentCell": "E10",
+      "type": "manual",
+      "maxScore": 3,
+      "msg": "NEEDS MANUAL CHECK (outline text and color)"
+    },
+    {
+      "cell": "C11",
+      "commentCell": "E11",
+      "type": "manual",
+      "maxScore": 4,
+      "msg": "NEEDS MANUAL CHECK (profile frame: circular, oval, or rounded)"
+    },
+    {
+      "cell": "C12",
+      "commentCell": "E12",
+      "type": "manual",
+      "maxScore": 5,
+      "msg": "NEEDS MANUAL CHECK (zoom, stickers, or freestyle drawing)"
+    },
+    {
+      "cell": "C13",
+      "commentCell": "E13",
+      "type": "manual",
+      "maxScore": 3,
+      "msg": "NEEDS MANUAL CHECK (change background, font color, or font style)"
+    },
+    {
+      "cell": "C14",
+      "commentCell": "E14",
+      "type": "build_check",
+      "maxScore": 2
+    },
+    {
+      "cell": "C15",
+      "commentCell": "E15",
+      "type": "manual",
+      "maxScore": 2,
+      "msg": "NEEDS MANUAL CHECK (app's original features still work)"
+    },
+    {
+      "cell": "C16",
+      "commentCell": "E16",
+      "type": "developer_comments",
+      "maxScore": 1
+    },
+    {
+      "cell": "C17",
+      "commentCell": "E17",
+      "type": "lint",
+      "severity": "warnings",
+      "maxScore": 2
+    },
+    {
+      "cell": "C21",
+      "commentCell": "E21",
+      "linkCell": "F21",
+      "linkUrlType": "github",
+      "type": "github_repo",
+      "maxScore": 2
+    },
+    {
+      "cell": "C22",
+      "commentCell": "E22",
+      "linkCell": "F22",
+      "linkUrlType": "citstudent",
+      "type": "deploy_check",
+      "maxScore": 4
+    },
+    {
+      "cell": "C23",
+      "commentCell": "E23",
+      "type": "code_review",
+      "maxScore": 1
+    }
+  ]
+}

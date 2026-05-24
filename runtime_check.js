@@ -1,11 +1,12 @@
 /**
  * runtime_check.js
  *
- * Checks student apps for runtime errors using one of two methods:
- *   "browser" — serves each app and opens in headless Chrome to capture console errors
+ * Checks student apps for runtime errors using one of three methods:
+ *   "browser" — serves source index.html in headless Chrome to capture console errors
  *   "build"   — runs npm install + npm run build
+ *   "both"    — runs build first, then opens built dist/ in headless Chrome
  *
- * The method is set per-lab in the config via config.runtimeCheck ("browser" or "build").
+ * The method is set per-lab in the config via config.runtimeCheck.
  * Attaches results directly to each student object as student.runtimeCheck.
  */
 
@@ -53,15 +54,124 @@ function serveDir(dir) {
             fs.createReadStream(filePath).pipe(res);
         });
 
-        server.on('error', (err) => {
-            reject(err);
-        });
-
+        server.on('error', (err) => reject(err));
         server.listen(0, '127.0.0.1', () => {
             const port = server.address().port;
             resolve({ server, port });
         });
     });
+}
+
+function findAllIndexHtmlDirs(dir, results = []) {
+    try {
+        const files = fs.readdirSync(dir);
+        if (files.includes('index.html')) results.push(dir);
+        for (const f of files) {
+            if (f === 'node_modules' || f === 'dist' || f.startsWith('.')) continue;
+            const full = path.join(dir, f);
+            let stats;
+            try { stats = fs.lstatSync(full); } catch (e) { continue; }
+            if (stats.isSymbolicLink()) continue;
+            if (stats.isDirectory()) findAllIndexHtmlDirs(full, results);
+        }
+    } catch (e) {}
+    return results;
+}
+
+// Finds dist/ subdirectories that contain index.html (used after a successful build).
+function findDistIndexHtmlDirs(dir, results = []) {
+    try {
+        const files = fs.readdirSync(dir);
+        if (files.includes('dist')) {
+            const distPath = path.join(dir, 'dist');
+            try {
+                if (fs.lstatSync(distPath).isDirectory()) {
+                    const distFiles = fs.readdirSync(distPath);
+                    if (distFiles.includes('index.html')) results.push(distPath);
+                }
+            } catch (e) {}
+        }
+        for (const f of files) {
+            if (f === 'node_modules' || f === 'dist' || f.startsWith('.')) continue;
+            const full = path.join(dir, f);
+            let stats;
+            try { stats = fs.lstatSync(full); } catch (e) { continue; }
+            if (stats.isSymbolicLink()) continue;
+            if (stats.isDirectory()) findDistIndexHtmlDirs(full, results);
+        }
+    } catch (e) {}
+    return results;
+}
+
+async function runBrowserCheck(htmlDirs, browser, baseDir) {
+    if (htmlDirs.length === 0) {
+        return { success: false, errors: ['No index.html found'] };
+    }
+
+    const allErrors = [];
+    let allSuccess = true;
+
+    for (const htmlDir of htmlDirs) {
+        const label = path.relative(baseDir || htmlDir, htmlDir) || 'root';
+
+        let server, port;
+        try {
+            const result = await serveDir(htmlDir);
+            server = result.server;
+            port = result.port;
+        } catch (err) {
+            allErrors.push(`${label}: Failed to start local server`);
+            allSuccess = false;
+            continue;
+        }
+
+        const jsErrors = [];
+        const resourceErrors = [];
+        let pageLoaded = false;
+
+        try {
+            const page = await browser.newPage();
+
+            page.on('pageerror', err => {
+                jsErrors.push(err.message || String(err));
+            });
+
+            page.on('requestfailed', request => {
+                const url = request.url();
+                const resourceType = request.resourceType();
+                if (resourceType === 'script' || resourceType === 'stylesheet') {
+                    const filename = url.split('/').pop().split('?')[0];
+                    resourceErrors.push(`Missing ${resourceType}: ${filename}`);
+                }
+            });
+
+            const response = await page.goto(`http://127.0.0.1:${port}/`, {
+                waitUntil: 'networkidle0',
+                timeout: 10000
+            }).catch(() => null);
+
+            if (response && response.ok()) pageLoaded = true;
+
+            await new Promise(r => setTimeout(r, 2000));
+            await page.close();
+        } catch (err) {
+            jsErrors.push(`Browser check failed: ${err.message}`);
+        } finally {
+            server.close();
+        }
+
+        const errors = [];
+        if (!pageLoaded) errors.push('index.html failed to load');
+        errors.push(...resourceErrors);
+        errors.push(...jsErrors);
+
+        if (errors.length > 0) {
+            allErrors.push(...errors.map(e => `${label}: ${e}`));
+            allSuccess = false;
+        }
+    }
+
+    return { success: allSuccess, errors: allErrors };
 }
 
 // ========== Build-based check ==========
@@ -122,33 +232,14 @@ async function checkBuild(extractedDir) {
     return { success: allOk, errors };
 }
 
-function findAllIndexHtmlDirs(dir, results = []) {
-    try {
-        const files = fs.readdirSync(dir);
-        if (files.includes('index.html')) {
-            results.push(dir);
-        }
-        for (const f of files) {
-            if (f === 'node_modules' || f === 'dist' || f.startsWith('.')) continue;
-            const full = path.join(dir, f);
-            let stats;
-            try { stats = fs.lstatSync(full); } catch (e) { continue; }
-            if (stats.isSymbolicLink()) continue;
-            if (stats.isDirectory()) {
-                findAllIndexHtmlDirs(full, results);
-            }
-        }
-    } catch (e) {}
-    return results;
-}
-
 // ========== Main export ==========
 
 module.exports = async function(students, config, labDir) {
     const mode = config.runtimeCheck || 'build';
+    const needsBrowser = mode === 'browser' || mode === 'both';
     console.log(`--- Runtime Check Phase (${mode} mode) ---`);
 
-    if (mode === 'browser' && !puppeteer) {
+    if (needsBrowser && !puppeteer) {
         console.error('  ERROR: Puppeteer not installed. Run: npm install puppeteer');
         students.forEach(s => {
             s.runtimeCheck = { success: false, errors: ['Puppeteer not installed'] };
@@ -157,7 +248,7 @@ module.exports = async function(students, config, labDir) {
     }
 
     let browser;
-    if (mode === 'browser') {
+    if (needsBrowser) {
         try {
             browser = await puppeteer.launch({ headless: 'shell' });
         } catch (e) {
@@ -182,88 +273,39 @@ module.exports = async function(students, config, labDir) {
 
         if (mode === 'build') {
             const result = await checkBuild(student.extractedDir);
-            student.runtimeCheck = { ...result };
+            student.runtimeCheck = result;
             if (result.success) {
                 console.log(`  OK: ${student.name}: Build successful`);
             } else {
                 console.log(`  FAIL: ${student.name}: Build failed (${result.errors.join(', ')})`);
             }
-        } else {
+        } else if (mode === 'browser') {
             const htmlDirs = findAllIndexHtmlDirs(student.extractedDir);
-            const allErrors = [];
-            let allSuccess = true;
-
-            if (htmlDirs.length === 0) {
-                allErrors.push('No index.html found anywhere');
-                allSuccess = false;
-            }
-
-            for (const htmlDir of htmlDirs) {
-                const label = path.relative(student.extractedDir, htmlDir) || 'root';
-
-                let server, port;
-                try {
-                    const result = await serveDir(htmlDir);
-                    server = result.server;
-                    port = result.port;
-                } catch (err) {
-                    allErrors.push(`${label}: Failed to start local server`);
-                    allSuccess = false;
-                    continue;
-                }
-                const jsErrors = [];
-                const resourceErrors = [];
-                let pageLoaded = false;
-
-                try {
-                    const page = await browser.newPage();
-
-                    page.on('pageerror', err => {
-                        jsErrors.push(err.message || String(err));
-                    });
-
-                    page.on('requestfailed', request => {
-                        const url = request.url();
-                        const resourceType = request.resourceType();
-                        if (resourceType === 'script' || resourceType === 'stylesheet') {
-                            const filename = url.split('/').pop().split('?')[0];
-                            resourceErrors.push(`Missing ${resourceType}: ${filename}`);
-                        }
-                    });
-
-                    const response = await page.goto(`http://127.0.0.1:${port}/`, {
-                        waitUntil: 'networkidle0',
-                        timeout: 10000
-                    }).catch(() => null);
-
-                    if (response && response.ok()) {
-                        pageLoaded = true;
-                    }
-
-                    await new Promise(r => setTimeout(r, 2000));
-                    await page.close();
-                } catch (err) {
-                    jsErrors.push(`Browser check failed: ${err.message}`);
-                } finally {
-                    server.close();
-                }
-
-                const errors = [];
-                if (!pageLoaded) errors.push('index.html failed to load');
-                errors.push(...resourceErrors);
-                errors.push(...jsErrors);
-
-                if (errors.length > 0) {
-                    allErrors.push(...errors.map(e => `${label}: ${e}`));
-                    allSuccess = false;
-                }
-            }
-
-            student.runtimeCheck = { success: allSuccess, errors: allErrors };
-            if (allSuccess) {
+            const result = await runBrowserCheck(htmlDirs, browser, student.extractedDir);
+            student.runtimeCheck = result;
+            if (result.success) {
                 console.log(`  OK: ${student.name}: No console errors`);
             } else {
-                console.log(`  FAIL: ${student.name}: ${allErrors.join('; ')}`);
+                console.log(`  FAIL: ${student.name}: ${result.errors.join('; ')}`);
+            }
+        } else {
+            // "both": build first, then browser-check the built dist/
+            const buildResult = await checkBuild(student.extractedDir);
+            if (!buildResult.success) {
+                student.runtimeCheck = buildResult;
+                console.log(`  FAIL: ${student.name}: Build failed (${buildResult.errors.join(', ')})`);
+            } else {
+                const distDirs = findDistIndexHtmlDirs(student.extractedDir);
+                const browserResult = await runBrowserCheck(distDirs, browser, student.extractedDir);
+                student.runtimeCheck = {
+                    success: browserResult.success,
+                    errors: [...buildResult.errors, ...browserResult.errors]
+                };
+                if (browserResult.success) {
+                    console.log(`  OK: ${student.name}: Build and browser checks passed`);
+                } else {
+                    console.log(`  FAIL: ${student.name}: ${browserResult.errors.join('; ')}`);
+                }
             }
         }
     }

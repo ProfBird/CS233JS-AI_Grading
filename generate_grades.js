@@ -376,10 +376,18 @@ registerHandler('developer_comments', (map, student) => {
 
 registerHandler('code_review', (map, student) => {
     const a = student.analysis || {};
-    if (a.hasCodeReview) {
-        return { score: map.maxScore, comment: 'Yes' };
+    const cr = student.codeReview;
+    const hasReview = a.hasCodeReview;
+    const prodDone = cr && cr.productionCompleted;
+    const group = (cr && cr.group) ? ` (Group ${cr.group})` : '';
+
+    if (hasReview && prodDone) {
+        return { score: map.maxScore, comment: 'yes and yes' + group };
     }
-    return { score: 0, comment: 'Not found in submission' };
+    if (hasReview && !prodDone) {
+        return { score: 0, comment: 'yes and no' + group };
+    }
+    return { score: 0, comment: 'no and no' };
 });
 
 registerHandler('url_check', (map, student) => {
@@ -389,6 +397,53 @@ registerHandler('url_check', (map, student) => {
         return { score: map.maxScore, comment: `NEEDS CHECK: ${url}` };
     }
     return { score: 0, comment: `No ${map.urlType} URL provided` };
+});
+
+registerHandler('deploy_check', async (map, student) => {
+    const url = (student.analysis && student.analysis.urls && student.analysis.urls.citstudent) || '';
+    if (!url) {
+        return { score: 0, comment: 'No deployment URL provided' };
+    }
+
+    // 1. Check URL reachability
+    let html;
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!response.ok) {
+            return { score: 0, comment: `URL unreachable (HTTP ${response.status})` };
+        }
+        html = await response.text();
+    } catch (err) {
+        const reason = err.name === 'AbortError' ? 'timeout' : err.message;
+        return { score: 0, comment: `URL unreachable (${reason})` };
+    }
+
+    // 2. Check <script> tags for bundling indicators
+    const scriptSrcRe = /<script\s[^>]*src\s*=\s*['"]([^'"]+)['"][^>]*>/gi;
+    const scripts = [];
+    let bundled = false;
+    let match;
+    while ((match = scriptSrcRe.exec(html)) !== null) {
+        const src = match[1];
+        scripts.push(src);
+        if (/assets\/|dist\/|static\/|bundle|min\.|chunk/i.test(src) || /\/[a-f0-9]{8,}\./i.test(src)) {
+            bundled = true;
+        }
+    }
+
+    if (scripts.length === 0) {
+        const score = Math.floor(map.maxScore / 2);
+        return { score, comment: 'URL reachable but no <script> tags found' };
+    }
+
+    if (bundled) {
+        return { score: map.maxScore, comment: `URL reachable, page appears bundled (${scripts.join(', ')})` };
+    }
+    const score = Math.floor(map.maxScore / 2);
+    return { score, comment: `URL reachable but page may not be bundled (${scripts.join(', ')})` };
 });
 
 registerHandler('lint', (map, student) => {
@@ -428,14 +483,67 @@ registerHandler('lint', (map, student) => {
 registerHandler('build_check', (map, student) => {
     const rt = student.runtimeCheck || {};
     if (rt.success) {
-        return { score: map.maxScore, comment: 'No runtime errors' };
+        return { score: map.maxScore, comment: 'Error free' };
     }
     const errors = rt.errors || [];
-    return { score: 0, comment: errors.length ? `Errors found: ${errors.join(', ')}` : 'Build failed' };
+    if (errors.length === 0) {
+        return { score: 0, comment: 'Build failed' };
+    }
+    // Categorize errors by type
+    const buildErrors = [];
+    const runtimeErrors = [];
+    const resourceErrors = [];
+    for (const err of errors) {
+        const msg = (typeof err === 'string' ? err : String(err)).replace(/^[^:]+:\s*/, '');
+        if (/npm\s+(install|run\s+build)\s+failed/i.test(msg) || /build\s+failed/i.test(msg)) {
+            buildErrors.push(msg);
+        } else if (/missing\s+(script|stylesheet)/i.test(msg)) {
+            resourceErrors.push(msg);
+        } else {
+            runtimeErrors.push(msg);
+        }
+    }
+    const parts = [];
+    if (buildErrors.length) parts.push(`Build: ${buildErrors.join('; ')}`);
+    if (resourceErrors.length) parts.push(`Resource: ${resourceErrors.join('; ')}`);
+    if (runtimeErrors.length) parts.push(`Runtime: ${runtimeErrors.join('; ')}`);
+    return { score: 0, comment: parts.join(' | ') };
 });
 
 registerHandler('manual', (map, student) => {
+    const cr = student.codeReview;
+    if (cr && cr.found && cr.items && map._reviewIndex !== undefined && map._reviewIndex < cr.items.length) {
+        const item = cr.items[map._reviewIndex];
+        // Production score as a fraction (e.g. "4/5")
+        if (item.prodScore !== null) {
+            const score = Math.min(item.prodScore, map.maxScore || Infinity);
+            const comment = (map.msg || 'NEEDS MANUAL CHECK') + ` [Production score: ${item.prodScore}]`;
+            return { score, comment };
+        }
+        // Production cell filled with Y/N/Yes/No
+        if (item.prodFilled) {
+            const score = item.prodAffirmative ? map.maxScore : 0;
+            const label = item.prodAffirmative ? 'Production: Yes' : 'Production: No';
+            const comment = (map.msg || 'NEEDS MANUAL CHECK') + ` [${label}]`;
+            return { score, comment };
+        }
+        // Fall back to beta score
+        if (item.betaScore !== null) {
+            const score = Math.min(item.betaScore, map.maxScore || Infinity);
+            const comment = (map.msg || 'NEEDS MANUAL CHECK') + ` [Beta score: ${item.betaScore}]`;
+            return { score, comment };
+        }
+    }
     return { score: map.maxScore, comment: map.msg || 'NEEDS MANUAL CHECK' };
+});
+
+registerHandler('npm_package', (map, student) => {
+    const a = student.analysis || {};
+    const packages = a.npmPackages || [];
+    if (packages.length > 0) {
+        return { score: map.maxScore, comment: `Yes - ${packages.join(', ')}` };
+    }
+    return { score: 0, comment: 'No npm packages imported' };
 });
 
 registerHandler('package_check', (map, student) => {
@@ -487,6 +595,135 @@ function isCodeSourceType(map) {
     return CODE_SOURCE_TYPES.has(map.type) || (map.type === 'url_check' && map.urlType === 'github');
 }
 
+// --- Text report helpers ---
+
+function mappingDescription(map, index) {
+    if (map.msg) return map.msg.replace('NEEDS MANUAL CHECK (', '').replace(')', '');
+    if (map.featureId) return map.featureId;
+    switch (map.type) {
+        case 'build_check': return 'App loads and runs without errors';
+        case 'lint': return 'Style and best practices';
+        case 'developer_comments': return 'Developer name/date in files';
+        case 'github_repo': return 'GitHub repo set up correctly';
+        case 'deploy_check': return 'Deployed and running on citstudent';
+        case 'code_review': return 'Code review, prod column completed';
+        case 'url_check': return 'URL provided';
+        case 'apps_in_repo': return 'Apps in repository';
+        case 'repo_hygiene': return 'Repo hygiene';
+        case 'npm_package': return 'NPM package used';
+        case 'package_check': return 'package.json check';
+        case 'part_feature': return map.featureId || 'Part feature';
+        case 'part_completed': return map.partId || 'Part completed';
+        case 'part1_completed': return 'Part 1 completed';
+        default: return map.type;
+    }
+}
+
+async function gradeStudentMappings(student, config) {
+    const results = [];
+    const analysis = student.analysis || {};
+
+    if (analysis.extractionError) {
+        for (const map of config.mappings) {
+            const desc = mappingDescription(map, results.length);
+            if (isCodeSourceType(map)) {
+                results.push({ desc, score: 0, maxScore: map.maxScore || 0, comment: `ERROR: ${analysis.extractionError}` });
+            } else {
+                results.push({ desc, score: 0, maxScore: map.maxScore || 0, comment: 'N/A (code unavailable)' });
+            }
+        }
+        return results;
+    }
+
+    for (const map of config.mappings) {
+        const handler = getHandler(map.type);
+        let score, comment;
+
+        if (handler) {
+            const result = await handler(map, student);
+            score = result.score;
+            comment = result.comment;
+        } else {
+            score = 0;
+            comment = `ERROR: Unknown mapping type "${map.type}"`;
+        }
+
+        results.push({
+            desc: mappingDescription(map, results.length),
+            score: score != null ? score : 0,
+            maxScore: map.maxScore || 0,
+            comment
+        });
+    }
+
+    // Per-part feature counts
+    if (config.parts && analysis.partFeatures) {
+        for (const part of config.parts) {
+            if (!part.featureCounts) continue;
+            for (const fc of part.featureCounts) {
+                const virtualMap = {
+                    type: 'part_feature',
+                    partId: part.id,
+                    featureId: fc.featureId,
+                    minCount: fc.minCount || 1,
+                    maxScore: fc.maxScore,
+                    successMsg: fc.successMsg,
+                    failMsg: fc.failMsg
+                };
+                const handler = getHandler('part_feature');
+                const result = await handler(virtualMap, student);
+                results.push({
+                    desc: fc.featureId || `${part.id} feature`,
+                    score: result.score != null ? result.score : 0,
+                    maxScore: fc.maxScore || 0,
+                    comment: result.comment
+                });
+            }
+        }
+    }
+
+    return results;
+}
+
+function formatTextReport(student, config, results, labTitle) {
+    const cr = student.codeReview || {};
+    const group = cr.group
+        || (student.analysis && student.analysis.versionVariation
+            && student.analysis.versionVariation.detected)
+        || '?';
+
+    const lines = [];
+    const divider = '='.repeat(56);
+
+    lines.push(divider);
+    lines.push(`GRADE REPORT: ${student.name}`);
+    if (labTitle) lines.push(`${labTitle}`);
+    lines.push(`Group: ${group}`);
+    lines.push(divider);
+    lines.push('');
+
+    let totalScore = 0;
+    let totalPossible = 0;
+
+    for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        const num = String(i + 1).padStart(2);
+        const scoreStr = String(r.score).padStart(2);
+        const maxStr = String(r.maxScore).padStart(2);
+        lines.push(`  ${num}. [${scoreStr}/${maxStr}]  ${r.desc}`);
+        if (r.comment) lines.push(`      ${r.comment}`);
+        totalScore += r.score;
+        totalPossible += r.maxScore;
+    }
+
+    lines.push('');
+    lines.push(`  Total: ${totalScore} / ${totalPossible}`);
+    lines.push('');
+    lines.push(divider);
+
+    return lines.join('\n');
+}
+
 // --- Main export ---
 
 module.exports = async function(students, config, labDir, opts = {}) {
@@ -504,6 +741,53 @@ module.exports = async function(students, config, labDir, opts = {}) {
         }
     }
 
+    // Pre-compute review score indices for manual mappings
+    let reviewIdx = 0;
+    for (const map of config.mappings) {
+        if (map.type === 'manual') {
+            map._reviewIndex = reviewIdx++;
+        }
+    }
+
+    // --- Text report path ---
+    if (opts.textReport) {
+        const summary = { successful: [], errors: [] };
+        let generated = 0;
+        let skipped = 0;
+        const labTitle = config.titleText || '';
+
+        for (const student of students) {
+            const gradeDir = student.gradeDir;
+
+            if (!gradeDir) {
+                console.log(`  SKIP: ${student.name} - no grade output directory found`);
+                summary.errors.push({ student: student.name, issue: 'No grade output directory found.' });
+                skipped++;
+                continue;
+            }
+            fs.mkdirSync(gradeDir, { recursive: true });
+
+            try {
+                const results = await gradeStudentMappings(student, config);
+                const report = formatTextReport(student, config, results, labTitle);
+
+                const outputPath = path.join(gradeDir, `${student.name}_Grade.txt`);
+                fs.writeFileSync(outputPath, report, 'utf8');
+                console.log(`  OK: ${student.name} -> ${path.basename(outputPath)}`);
+                summary.successful.push(student.name);
+                generated++;
+            } catch (err) {
+                console.log(`  ERROR: ${student.name} - ${err.message}`);
+                summary.errors.push({ student: student.name, issue: `Text report error: ${err.message}` });
+                skipped++;
+            }
+        }
+
+        console.log(`\nGenerated ${generated} text reports, skipped ${skipped}.`);
+        return summary;
+    }
+
+    // --- Spreadsheet path ---
     const rubricPath = path.join(opts.rubricDir || labDir, config.rubricName);
     const isXlsm = rubricPath.toLowerCase().endsWith('.xlsm');
     if (!fs.existsSync(rubricPath)) {
@@ -579,6 +863,20 @@ module.exports = async function(students, config, labDir, opts = {}) {
                 setCellValue(sheet, config.summaryCell, summaryText);
             }
 
+            // Write student name and lab assignment group
+            {
+                const nameCell = (config.codeReview && config.codeReview.studentNameCell) || 'B1';
+                setCellValue(sheet, nameCell, student.name);
+
+                const groupCell = (config.codeReview && config.codeReview.groupCell) || 'C1';
+                const cr = student.codeReview || {};
+                const group = cr.group
+                    || (student.analysis && student.analysis.versionVariation
+                        && student.analysis.versionVariation.detected)
+                    || '?';
+                setCellValue(sheet, groupCell, group);
+            }
+
             // If code could not be extracted, write extraction-available info to relevant cells,
             // mark everything else N/A
             if (analysis.extractionError) {
@@ -616,7 +914,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
                 let score, comment;
 
                 if (handler) {
-                    const result = handler(map, student);
+                    const result = await handler(map, student);
                     score = result.score;
                     comment = result.comment;
                 } else {
@@ -647,7 +945,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
                             failMsg: fc.failMsg
                         };
                         const handler = getHandler('part_feature');
-                        const result = handler(virtualMap, student);
+                        const result = await handler(virtualMap, student);
                         if (fc.cell) setCellValue(sheet, fc.cell, result.score);
                         if (fc.commentCell) setCellValue(sheet, fc.commentCell, result.comment);
                     }

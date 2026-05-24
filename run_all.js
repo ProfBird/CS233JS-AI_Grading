@@ -22,6 +22,7 @@ const analyzeCode = require('./analyze_code.js');
 const lintCode = require('./lint_code.js');
 const runtimeCheck = require('./runtime_check.js');
 const generateGrades = require('./generate_grades.js');
+const readCodeReview = require('./read_code_review.js');
 
 const { VALID_MAPPING_TYPES } = generateGrades;
 const { CODE_DIR, REPO_DIR } = extractCode;
@@ -61,6 +62,9 @@ OPTIONS
   --ai-model=NAME  Specify which Ollama model to use for AI summaries.
                    Implies --ai-comments. Example: --ai-model=qwen3-coder
 
+	  --text-report    Generate .txt grade reports instead of spreadsheets.
+	                   Use when a rubric spreadsheet is not yet available.
+
   --help, -h       Show this help message.
 
 EXAMPLES
@@ -73,9 +77,19 @@ EXAMPLES
 `);
 }
 
+const MOODLE_DIR_PATTERN = /^.*_\d+_assignsubmission_(file|onlinetext)$/;
+
+function hasMoodleSubmissions(dir) {
+    try {
+        return fs.readdirSync(dir).some(
+            f => MOODLE_DIR_PATTERN.test(f) && fs.statSync(path.join(dir, f)).isDirectory()
+        );
+    } catch (e) { return false; }
+}
+
 // --- Config validation ---
 
-const VALID_RUNTIME_MODES = new Set(['browser', 'build']);
+const VALID_RUNTIME_MODES = new Set(['browser', 'build', 'both']);
 
 // Validate that a cell reference looks like "A1" or "AA23"
 function isValidCellRef(ref) {
@@ -143,6 +157,18 @@ function validateConfig(config, labName) {
         }
     }
 
+    if (config.codeReview) {
+        if (config.codeReview.studentNameCell && !isValidCellRef(config.codeReview.studentNameCell)) {
+            errors.push(`codeReview.studentNameCell: "${config.codeReview.studentNameCell}" is not a valid cell reference`);
+        }
+        if (config.codeReview.groupCell && !isValidCellRef(config.codeReview.groupCell)) {
+            errors.push(`codeReview.groupCell: "${config.codeReview.groupCell}" is not a valid cell reference`);
+        }
+        if (config.codeReview.manualFallback && !['maxScore', 'zero', 'skip'].includes(config.codeReview.manualFallback)) {
+            errors.push(`codeReview.manualFallback: "${config.codeReview.manualFallback}" must be one of: maxScore, zero, skip`);
+        }
+    }
+
     if (config.parts) {
         if (!Array.isArray(config.parts)) {
             errors.push(`"parts" must be an array`);
@@ -202,6 +228,7 @@ async function main() {
     const hasRecloneFlag = args.includes('--reclone');
     const aiModelFlag = (args.find(a => a.startsWith('--ai-model=')) || '').split('=')[1] || null;
     const aiComments = args.includes('--ai-comments') || !!aiModelFlag;
+    let textReport = args.includes('--text-report');
     const hasAnyFlag = hasRegradeFlag || hasRecloneFlag;
 
     let labName = positional[0];
@@ -329,6 +356,39 @@ async function main() {
             }
         }
 
+        // If labDir has no direct Moodle submissions but contains subdirectories that do
+        // (e.g. Moodle exported Lab05-Beta and Lab05-Production as separate groups),
+        // ask the user which group to grade.
+        if (!hasMoodleSubmissions(labDir)) {
+            const subdirs = fs.readdirSync(labDir).filter(f => {
+                const fp = path.join(labDir, f);
+                try { return fs.statSync(fp).isDirectory() && hasMoodleSubmissions(fp); } catch (e) { return false; }
+            });
+            if (subdirs.length > 0) {
+                console.log(`\nNo submissions found directly in ${labName}/. Found these submission groups:`);
+                subdirs.forEach((d, i) => console.log(`  ${i + 1}) ${d}`));
+                console.log();
+                let chosen = false;
+                while (!chosen) {
+                    const input = await askRl(`Select which group to grade (number) [${subdirs.length}]: `);
+                    const trimmed = input.trim();
+                    if (trimmed === '') {
+                        labDir = path.join(labDir, subdirs[subdirs.length - 1]);
+                        chosen = true;
+                    } else {
+                        const num = parseInt(trimmed);
+                        if (!isNaN(num) && num >= 1 && num <= subdirs.length) {
+                            labDir = path.join(labDir, subdirs[num - 1]);
+                            chosen = true;
+                        } else {
+                            console.log('  Invalid selection, try again.');
+                        }
+                    }
+                }
+                console.log(`  Using: ${labDir}\n`);
+            }
+        }
+
         // Per-lab paths under codeRoot
         artifactsDir = path.join(codeRoot, labName, ARTIFACTS_DIR);
         submissionsDir = path.join(codeRoot, labName, SUBMISSIONS_DIR);
@@ -368,17 +428,22 @@ async function main() {
             const rubricCheckPath = path.join(labConfigDir, config.rubricName);
             if (fs.existsSync(rubricCheckPath)) {
                 break;
+            } else if (textReport) {
+                console.log(`  Rubric not found, but --text-report is set. Will generate .txt reports.\n`);
+                skipRubric = true;
+                break;
             } else {
                 console.error(`\nERROR: Rubric file not found at expected path:`);
                 console.error(`  ${rubricCheckPath}`);
                 console.error(`  (Copy the rubric template into configs/${labName}/ or check the filename.)\n`);
                 const newName = await askRl(
                     'Enter the correct rubric filename\n' +
-                    '  (e.g. CS233JS_Lab04_Rubric.xlsm, or type "skip" to continue anyway): '
+                    '  (e.g. CS233JS_Lab04_Rubric.xlsm, or type "skip" to generate .txt reports instead): '
                 );
                 if (!newName.trim() || newName.trim().toLowerCase() === 'skip') {
-                    console.log('  Continuing without rubric — grade generation will be skipped.\n');
+                    console.log('  Continuing without rubric — will generate .txt grade reports.\n');
                     skipRubric = true;
+                    textReport = true;
                     break;
                 }
                 config.rubricName = newName.trim();
@@ -411,8 +476,9 @@ async function main() {
 
     const modeLabel = reclone ? 'RECLONE' : (regrade ? 'REGRADE' : 'NORMAL');
     const aiLabel = aiComments ? ' +AI' : '';
+    const txtLabel = textReport ? ' +TXT' : '';
     console.log(`\n================================`);
-    console.log(`   Grading: ${labName}  [${modeLabel}${aiLabel}]`);
+    console.log(`   Grading: ${labName}  [${modeLabel}${aiLabel}${txtLabel}]`);
     console.log(`================================\n`);
 
     if (reclone) {
@@ -454,14 +520,16 @@ async function main() {
     // 1. Code Acquisition
     const students = await extractCode(labDir, submissionsDir);
 
-    // In normal mode, skip students whose grade spreadsheet already exists
+    // In normal mode, skip students whose grade output already exists
     let toGrade = students;
     if (!regrade) {
-        const outputExt = config.rubricName.endsWith('.xlsm') ? '.xlsm' : '.xlsx';
+        const outputExt = textReport ? '.txt' : (config.rubricName.endsWith('.xlsm') ? '.xlsm' : '.xlsx');
         const alreadyDone = [];
         toGrade = students.filter(s => {
             if (!s.gradeDir) return true;
-            const gradePath = path.join(s.gradeDir, `${s.name}_Grade${outputExt}`);
+            const gradePath = path.join(s.gradeDir, textReport
+                ? `${s.name}_Grade.txt`
+                : `${s.name}_Grade${outputExt}`);
             if (fs.existsSync(gradePath)) { alreadyDone.push(s.name); return false; }
             return true;
         });
@@ -476,13 +544,18 @@ async function main() {
     // 3. Analysis — attaches to student.analysis
     analyzeCode(toGrade, config, artifactsDir, labConfigDir);
 
+    // 3b. Code Review Reading — attaches to student.codeReview
+    await readCodeReview(toGrade, config);
+
     // 4. Linting — attaches to student.lint
     await lintCode(toGrade, config, artifactsDir);
 
     // 5. Generation — reads from student objects
     let generateSummary;
     if (!skipRubric) {
-        generateSummary = await generateGrades(toGrade, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir });
+        generateSummary = await generateGrades(toGrade, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir, textReport });
+    } else if (textReport) {
+        generateSummary = await generateGrades(toGrade, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir, textReport: true });
     } else {
         generateSummary = { successful: [], errors: [] };
         console.log("--- Grade Generation Phase (skipped) ---\n");

@@ -260,14 +260,27 @@ describe('developer_comments handler', () => {
 describe('code_review handler', () => {
     const handler = getHandler('code_review');
 
-    it('returns maxScore when code review found', () => {
+    it('returns maxScore and "yes and yes" when review found and prod column complete', () => {
         const map = { maxScore: 2 };
-        expect(handler(map, { analysis: { hasCodeReview: true } })).toEqual({ score: 2, comment: 'Yes' });
+        const student = { analysis: { hasCodeReview: true }, codeReview: { productionCompleted: true } };
+        expect(handler(map, student)).toEqual({ score: 2, comment: 'yes and yes' });
     });
 
-    it('returns 0 when no code review', () => {
+    it('returns 0 and "yes and no" when review found but prod column not complete', () => {
         const map = { maxScore: 2 };
-        expect(handler(map, { analysis: { hasCodeReview: false } })).toEqual({ score: 0, comment: 'Not found in submission' });
+        const student = { analysis: { hasCodeReview: true }, codeReview: { productionCompleted: false } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'yes and no' });
+    });
+
+    it('returns 0 and "no and no" when no code review', () => {
+        const map = { maxScore: 2 };
+        expect(handler(map, { analysis: { hasCodeReview: false } })).toEqual({ score: 0, comment: 'no and no' });
+    });
+
+    it('appends group letter when present', () => {
+        const map = { maxScore: 1 };
+        const student = { analysis: { hasCodeReview: true }, codeReview: { productionCompleted: true, group: 'B' } };
+        expect(handler(map, student)).toEqual({ score: 1, comment: 'yes and yes (Group B)' });
     });
 });
 
@@ -352,15 +365,15 @@ describe('lint handler', () => {
 describe('build_check handler', () => {
     const handler = getHandler('build_check');
 
-    it('returns maxScore on success', () => {
+    it('returns maxScore and "Error free" on success', () => {
         const map = { maxScore: 1 };
-        expect(handler(map, { runtimeCheck: { success: true, errors: [] } })).toEqual({ score: 1, comment: 'No runtime errors' });
+        expect(handler(map, { runtimeCheck: { success: true, errors: [] } })).toEqual({ score: 1, comment: 'Error free' });
     });
 
-    it('returns 0 on failure with errors', () => {
+    it('returns 0 with categorized error types', () => {
         const map = { maxScore: 1 };
         const student = { runtimeCheck: { success: false, errors: ['Build failed', 'Timeout'] } };
-        expect(handler(map, student)).toEqual({ score: 0, comment: 'Errors found: Build failed, Timeout' });
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'Build: Build failed | Runtime: Timeout' });
     });
 
     it('returns 0 on failure with empty errors', () => {
@@ -392,6 +405,36 @@ describe('manual handler', () => {
     it('returns default message when no msg', () => {
         const map = { maxScore: 5 };
         expect(handler(map, {})).toEqual({ score: 5, comment: 'NEEDS MANUAL CHECK' });
+    });
+
+    it('uses production score when available', () => {
+        const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
+        const student = { codeReview: { found: true, items: [{ betaScore: 4, prodScore: 5 }] } };
+        expect(handler(map, student)).toEqual({ score: 5, comment: 'Check feature [Production score: 5]' });
+    });
+
+    it('falls back to beta score when production is empty', () => {
+        const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
+        const student = { codeReview: { found: true, items: [{ betaScore: 4, prodScore: null, prodFilled: false }] } };
+        expect(handler(map, student)).toEqual({ score: 4, comment: 'Check feature [Beta score: 4]' });
+    });
+
+    it('caps review score at maxScore', () => {
+        const map = { maxScore: 3, msg: 'Check feature', _reviewIndex: 0 };
+        const student = { codeReview: { found: true, items: [{ betaScore: 4, prodScore: 5 }] } };
+        expect(handler(map, student)).toEqual({ score: 3, comment: 'Check feature [Production score: 5]' });
+    });
+
+    it('uses maxScore when production cell says Y', () => {
+        const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
+        const student = { codeReview: { found: true, items: [{ betaScore: 3, prodScore: null, prodFilled: true, prodAffirmative: true }] } };
+        expect(handler(map, student)).toEqual({ score: 5, comment: 'Check feature [Production: Yes]' });
+    });
+
+    it('returns 0 when production cell says N', () => {
+        const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
+        const student = { codeReview: { found: true, items: [{ betaScore: 3, prodScore: null, prodFilled: true, prodAffirmative: false }] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'Check feature [Production: No]' });
     });
 });
 

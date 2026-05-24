@@ -10,6 +10,7 @@ node run_all.js Lab03        # first-time grade
 node run_all.js Lab03 --regrade   # re-run grading phases, keep extracted code
 node run_all.js Lab03 --reclone         # delete extracted code, re-clone, then grade
 node run_all.js Lab03 --ai-comments     # grade with Ollama-generated rubric summary sentences
+node run_all.js Lab06 --text-report     # grade without rubric spreadsheet, generates .txt reports
 npx eslint --format json path/to/files/*.js
 
 node rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
@@ -26,6 +27,7 @@ npx vitest                  # watch mode
 - **puppeteer** — headless Chrome for browser runtime checks
 - **xlsx** — read/write rubric spreadsheets
 - **adm-zip** — read/write ZIP entries to preserve VBA macros/buttons in `.xlsm` output files
+- **mammoth** — read `.docx` code review forms and convert to HTML for table parsing
 - **globals** — browser/node global definitions for ESLint flat config
 - **eslint** — v9+ flat config
 - **vitest** (dev) — test runner
@@ -38,7 +40,9 @@ npx vitest                  # watch mode
 2. **analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`.
 3. **runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: deletes any existing `node_modules/` then runs `npm install && npm run build`. Attaches to `student.runtimeCheck`.
 4. **lint_code.js** — Runs ESLint (flat config) against each student's `.js` files using `~/.eslint/eslint.config.mjs` — the same config VS Code uses, ensuring consistent results. Attaches to `student.lint`.
-5. **generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, uses `adm-zip` after SheetJS writes the file to restore drawing/button XML entries and re-add non-Grade sheets as `veryHidden` (required for VBA module binding). With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`.
+4.5. **read_code_review.js** — Reads each student's code review form (`.docx`). Parses the HTML table (via mammoth) to extract per-item beta and production scores, plus the lab assignment group letter. Attaches `student.codeReview` with `items[{betaScore, prodScore}]`, `productionCompleted`, `group`, and the legacy flat `scores` array.
+
+5. **generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`, `student.codeReview`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, uses `adm-zip` after SheetJS writes the file to restore drawing/button XML entries and re-add non-Grade sheets as `veryHidden` (required for VBA module binding). With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`. With `--text-report`, produces `.txt` grade reports instead of spreadsheets — useful when a rubric template isn't available yet.
 
 ### Config files (`configs/LabXX/labXX_config.json`)
 
@@ -49,6 +53,7 @@ Per-lab JSON specifying rubric filename, runtime check mode, feature regexes, an
 ```
 AI_Grading/   ← this directory
   ├── run_all.js
+  ├── read_code_review.js       # .docx code review form parser
   ├── configs/
   │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
   │   └── LabXX/
@@ -98,8 +103,11 @@ AI_Grading/   ← this directory
   - parts[]: { id, gameNames[], folderPattern, featureCounts[] } — multi-part lab config (optional). gameNames is the list of expected game/project names for that part; folderPattern is a regex fallback for "Part1/Pt2"-style folder naming.
 
   - mappings[] — rubric cell assignments (types listed below)
-    - types: feature | part1_completed | part_completed | apps_in_repo | developer_comments | code_review | url_check | lint | build_check | manual | part_feature | repo_hygiene | github_repo | package_check
+    - types: feature | part1_completed | part_completed | apps_in_repo | developer_comments | code_review | url_check | deploy_check | lint | build_check | manual | part_feature | repo_hygiene | github_repo | package_check
     - lint mappings accept an optional `severity: "errors" | "warnings"` to report only errors (syntax) or only warnings (style) into separate cells
+    - `code_review` mappings: comment reports both review presence and production column completion as "yes and yes" / "yes and no" / "no and no". Full points only when both are true.
+    - `manual` mappings: assigned `_reviewIndex` sequentially (order in config). Uses production score from code review form; falls back to beta score when production cell is empty. Comment indicates which column was used.
+    - `deploy_check` mappings: async — fetches the citstudent URL, checks HTTP reachability (10s timeout), then inspects `<script>` tags for bundling indicators (hashed filenames, assets/dist/static paths, bundle/min/chunk). Full points for reachable + bundled; half points for reachable but unbundled; 0 for unreachable.
 
   - lint.exclude[]: path substrings to skip during linting
   - repoHygiene.excludedFromRepo[]: folder names that should not be committed (checked via `git ls-files`; only applies to git-cloned repos) 

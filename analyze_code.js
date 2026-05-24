@@ -636,6 +636,13 @@ module.exports = function(students, config, labDir, configDir = null) {
             }
         }
 
+        // Always extract npm packages used in source code (for npm_package handler)
+        {
+            const allFiles = getAllFiles(student.extractedDir, [], ['node_modules', 'dist', '.git']);
+            const pkgFiles = allFiles.filter(f => path.basename(f) === 'package.json');
+            analysis.npmPackages = [...extractUsedPackages(student.extractedDir, pkgFiles)].sort();
+        }
+
         if (config.repoHygiene) {
             analysis.repoHygiene = checkRepoHygiene(student.extractedDir, config.repoHygiene);
             if (analysis.repoHygiene && !analysis.repoHygiene.passed) {

@@ -1,0 +1,144 @@
+{
+  "rubricName": "CS233JS_Lab06_Rubric.xlsm",
+  "titleCell": "A1",
+  "titleText": "Lab 6: Async JS and Web APIs",
+  "summaryCell": "A2",
+  "runtimeCheck": "both",
+  "repoHygiene": {
+    "excludedFromRepo": [
+      "node_modules",
+      "dist",
+      ".DS_Store"
+    ]
+  },
+  "lint": {
+    "exclude": [
+      "node_modules",
+      "dist"
+    ]
+  },
+  "analysis": {
+    "features": [
+      {
+        "id": "fetch_api",
+        "regex": "fetch\\(",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "async_await",
+        "regex": "\\basync\\b",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "json_parse",
+        "regex": "\\.json\\(",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "local_storage",
+        "regex": "localStorage",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "module_imports",
+        "regex": "import\\s+.*from",
+        "fileRegex": "\\.js$"
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "cell": "C7",
+      "commentCell": "E7",
+      "type": "manual",
+      "maxScore": 5,
+      "msg": "NEEDS MANUAL CHECK (module/file for fetch API requests)"
+    },
+    {
+      "cell": "C8",
+      "commentCell": "E8",
+      "type": "manual",
+      "maxScore": 5,
+      "msg": "NEEDS MANUAL CHECK (fetch called asynchronously at right action)"
+    },
+    {
+      "cell": "C9",
+      "commentCell": "E9",
+      "type": "manual",
+      "maxScore": 4,
+      "msg": "NEEDS MANUAL CHECK (async/await or Promise chaining correct)"
+    },
+    {
+      "cell": "C10",
+      "commentCell": "E10",
+      "type": "manual",
+      "maxScore": 5,
+      "msg": "NEEDS MANUAL CHECK (JSON parsed, relevant fields extracted)"
+    },
+    {
+      "cell": "C11",
+      "commentCell": "E11",
+      "type": "feature",
+      "featureId": "local_storage",
+      "minCount": 1,
+      "maxScore": 2,
+      "successMsg": "Yes",
+      "failMsg": "localStorage not found"
+    },
+    {
+      "cell": "C12",
+      "commentCell": "E12",
+      "type": "manual",
+      "maxScore": 5,
+      "msg": "NEEDS MANUAL CHECK (lit-html renders fetched API data correctly)"
+    },
+    {
+      "cell": "C13",
+      "commentCell": "E13",
+      "type": "build_check",
+      "maxScore": 2
+    },
+    {
+      "cell": "C14",
+      "commentCell": "E14",
+      "type": "manual",
+      "maxScore": 2,
+      "msg": "NEEDS MANUAL CHECK (app works correctly)"
+    },
+    {
+      "cell": "C15",
+      "commentCell": "E15",
+      "type": "developer_comments",
+      "maxScore": 1
+    },
+    {
+      "cell": "C16",
+      "commentCell": "E16",
+      "type": "lint",
+      "severity": "warnings",
+      "maxScore": 2
+    },
+    {
+      "cell": "C21",
+      "commentCell": "E21",
+      "linkCell": "F21",
+      "linkUrlType": "github",
+      "type": "github_repo",
+      "maxScore": 2
+    },
+    {
+      "cell": "C22",
+      "commentCell": "E22",
+      "linkCell": "F22",
+      "linkUrlType": "citstudent",
+      "type": "deploy_check",
+      "maxScore": 4
+    },
+    {
+      "cell": "C23",
+      "commentCell": "E23",
+      "type": "code_review",
+      "maxScore": 1
+    }
+  ]
+}

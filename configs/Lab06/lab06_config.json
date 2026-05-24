@@ -44,7 +44,8 @@
         "regex": "import\\s+.*from",
         "fileRegex": "\\.js$"
       }
-    ]
+    ],
+    "customAnalyzer": "lab06_analyzer.js"
   },
   "mappings": [
     {

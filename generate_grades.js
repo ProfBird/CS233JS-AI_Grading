@@ -718,6 +718,20 @@ function formatTextReport(student, config, results, labTitle) {
 
     lines.push('');
     lines.push(`  Total: ${totalScore} / ${totalPossible}`);
+
+    // API completeness breakdown (Lab 6 specific)
+    const api = student.analysis && student.analysis.apiCompleteness;
+    if (api && api.steps) {
+        lines.push('');
+        lines.push(`API Integration Pipeline (${api.version})`);
+        lines.push('-'.repeat(40));
+        for (const step of api.steps) {
+            const check = step.found ? 'YES' : ' no';
+            lines.push(`  [${check}]  Step ${step.step}: ${step.name}`);
+        }
+        lines.push(`  ${api.completed}/${api.total} steps complete`);
+    }
+
     lines.push('');
     lines.push(divider);
 

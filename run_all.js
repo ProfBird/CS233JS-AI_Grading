@@ -541,16 +541,16 @@ async function main() {
     // 2. Runtime Check — attaches to student.runtimeCheck
     await runtimeCheck(toGrade, config, artifactsDir);
 
-    // 3. Analysis — attaches to student.analysis
-    analyzeCode(toGrade, config, artifactsDir, labConfigDir);
-
-    // 3b. Code Review Reading — attaches to student.codeReview
+    // 3. Code Review Reading — attaches to student.codeReview (runs before analysis so group letter is available)
     await readCodeReview(toGrade, config);
 
-    // 4. Linting — attaches to student.lint
+    // 4. Analysis — attaches to student.analysis
+    analyzeCode(toGrade, config, artifactsDir, labConfigDir);
+
+    // 5. Linting — attaches to student.lint
     await lintCode(toGrade, config, artifactsDir);
 
-    // 5. Generation — reads from student objects
+    // 6. Generation — reads from student objects
     let generateSummary;
     if (!skipRubric) {
         generateSummary = await generateGrades(toGrade, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir, textReport });

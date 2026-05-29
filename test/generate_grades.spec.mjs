@@ -4,7 +4,7 @@
  * Tests for the grade handler functions and the handler registry.
  */
 import { describe, it, expect, vi } from 'vitest';
-import generateGrades from '../generate_grades.js';
+import generateGrades from '../pipeline/generate_grades.js';
 
 const { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType } = generateGrades;
 
@@ -45,7 +45,7 @@ describe('handler registry', () => {
         // gets a fresh instance — isolated from the shared registry the other
         // tests depend on. The top-level `import` bindings are unaffected.
         vi.resetModules();
-        const { default: fresh } = await import('../generate_grades.js');
+        const { default: fresh } = await import('../pipeline/generate_grades.js');
         const { getHandler: gh, registerHandler: rh, VALID_MAPPING_TYPES: vmt } = fresh;
         const custom = () => ({ score: 42, comment: 'custom' });
         rh('test_isolated', custom);

@@ -30,10 +30,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'fs';
 import { join, relative, sep } from 'path';
 import { tmpdir } from 'os';
 
-import analyzeCode from '../analyze_code.js';
-import lintCode from '../lint_code.js';
-import runtimeCheck from '../runtime_check.js';
-import fileWalker from '../file_walker.js';
+import analyzeCode from '../pipeline/analyze_code.js';
+import lintCode from '../pipeline/lint_code.js';
+import runtimeCheck from '../pipeline/runtime_check.js';
+import fileWalker from '../lib/file_walker.js';
 
 const { getAllFiles, getSubdirs, checkRepoHygiene } = analyzeCode;
 const { getAllJsFiles } = lintCode;

@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import xlsx from 'xlsx';
-import generateGrades from '../generate_grades.js';
+import generateGrades from '../pipeline/generate_grades.js';
 
 const { computeResults } = generateGrades;
 

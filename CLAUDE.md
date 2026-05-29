@@ -13,8 +13,8 @@ node run_all.js Lab03 --ai-comments     # grade with Ollama-generated rubric sum
 node run_all.js Lab06 --text-report     # grade without rubric spreadsheet, generates .txt reports
 npx eslint --format json path/to/files/*.js
 
-node rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
-node update_lab04_rubric.js                 # one-time: rewrites Lab04 rubric cells to match Lab04 point design
+node bin/rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
+node archive/update_lab04_rubric.js            # one-time: rewrites Lab04 rubric cells to match Lab04 point design
 ```
 
 ```bash
@@ -36,13 +36,19 @@ npx vitest                  # watch mode
 
 ### Pipeline (`run_all.js`)
 
-1. **extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`.
-2. **analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`.
-3. **runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: deletes any existing `node_modules/` then runs `npm install && npm run build`. Attaches to `student.runtimeCheck`.
-4. **lint_code.js** — Runs ESLint (flat config) against each student's `.js` files using `~/.eslint/eslint.config.mjs` — the same config VS Code uses, ensuring consistent results. Attaches to `student.lint`.
-4.5. **read_code_review.js** — Reads each student's code review form (`.docx`). Parses the HTML table (via mammoth) to extract per-item beta and production scores, plus the lab assignment group letter. Attaches `student.codeReview` with `items[{betaScore, prodScore}]`, `productionCompleted`, `group`, and the legacy flat `scores` array.
+1. **pipeline/extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`.
+2. **pipeline/analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`.
+3. **pipeline/runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: deletes any existing `node_modules/` then runs `npm install && npm run build`. Attaches to `student.runtimeCheck`.
+4. **pipeline/lint_code.js** — Runs ESLint (flat config) against each student's `.js` files using `~/.eslint/eslint.config.mjs` — the same config VS Code uses, ensuring consistent results. Attaches to `student.lint`.
+4.5. **pipeline/read_code_review.js** — Reads each student's code review form (`.docx`). Parses the HTML table (via mammoth) to extract per-item beta and production scores, plus the lab assignment group letter. Attaches `student.codeReview` with `items[{betaScore, prodScore}]`, `productionCompleted`, and `group`.
 
-5. **generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`, `student.codeReview`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, uses `adm-zip` after SheetJS writes the file to restore drawing/button XML entries and re-add non-Grade sheets as `veryHidden` (required for VBA module binding). With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`. With `--text-report`, produces `.txt` grade reports instead of spreadsheets — useful when a rubric template isn't available yet.
+5. **pipeline/generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`, `student.codeReview`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, delegates OOXML/ZIP surgery to `lib/rubric_writer.js`. With `--ai-comments`, calls `lib/ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`. With `--text-report`, produces `.txt` grade reports instead of spreadsheets — useful when a rubric template isn't available yet.
+
+### Shared utilities (`lib/`)
+
+- **lib/file_walker.js** — Recursive directory traversal primitive used by the pipeline phases. Options: `visit`, `onFile`, `shouldSkip`, `shouldDescend`, `followSymlinks`, `maxDepth`.
+- **lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
+- **lib/ollama_comments.js** — HTTP client for a local Ollama server; generates one-sentence AI rubric summaries.
 
 ### Config files (`configs/LabXX/labXX_config.json`)
 
@@ -52,8 +58,20 @@ Per-lab JSON specifying rubric filename, runtime check mode, feature regexes, an
 
 ```
 AI_Grading/   ← this directory
-  ├── run_all.js
-  ├── read_code_review.js       # .docx code review form parser
+  ├── run_all.js                   # primary entry point
+  ├── pipeline/                    # grading phases (run in order by run_all.js)
+  │   ├── extract_code.js
+  │   ├── analyze_code.js
+  │   ├── lint_code.js
+  │   ├── runtime_check.js
+  │   ├── read_code_review.js
+  │   └── generate_grades.js
+  ├── lib/                         # shared utilities used by pipeline phases
+  │   ├── file_walker.js
+  │   ├── rubric_writer.js
+  │   └── ollama_comments.js
+  ├── bin/                         # secondary CLI tools
+  │   └── rubric_to_md.js
   ├── configs/
   │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
   │   └── LabXX/

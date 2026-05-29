@@ -7,7 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { walk } = require('./file_walker');
+const { walk } = require('../lib/file_walker');
 
 const LINT_REPORT = 'lint_report.json';
 

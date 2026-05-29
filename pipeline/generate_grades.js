@@ -11,8 +11,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('./ollama_comments');
-const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook } = require('./rubric_writer');
+const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('../lib/ollama_comments');
+const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook } = require('../lib/rubric_writer');
 
 // --- Cell helpers ---
 

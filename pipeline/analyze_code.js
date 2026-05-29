@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { walk } = require('./file_walker');
+const { walk } = require('../lib/file_walker');
 let xlsx;
 try { xlsx = require('xlsx'); } catch (e) {}
 

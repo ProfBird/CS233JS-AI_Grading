@@ -16,7 +16,7 @@ const http = require('http');
 const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
-const { walk } = require('./file_walker');
+const { walk } = require('../lib/file_walker');
 
 const RUNTIME_REPORT = 'runtime_report.json';
 

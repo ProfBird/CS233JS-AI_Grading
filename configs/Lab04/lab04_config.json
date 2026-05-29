@@ -3,6 +3,7 @@
   "titleCell": "A1",
   "titleText": "Lab 4: Node and Vite",
   "summaryCell": "A2",
+  "graderCell": "E1",
   "runtimeCheck": "both",
   "variations": {
     "A": { "appName": "Web Page Bookmarker" },

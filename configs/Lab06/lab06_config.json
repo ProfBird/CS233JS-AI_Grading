@@ -3,6 +3,7 @@
   "titleCell": "A1",
   "titleText": "Lab 6: Async JS and Web APIs",
   "summaryCell": "A2",
+  "graderCell": "E1",
   "runtimeCheck": "both",
   "repoHygiene": {
     "excludedFromRepo": [

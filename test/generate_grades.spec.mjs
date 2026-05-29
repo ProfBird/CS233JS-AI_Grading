@@ -3,10 +3,17 @@
  *
  * Tests for the grade handler functions and the handler registry.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { createRequire } from 'module';
 import generateGrades from '../pipeline/generate_grades.js';
 
-const { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType } = generateGrades;
+const require = createRequire(import.meta.url);
+const XLSX = require('xlsx');
+
+const { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType, resolveOutputPath } = generateGrades;
 
 // ── Registry ───────────────────────────────────────────────────────────────
 
@@ -267,10 +274,16 @@ describe('code_review handler', () => {
         expect(handler(map, student)).toEqual({ score: 2, comment: 'yes and yes' });
     });
 
-    it('returns 0 and "yes and no" when review found but prod column not complete', () => {
+    it('returns half points and "yes and no" when review found but prod column not complete', () => {
         const map = { maxScore: 2 };
         const student = { analysis: { hasCodeReview: true }, codeReview: { productionCompleted: false } };
-        expect(handler(map, student)).toEqual({ score: 0, comment: 'yes and no' });
+        expect(handler(map, student)).toEqual({ score: 1, comment: 'yes and no' });
+    });
+
+    it('returns 0.5 for maxScore 1 when "yes and no"', () => {
+        const map = { maxScore: 1 };
+        const student = { analysis: { hasCodeReview: true }, codeReview: { productionCompleted: false } };
+        expect(handler(map, student)).toEqual({ score: 0.5, comment: 'yes and no' });
     });
 
     it('returns 0 and "no and no" when no code review', () => {
@@ -587,5 +600,74 @@ describe('part_feature handler', () => {
         expect(handler(map, pass)).toEqual({ score: 3, comment: 'Great (2 found)' });
         const fail = { analysis: { partFeatures: { part1: { classes: 0 } } } };
         expect(handler(map, fail)).toEqual({ score: 0, comment: 'Needs work (only 0 found)' });
+    });
+});
+
+// ── resolveOutputPath ──────────────────────────────────────────────────────
+
+function makeXlsx(dir, filename, cellRef, value) {
+    const wb = XLSX.utils.book_new();
+    const ws = {};
+    if (cellRef && value !== undefined) ws[cellRef] = { v: value, t: 's' };
+    ws['!ref'] = cellRef || 'A1';
+    XLSX.utils.book_append_sheet(wb, ws, 'Grade');
+    const p = join(dir, filename);
+    XLSX.writeFile(wb, p);
+    return p;
+}
+
+describe('resolveOutputPath', () => {
+    let tmpDir;
+
+    beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'rop-test-')); });
+    afterEach(() => { rmSync(tmpDir, { recursive: true }); });
+
+    it('returns basePath when graderCell is not configured', () => {
+        const base = join(tmpDir, 'Student_Grade.xlsx');
+        expect(resolveOutputPath(base, null)).toBe(base);
+        expect(resolveOutputPath(base, '')).toBe(base);
+    });
+
+    it('returns basePath when the file does not exist yet (first grade)', () => {
+        const base = join(tmpDir, 'Student_Grade.xlsx');
+        expect(resolveOutputPath(base, 'E1')).toBe(base);
+    });
+
+    it('returns basePath when the existing file still has "Computer"', () => {
+        const base = makeXlsx(tmpDir, 'Student_Grade.xlsx', 'E1', 'Computer');
+        expect(resolveOutputPath(base, 'E1')).toBe(base);
+    });
+
+    it('returns basePath when the cell value has extra whitespace ("Computer  ")', () => {
+        const base = makeXlsx(tmpDir, 'Student_Grade.xlsx', 'E1', 'Computer  ');
+        expect(resolveOutputPath(base, 'E1')).toBe(base);
+    });
+
+    it('returns basePath when graderCell is empty/null (pre-feature file)', () => {
+        const base = makeXlsx(tmpDir, 'Student_Grade.xlsx', null, undefined);
+        expect(resolveOutputPath(base, 'E1')).toBe(base);
+    });
+
+    it('returns V2 when basePath was manually reviewed ("Brian Bird")', () => {
+        makeXlsx(tmpDir, 'Student_Grade.xlsx', 'E1', 'Brian Bird');
+        const base = join(tmpDir, 'Student_Grade.xlsx');
+        const v2 = join(tmpDir, 'Student_Grade-V2.xlsx');
+        expect(resolveOutputPath(base, 'E1')).toBe(v2);
+    });
+
+    it('overwrites V2 on a second regrade when V2 still has "Computer" (no V3 created)', () => {
+        makeXlsx(tmpDir, 'Student_Grade.xlsx', 'E1', 'Brian Bird');
+        const v2 = makeXlsx(tmpDir, 'Student_Grade-V2.xlsx', 'E1', 'Computer');
+        const base = join(tmpDir, 'Student_Grade.xlsx');
+        // First regrade after manual edit → V2 already exists with "Computer" → return V2 (overwrite)
+        expect(resolveOutputPath(base, 'E1')).toBe(v2);
+    });
+
+    it('returns V3 when both base and V2 were manually reviewed', () => {
+        makeXlsx(tmpDir, 'Student_Grade.xlsx', 'E1', 'Brian Bird');
+        makeXlsx(tmpDir, 'Student_Grade-V2.xlsx', 'E1', 'Brian Bird');
+        const base = join(tmpDir, 'Student_Grade.xlsx');
+        const v3 = join(tmpDir, 'Student_Grade-V3.xlsx');
+        expect(resolveOutputPath(base, 'E1')).toBe(v3);
     });
 });

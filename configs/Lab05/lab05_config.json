@@ -3,6 +3,7 @@
   "titleCell": "A1",
   "titleText": "Lab 5: HTML Canvas",
   "summaryCell": "A2",
+  "graderCell": "E1",
   "runtimeCheck": "both",
   "repoHygiene": {
     "excludedFromRepo": [
@@ -18,6 +19,7 @@
     ]
   },
   "analysis": {
+    "customAnalyzer": "lab05_analyzer.js",
     "features": [
       {
         "id": "canvas_context",
@@ -123,21 +125,21 @@
       "cell": "C12",
       "commentCell": "E12",
       "type": "feature",
-      "featureId": "canvas_advanced_feature",
-      "minCount": 4,
+      "featureId": "c12_feature_ok",
+      "minCount": 1,
       "maxScore": 5,
-      "successMsg": "Yes - zoom/drawing/sticker pattern found",
-      "failMsg": "scale/lineTo/drawImage count too low"
+      "successMsg": "Yes - zoom/sticker/freestyle feature found",
+      "failMsg": "No zoom (scale), mouse-positioned sticker, or freestyle drawing (lineTo+mouse) found"
     },
     {
       "cell": "C13",
       "commentCell": "E13",
       "type": "feature",
-      "featureId": "canvas_styling",
-      "minCount": 2,
+      "featureId": "c13_feature_ok",
+      "minCount": 1,
       "maxScore": 3,
-      "successMsg": "Yes - canvas style assignments found",
-      "failMsg": "Fewer than 2 canvas style assignments found"
+      "successMsg": "Yes - user-controlled background/font color/font style found",
+      "failMsg": "No user-controlled background color, font color, or font style found"
     },
     {
       "cell": "C14",

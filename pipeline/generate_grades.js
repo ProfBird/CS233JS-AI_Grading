@@ -12,12 +12,40 @@ const fs = require('fs');
 const path = require('path');
 
 const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('../lib/ollama_comments');
-const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook } = require('../lib/rubric_writer');
+const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } = require('../lib/rubric_writer');
 
 // --- Cell helpers ---
 
 function setCellValue(sheet, cellRef, value) {
     sheet[cellRef] = { v: value, t: typeof value === 'number' ? 'n' : 's' };
+}
+
+// Determines where to write a student's grade spreadsheet, respecting the
+// "Computer" sentinel in config.graderCell.
+//
+// Rules:
+//   - If no graderCell configured, or the base file doesn't exist yet: return basePath.
+//   - Otherwise, scan upward (V2, V3, …) to find the highest existing version.
+//   - If the highest version's graderCell is null (pre-feature file) or "Computer"
+//     (unreviewed): overwrite that file.
+//   - If the highest version was manually reviewed (graderCell changed away from
+//     "Computer"): return the next unused versioned path.
+function resolveOutputPath(basePath, graderCell) {
+    if (!graderCell || !fs.existsSync(basePath)) return basePath;
+
+    const ext = path.extname(basePath);
+    const stem = basePath.slice(0, -ext.length);
+
+    let highest = basePath;
+    let nextV = 2;
+    while (fs.existsSync(`${stem}-V${nextV}${ext}`)) {
+        highest = `${stem}-V${nextV}${ext}`;
+        nextV++;
+    }
+
+    const val = readGradeCell(highest, graderCell);
+    if (val === null || val.trim() === 'Computer') return highest;
+    return `${stem}-V${nextV}${ext}`;
 }
 
 // --- Handler Registry ---
@@ -103,7 +131,7 @@ registerHandler('code_review', (map, student) => {
         return { score: map.maxScore, comment: 'yes and yes' + group };
     }
     if (hasReview && !prodDone) {
-        return { score: 0, comment: 'yes and no' + group };
+        return { score: map.maxScore / 2, comment: 'yes and no' + group };
     }
     return { score: 0, comment: 'no and no' };
 });
@@ -123,20 +151,27 @@ registerHandler('deploy_check', async (map, student) => {
         return { score: 0, comment: 'No deployment URL provided' };
     }
 
-    // 1. Check URL reachability
+    // 1. Check URL reachability — up to 3 attempts (initial + 2 retries) with 2 s delay between
     let html;
-    try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeout);
-        if (!response.ok) {
-            return { score: 0, comment: `URL unreachable (HTTP ${response.status})` };
+    let lastReason;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeout);
+            if (!response.ok) {
+                return { score: 0, comment: `URL unreachable (HTTP ${response.status})` };
+            }
+            html = await response.text();
+            break;
+        } catch (err) {
+            lastReason = err.name === 'AbortError' ? 'timeout' : err.message;
+            if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
         }
-        html = await response.text();
-    } catch (err) {
-        const reason = err.name === 'AbortError' ? 'timeout' : err.message;
-        return { score: 0, comment: `URL unreachable (${reason})` };
+    }
+    if (html === undefined) {
+        return { score: 0, comment: `URL unreachable after 3 attempts (${lastReason})` };
     }
 
     // 2. Check <script> tags for bundling indicators
@@ -692,13 +727,24 @@ module.exports = async function(students, config, labDir, opts = {}) {
             const results = await computeResults(student, config);
             writeResultsToSheet(sheet, results, analysis);
 
+            // Write the grader sentinel so the instructor can identify unreviewed files.
+            if (config.graderCell) {
+                setCellValue(sheet, config.graderCell, 'Computer');
+            }
+
             const outputExt = isXlsm ? '.xlsm' : '.xlsx';
-            const outputPath = path.join(gradeDir, `${student.name}_Grade${outputExt}`);
+            const basePath = path.join(gradeDir, `${student.name}_Grade${outputExt}`);
+            const outputPath = resolveOutputPath(basePath, config.graderCell);
+            const isNewVersion = !fs.existsSync(outputPath);
+
             writeGradeWorkbook(wb, sheet, { templateCols, rubricPath, outputPath, isXlsm });
+            const filePart = isNewVersion && outputPath !== basePath
+                ? `${path.basename(outputPath)} (new version — existing file has manual edits)`
+                : path.basename(outputPath);
             if (analysis.extractionError) {
-                console.log(`  PARTIAL: ${student.name} -> ${path.basename(outputPath)} (extraction failed)`);
+                console.log(`  PARTIAL: ${student.name} -> ${filePart} (extraction failed)`);
             } else {
-                console.log(`  OK: ${student.name} -> ${path.basename(outputPath)}`);
+                console.log(`  OK: ${student.name} -> ${filePart}`);
             }
             summary.successful.push(student.name);
             generated++;
@@ -718,4 +764,5 @@ module.exports.registerHandler = registerHandler;
 module.exports.getHandler = getHandler;
 module.exports.VALID_MAPPING_TYPES = VALID_MAPPING_TYPES;
 module.exports.isCodeSourceType = isCodeSourceType;
+module.exports.resolveOutputPath = resolveOutputPath;
 module.exports.computeResults = computeResults;

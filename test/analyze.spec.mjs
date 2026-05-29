@@ -9,6 +9,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import analyzeCode from '../pipeline/analyze_code.js';
 import lab02Analyzer from '../configs/Lab02/lab02_analyzer.js';
+import lab05Analyzer from '../configs/Lab05/lab05_analyzer.js';
 
 const { stripComments, normalizeDirName, detectPartsPresent } = analyzeCode;
 
@@ -193,5 +194,138 @@ describe('lab02_analyzer', () => {
         const analysis = { features: { modules: 0 } };
         lab02Analyzer([file], analysis);
         expect(analysis.features.modules).toBe(0);
+    });
+});
+
+// ── lab05_analyzer ───────────────────────────────────────────────────────────
+
+describe('lab05_analyzer', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'lab05-test-'));
+    });
+
+    afterEach(() => {
+        rmSync(tmpDir, { recursive: true });
+    });
+
+    function makeAnalysis() {
+        return { features: {} };
+    }
+
+    it('detects zoom via ctx.scale()', () => {
+        const file = join(tmpDir, 'canvas.js');
+        writeFileSync(file, 'ctx.scale(zoomLevel, zoomLevel);\nctx.drawImage(img, 0, 0);');
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c12_feature_ok).toBe(1);
+    });
+
+    it('detects emoji stickers with mousedown positioning', () => {
+        const file = join(tmpDir, 'canvas.js');
+        writeFileSync(file, [
+            'this.stickers = [];',
+            'canvas.addEventListener("mousedown", handleMouseDown);',
+            'ctx.fillText(sticker.emoji, sticker.x, sticker.y);',
+        ].join('\n'));
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c12_feature_ok).toBe(1);
+    });
+
+    it('detects freestyle drawing with lineTo and mousemove', () => {
+        const file = join(tmpDir, 'canvas.js');
+        writeFileSync(file, [
+            'canvas.addEventListener("mousemove", draw);',
+            'ctx.lineTo(event.offsetX, event.offsetY);',
+            'ctx.stroke();',
+        ].join('\n'));
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c12_feature_ok).toBe(1);
+    });
+
+    it('rejects sticker keyword without mouse interaction', () => {
+        const file = join(tmpDir, 'canvas.js');
+        writeFileSync(file, 'this.stickerText = ""; // vestigial, no mouse handler');
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c12_feature_ok).toBe(0);
+    });
+
+    it('rejects lineTo without mouse interaction', () => {
+        const file = join(tmpDir, 'canvas.js');
+        writeFileSync(file, 'ctx.lineTo(10, 10); // single path, no mouse handler');
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c12_feature_ok).toBe(0);
+    });
+
+    it('rejects code with only background drawImage', () => {
+        const file = join(tmpDir, 'canvas.js');
+        writeFileSync(file, 'ctx.drawImage(this.image, 0, 0, width, height);');
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c12_feature_ok).toBe(0);
+    });
+
+    // c13: background / font color / font style (one of three based on group)
+
+    it('c13: detects Group A background color via bgColor model property', () => {
+        const file = join(tmpDir, 'model.js');
+        writeFileSync(file, 'this.bgColor = "#ffffff";\nctx.fillStyle = this.bgColor;');
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c13_feature_ok).toBe(1);
+    });
+
+    it('c13: detects Group B font color via textColor model property', () => {
+        const file = join(tmpDir, 'model.js');
+        writeFileSync(file, 'this.textColor = "#000000";\nctx.fillStyle = this.textColor;');
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c13_feature_ok).toBe(1);
+    });
+
+    it('c13: detects Group C font style via fontSelect model property', () => {
+        const file = join(tmpDir, 'model.js');
+        writeFileSync(file, 'this.fontSelect = "sans-serif";\nctx.font = `bold 40px ${this.fontSelect}`;');
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c13_feature_ok).toBe(1);
+    });
+
+    it('c13: detects font color via private class field (this.#fontFillColor)', () => {
+        const file = join(tmpDir, 'TextSettings.mjs');
+        writeFileSync(file, [
+            '#fontFillColor',
+            'constructor() { this.#fontFillColor = "White"; }',
+            'get fontFillColor() { return this.#fontFillColor; }',
+            'set fontFillColor(v) { this.#fontFillColor = v; }',
+        ].join('\n'));
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c13_feature_ok).toBe(1);
+    });
+
+    it('c13: detects font color via dynamic fillStyle from nested model property', () => {
+        const file = join(tmpDir, 'canvasModel.js');
+        writeFileSync(file, 'ctx.fillStyle = this.#textSettings.fontFillColor;');
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c13_feature_ok).toBe(1);
+    });
+
+    it('c13: rejects code with only hardcoded canvas styling (no model property)', () => {
+        const file = join(tmpDir, 'model.js');
+        writeFileSync(file, [
+            'ctx.fillStyle = "white";',
+            'ctx.strokeStyle = "black";',
+            'ctx.font = "bold 40px Impact, sans-serif";',
+        ].join('\n'));
+        const analysis = makeAnalysis();
+        lab05Analyzer([file], analysis);
+        expect(analysis.features.c13_feature_ok).toBe(0);
     });
 });

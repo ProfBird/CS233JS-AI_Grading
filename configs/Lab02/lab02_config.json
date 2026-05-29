@@ -4,6 +4,7 @@
   "titleText": "Lab 2: ES6 Key Features",
   "summaryCell": "A2",
   "graderCell": "E1",
+  "codeReview": { "studentNameCell": "B1", "groupCell": "C1" },
   "runtimeCheck": "browser",
   "variations": {
     "A": { "appName": "Double Trouble Domino" },

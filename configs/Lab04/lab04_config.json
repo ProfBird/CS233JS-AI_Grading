@@ -4,6 +4,7 @@
   "titleText": "Lab 4: Node and Vite",
   "summaryCell": "A2",
   "graderCell": "E1",
+  "codeReview": { "studentNameCell": "B1", "groupCell": "C1" },
   "runtimeCheck": "both",
   "variations": {
     "A": { "appName": "Web Page Bookmarker" },

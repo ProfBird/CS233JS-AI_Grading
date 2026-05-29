@@ -3,7 +3,7 @@
  *
  * Smoke tests for the analysis module's pure utility functions.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -11,7 +11,7 @@ import analyzeCode from '../pipeline/analyze_code.js';
 import lab02Analyzer from '../configs/Lab02/lab02_analyzer.js';
 import lab05Analyzer from '../configs/Lab05/lab05_analyzer.js';
 
-const { stripComments, normalizeDirName, detectPartsPresent } = analyzeCode;
+const { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer } = analyzeCode;
 
 // ── stripComments ────────────────────────────────────────────────────────
 
@@ -156,6 +156,45 @@ describe('detectPartsPresent', () => {
         writeFileSync(join(tmpDir, 'gameLogic.js'), '');
         const result = detectPartsPresent(tmpDir, {}, {});
         expect(result.allPresent).toBe(false);
+    });
+});
+
+// ── applyCustomAnalyzer (custom-analyzer extension point) ────────────────────
+
+describe('applyCustomAnalyzer', () => {
+    let warnSpy;
+    beforeEach(() => { warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+    afterEach(() => { warnSpy.mockRestore(); });
+
+    it('merges the analyzer return value into analysis', () => {
+        const analysis = { features: { a: 1 } };
+        const analyzer = () => ({ features: { a: 1, b: 2 }, custom: 'x' });
+        applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' });
+        expect(analysis.custom).toBe('x');
+        expect(analysis.features).toEqual({ a: 1, b: 2 });
+    });
+
+    it('swallows a throwing analyzer and leaves analysis intact', () => {
+        const analysis = { features: { a: 1 } };
+        const analyzer = () => { throw new Error('boom'); };
+        expect(() => applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' })).not.toThrow();
+        expect(analysis).toEqual({ features: { a: 1 } });
+        expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it('ignores a non-object return value', () => {
+        const analysis = { features: {} };
+        applyCustomAnalyzer(() => 42, [], analysis, {}, { name: 'S' });
+        expect(analysis).toEqual({ features: {} });
+    });
+
+    it('passes jsFiles, analysis, config, and student through to the analyzer', () => {
+        const seen = {};
+        const analyzer = (jsFiles, _analysis, config, student) => { Object.assign(seen, { jsFiles, config, student }); };
+        applyCustomAnalyzer(analyzer, ['a.js'], { features: {} }, { x: 1 }, { name: 'S' });
+        expect(seen.jsFiles).toEqual(['a.js']);
+        expect(seen.config).toEqual({ x: 1 });
+        expect(seen.student).toEqual({ name: 'S' });
     });
 });
 

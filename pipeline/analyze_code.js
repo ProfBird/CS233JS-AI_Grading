@@ -497,6 +497,24 @@ function checkPackageJson(extractedDir, packageCheckConfig) {
     return { found: true, passed: issues.length === 0, issues };
 }
 
+/**
+ * Custom analyzer extension point. Invokes a lab's custom analyzer and merges its
+ * returned object into the analysis. A throwing analyzer is logged and skipped
+ * (analysis is left intact); a non-object return is ignored.
+ * @param {function} customAnalyzer — (jsFiles, analysis, config, student) => object|undefined
+ */
+function applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student) {
+    try {
+        const customResults = customAnalyzer(jsFiles, analysis, config, student);
+        if (customResults && typeof customResults === 'object') {
+            Object.assign(analysis, customResults);
+        }
+    } catch (e) {
+        const name = (student && student.name) || 'unknown';
+        console.warn(`  WARNING: Custom analyzer failed for ${name}: ${e.message}`);
+    }
+}
+
 module.exports = function(students, config, labDir, configDir = null) {
     console.log("--- Analysis Phase ---");
 
@@ -617,14 +635,7 @@ module.exports = function(students, config, labDir, configDir = null) {
 
         // Custom analyzer hook — merges additional data into analysis
         if (customAnalyzer) {
-            try {
-                const customResults = customAnalyzer(jsFiles, analysis, config, student);
-                if (customResults && typeof customResults === 'object') {
-                    Object.assign(analysis, customResults);
-                }
-            } catch (e) {
-                console.warn(`  WARNING: Custom analyzer failed for ${student.name}: ${e.message}`);
-            }
+            applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student);
         }
 
         if (config.packageCheck) {
@@ -678,3 +689,4 @@ module.exports.getAllFiles = getAllFiles;
 module.exports.getSubdirs = getSubdirs;
 module.exports.checkRepoHygiene = checkRepoHygiene;
 module.exports.detectPartsPresent = detectPartsPresent;
+module.exports.applyCustomAnalyzer = applyCustomAnalyzer;

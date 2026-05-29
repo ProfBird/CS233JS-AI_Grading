@@ -37,12 +37,12 @@ npx vitest                  # watch mode
 ### Pipeline (`run_all.js`)
 
 1. **pipeline/extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`.
-2. **pipeline/analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`.
+2. **pipeline/analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`. A configured `customAnalyzer` is invoked via `applyCustomAnalyzer()`, whose return object is merged into `analysis` (a throwing analyzer is logged and skipped). A custom analyzer can attach `analysis.reportSections` (see below) to add lab-specific output to text reports without touching generic code.
 3. **pipeline/runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: deletes any existing `node_modules/` then runs `npm install && npm run build`. Attaches to `student.runtimeCheck`.
 4. **pipeline/lint_code.js** — Runs ESLint (flat config) against each student's `.js` files using `~/.eslint/eslint.config.mjs` — the same config VS Code uses, ensuring consistent results. Attaches to `student.lint`.
 4.5. **pipeline/read_code_review.js** — Reads each student's code review form (`.docx`). Parses the HTML table (via mammoth) to extract per-item beta and production scores, plus the lab assignment group letter. Attaches `student.codeReview` with `items[{betaScore, prodScore}]`, `productionCompleted`, and `group`.
 
-5. **pipeline/generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`, `student.codeReview`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, delegates OOXML/ZIP surgery to `lib/rubric_writer.js`. With `--ai-comments`, calls `lib/ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`. With `--text-report`, produces `.txt` grade reports instead of spreadsheets — useful when a rubric template isn't available yet.
+5. **pipeline/generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`, `student.codeReview`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, delegates OOXML/ZIP surgery to `lib/rubric_writer.js`. With `--ai-comments`, calls `lib/ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`. With `--text-report`, produces `.txt` grade reports instead of spreadsheets — useful when a rubric template isn't available yet. If `config.graderCell` is set, writes "Computer" into that cell; on regrade, creates a versioned copy (`-V2`, `-V3`, …) rather than overwriting a spreadsheet that has been manually reviewed.
 
 ### Shared utilities (`lib/`)
 
@@ -113,10 +113,13 @@ AI_Grading/   ← this directory
   - runtimeCheck: "browser" | "build"
 
   - summaryCell: string (optional) — cell for AI/manual summary comment
+  - graderCell: string (optional) — cell written with "Computer" on every new spreadsheet. On `--regrade`, if the cell still contains "Computer" the file is overwritten; if it has been changed (e.g. to "Brian Bird" after manual review) a new versioned copy is written (`StudentName_Grade-V2.xlsm`, `-V3`, …) instead.
   - titleCell, titleText: (optional) — cell and text for lab title
 
+  - codeReview: { studentNameCell, groupCell, manualFallback } (optional) — `studentNameCell`/`groupCell` name the cells where the student name and lab group letter are written. There is **no default**: if a cell is not specified, that value is not written (generic code makes no assumption about rubric layout). All current lab rubrics use `B1`/`C1`.
+
   - analysis.features[]: { id, regex, fileRegex } — features to count via regex
-  - analysis.customAnalyzer: string (optional) — path (relative to configs/LabXX/) to a JS module that receives (jsFiles, analysis, config, student) and merges its return into analysis
+  - analysis.customAnalyzer: string (optional) — path (relative to configs/LabXX/) to a JS module that receives (jsFiles, analysis, config, student) and merges its return into analysis. The return may include `reportSections: [{ title, lines[] }]` — the text-report renderer prints these generically (used by Lab06 for its "API Integration Pipeline" breakdown), so lab-specific report content lives in the analyzer, not in pipeline code.
 
   - parts[]: { id, gameNames[], folderPattern, featureCounts[] } — multi-part lab config (optional). gameNames is the list of expected game/project names for that part; folderPattern is a regex fallback for "Part1/Pt2"-style folder naming.
 
@@ -125,7 +128,7 @@ AI_Grading/   ← this directory
     - lint mappings accept an optional `severity: "errors" | "warnings"` to report only errors (syntax) or only warnings (style) into separate cells
     - `code_review` mappings: comment reports both review presence and production column completion as "yes and yes" / "yes and no" / "no and no". Full points when both are true; half points (maxScore/2) when review submitted but production column incomplete; 0 when no review.
     - `manual` mappings: assigned `_reviewIndex` sequentially (order in config). Uses production score from code review form; falls back to beta score when production cell is empty. Comment indicates which column was used.
-    - `deploy_check` mappings: async — fetches the citstudent URL, checks HTTP reachability (10s timeout), then inspects `<script>` tags for bundling indicators (hashed filenames, assets/dist/static paths, bundle/min/chunk). Full points for reachable + bundled; half points for reachable but unbundled; 0 for unreachable.
+    - `deploy_check` mappings: async — fetches the citstudent URL with up to 3 attempts (10s timeout each, 2s delay between retries), then inspects `<script>` tags for bundling indicators (hashed filenames, assets/dist/static paths, bundle/min/chunk). Full points for reachable + bundled; half points for reachable but unbundled; 0 for unreachable after all attempts.
 
   - lint.exclude[]: path substrings to skip during linting
   - repoHygiene.excludedFromRepo[]: folder names that should not be committed (checked via `git ls-files`; only applies to git-cloned repos) 

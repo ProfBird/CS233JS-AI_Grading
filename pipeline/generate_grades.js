@@ -559,17 +559,16 @@ function formatTextReport(student, config, results, labTitle) {
     lines.push('');
     lines.push(`  Total: ${totalScore} / ${totalPossible}`);
 
-    // API completeness breakdown (Lab 6 specific)
-    const api = student.analysis && student.analysis.apiCompleteness;
-    if (api && api.steps) {
+    // Custom report sections contributed by a lab's analyzer (analysis.reportSections).
+    // Generic code renders whatever lines the analyzer produced — it has no knowledge
+    // of any particular lab's structure.
+    for (const section of (student.analysis && student.analysis.reportSections) || []) {
         lines.push('');
-        lines.push(`API Integration Pipeline (${api.version})`);
-        lines.push('-'.repeat(40));
-        for (const step of api.steps) {
-            const check = step.found ? 'YES' : ' no';
-            lines.push(`  [${check}]  Step ${step.step}: ${step.name}`);
+        if (section.title) {
+            lines.push(section.title);
+            lines.push('-'.repeat(40));
         }
-        lines.push(`  ${api.completed}/${api.total} steps complete`);
+        for (const line of section.lines || []) lines.push(`  ${line}`);
     }
 
     lines.push('');
@@ -708,18 +707,21 @@ module.exports = async function(students, config, labDir, opts = {}) {
                 setCellValue(sheet, config.summaryCell, summaryText);
             }
 
-            // Write student name and lab assignment group
+            // Write student name and lab assignment group — only where the config
+            // says to. Generic code makes no assumption about the rubric layout.
             {
-                const nameCell = (config.codeReview && config.codeReview.studentNameCell) || 'B1';
-                setCellValue(sheet, nameCell, student.name);
+                const nameCell = config.codeReview && config.codeReview.studentNameCell;
+                if (nameCell) setCellValue(sheet, nameCell, student.name);
 
-                const groupCell = (config.codeReview && config.codeReview.groupCell) || 'C1';
-                const cr = student.codeReview || {};
-                const group = cr.group
-                    || (student.analysis && student.analysis.versionVariation
-                        && student.analysis.versionVariation.detected)
-                    || '?';
-                setCellValue(sheet, groupCell, group);
+                const groupCell = config.codeReview && config.codeReview.groupCell;
+                if (groupCell) {
+                    const cr = student.codeReview || {};
+                    const group = cr.group
+                        || (student.analysis && student.analysis.versionVariation
+                            && student.analysis.versionVariation.detected)
+                        || '?';
+                    setCellValue(sheet, groupCell, group);
+                }
             }
 
             // Per-mapping scores/comments — computed once (shared with the text

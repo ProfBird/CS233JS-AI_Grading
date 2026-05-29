@@ -148,6 +148,29 @@ describe('spreadsheet path', () => {
         expect(cellVal(s, 'B5')).toBe(0);
         expect(cellVal(s, 'C5')).toBe('Yes (3 found)');
     });
+
+    it('writes name/group only to the cells named in config.codeReview', async () => {
+        makeRubric('namegroup.xlsx');
+        const config = {
+            codeReview: { studentNameCell: 'B1', groupCell: 'C1' },
+            mappings: [{ type: 'feature', featureId: 'arrow', maxScore: 2, cell: 'B5', commentCell: 'C5' }],
+        };
+        const student = { name: 'Ada', analysis: { features: { arrow: 1 } }, codeReview: { group: 'B' } };
+        const s = await gradeToSheet(student, config, 'namegroup.xlsx');
+        expect(cellVal(s, 'B1')).toBe('Ada');
+        expect(cellVal(s, 'C1')).toBe('B');
+    });
+
+    it('does not write name/group cells when config.codeReview is absent', async () => {
+        makeRubric('nonamegroup.xlsx');
+        const config = {
+            mappings: [{ type: 'feature', featureId: 'arrow', maxScore: 2, cell: 'B5', commentCell: 'C5' }],
+        };
+        const student = { name: 'Ada', analysis: { features: { arrow: 1 } }, codeReview: { group: 'B' } };
+        const s = await gradeToSheet(student, config, 'nonamegroup.xlsx');
+        expect(cellVal(s, 'B1')).toBeUndefined();
+        expect(cellVal(s, 'C1')).toBeUndefined();
+    });
 });
 
 // ── Text report path ───────────────────────────────────────────────────────
@@ -189,6 +212,35 @@ describe('text report path', () => {
         expect(txt).toContain('loops');
         expect(txt).toContain('N/A (code unavailable)');
         expect(txt).toContain('Total: 0 / 4');
+    });
+
+    it('renders analyzer-contributed reportSections generically', async () => {
+        makeRubric('sections_txt.xlsx');
+        const config = {
+            mappings: [{ type: 'feature', featureId: 'arrow', maxScore: 2, cell: 'B5', commentCell: 'C5' }],
+        };
+        const student = {
+            name: 'Ada',
+            analysis: {
+                features: { arrow: 1 },
+                reportSections: [{ title: 'Custom Pipeline', lines: ['[YES]  Step 1: foo', '1/1 steps complete'] }],
+            },
+        };
+        const txt = await gradeToText(student, config, 'sections_txt.xlsx');
+        expect(txt).toContain('Custom Pipeline');
+        expect(txt).toContain('[YES]  Step 1: foo');
+        expect(txt).toContain('1/1 steps complete');
+    });
+
+    it('omits any custom section when reportSections is absent', async () => {
+        makeRubric('nosections_txt.xlsx');
+        const config = {
+            mappings: [{ type: 'feature', featureId: 'arrow', maxScore: 2, cell: 'B5', commentCell: 'C5' }],
+        };
+        const student = { name: 'Bob', analysis: { features: { arrow: 1 } } };
+        const txt = await gradeToText(student, config, 'nosections_txt.xlsx');
+        expect(txt).toContain('GRADE REPORT: Bob');
+        expect(txt).not.toContain('Custom Pipeline');
     });
 });
 

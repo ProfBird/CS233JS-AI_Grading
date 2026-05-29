@@ -4,6 +4,7 @@
   "titleText": "Lab 3: ES6 Classes",
   "summaryCell": "A2",
   "graderCell": "E1",
+  "codeReview": { "studentNameCell": "B1", "groupCell": "C1" },
   "runtimeCheck": "browser",
   "lint": {
     "exclude": [

@@ -205,15 +205,25 @@ module.exports = function (jsFiles, analysis, config, student) {
     }
 
     const completed = steps.filter(s => s.found).length;
+    const versionLabel = version ? version.label : 'unknown';
 
     return {
         apiCompleteness: {
-            version: version ? version.label : 'unknown',
+            version: versionLabel,
             group: group || '?',
             detected: !group || !VERSIONS[group],
             steps,
             completed,
             total: 5
-        }
+        },
+        // Formatted lines for the generic text-report renderer (analysis.reportSections).
+        // Keeping the formatting here means generic code stays lab-agnostic.
+        reportSections: [{
+            title: `API Integration Pipeline (${versionLabel})`,
+            lines: [
+                ...steps.map(s => `[${s.found ? 'YES' : ' no'}]  Step ${s.step}: ${s.name}`),
+                `${completed}/5 steps complete`
+            ]
+        }]
     };
 };

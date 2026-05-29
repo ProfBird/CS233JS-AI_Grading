@@ -45,8 +45,8 @@
         "fileRegex": "\\.js$"
       },
       {
-        "id": "filter_names",
-        "regex": "\\b(?:grayscale|sepia|contrast|brightness|blur|saturate|hue-rotate|invert|opacity)\\b",
+        "id": "canvas_filtering",
+        "regex": "(?:\\.filter\\s*=|from\\s+['\"]lena)",
         "fileRegex": "\\.js$"
       },
       {
@@ -86,11 +86,11 @@
       "cell": "C8",
       "commentCell": "E8",
       "type": "feature",
-      "featureId": "filter_names",
-      "minCount": 4,
+      "featureId": "canvas_filtering",
+      "minCount": 1,
       "maxScore": 3,
-      "successMsg": "Yes - 4+ filter keywords found",
-      "failMsg": "Fewer than 4 filter keywords found"
+      "successMsg": "Yes - canvas filter or lena package used",
+      "failMsg": "No canvas filter or lena package found"
     },
     {
       "cell": "C9",

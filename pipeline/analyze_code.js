@@ -42,13 +42,13 @@ function escapeRegex(word) {
 // Collects every file under dirPath. Exclusions are substring matches against
 // the full path, applied to both files and directories. Does not descend into
 // symlinks; does NOT skip dot-dirs unless they match an exclusion.
-function getAllFiles(dirPath, arrayOfFiles, exclusions = []) {
-    arrayOfFiles = arrayOfFiles || [];
+function getAllFiles(dirPath, exclusions = []) {
+    const results = [];
     walk(dirPath, {
         shouldSkip: full => exclusions.some(ex => full.includes(ex)),
-        onFile: full => arrayOfFiles.push(full)
+        onFile: full => results.push(full)
     });
-    return arrayOfFiles;
+    return results;
 }
 
 function countFeatures(allFiles, configFeatures) {
@@ -122,14 +122,13 @@ function dirMatchesGameNames(dir, gameNames) {
 }
 
 function getSubdirs(dirPath) {
-    try {
-        return fs.readdirSync(dirPath).filter(f => {
-            if (f.startsWith('.')) return false;
-            let stats;
-            try { stats = fs.lstatSync(path.join(dirPath, f)); } catch (e) { return false; }
-            return stats.isDirectory() && !stats.isSymbolicLink();
-        });
-    } catch (e) { return []; }
+    const names = [];
+    walk(dirPath, {
+        shouldSkip: (full, name) => name.startsWith('.'),
+        shouldDescend: () => false,
+        onDir: (full, name) => names.push(name)
+    });
+    return names;
 }
 
 function findPartDir(extractedDir, gameNames, folderPattern) {
@@ -209,6 +208,20 @@ function detectPartsPresent(extractedDir, config, partGameNames) {
             }
         }
 
+        // Fallback: if no part directories were found, look for part-numbered filenames.
+        // Handles submissions where Part 1 files sit at the repo root instead of a
+        // dedicated subfolder (e.g. CS233JS_Lab01_Part1.html placed at the top level).
+        if (!Object.keys(result).some(k => k !== 'allPresent')) {
+            const allFiles = getAllFiles(extractedDir, ['node_modules', 'dist', '.git']);
+            for (const f of allFiles) {
+                const basename = path.basename(f);
+                const match = basename.match(/(?:^|[^a-zA-Z])(?:part|pt)[_-]?(\d+)/i);
+                if (match) {
+                    result[`part${match[1]}`] = true;
+                }
+            }
+        }
+
         const detectedParts = Object.keys(result).filter(k => k !== 'allPresent');
         result.allPresent = detectedParts.length > 0;
     }
@@ -265,7 +278,7 @@ function buildVariationCorpus(extractedDir) {
     } catch (e) { /* skip */ }
 
     // HTML title tags (up to 20 HTML files, skipping excluded dirs)
-    const allFiles = getAllFiles(extractedDir, [], []).filter(f => !isExcluded(f));
+    const allFiles = getAllFiles(extractedDir).filter(f => !isExcluded(f));
     const htmlFiles = allFiles.filter(f => f.endsWith('.html'));
     for (const f of htmlFiles.slice(0, 20)) {
         try {
@@ -378,7 +391,7 @@ function checkRepoHygiene(extractedDir, hygiene) {
 
 function extractUsedPackages(extractedDir, pkgJsonPaths) {
     const exclusions = ['node_modules', 'dist', '.git'];
-    const allFiles = getAllFiles(extractedDir, [], exclusions);
+    const allFiles = getAllFiles(extractedDir, exclusions);
     const sourceFiles = allFiles.filter(f => /\.(js|mjs|cjs|jsx|ts|tsx)$/.test(f));
 
     const used = new Set();
@@ -428,7 +441,7 @@ function extractUsedPackages(extractedDir, pkgJsonPaths) {
 }
 
 function checkPackageJson(extractedDir, packageCheckConfig) {
-    const allFiles = getAllFiles(extractedDir, [], ['node_modules', 'dist', '.git']);
+    const allFiles = getAllFiles(extractedDir, ['node_modules', 'dist', '.git']);
     const pkgFiles = allFiles.filter(f => path.basename(f) === 'package.json');
 
     if (pkgFiles.length === 0) {
@@ -546,7 +559,7 @@ module.exports = function(students, config, labDir, configDir = null) {
         }
 
         const exclusions = ['node_modules', 'dist', '.git'];
-        const allExtractedFiles = getAllFiles(student.extractedDir, [], exclusions);
+        const allExtractedFiles = getAllFiles(student.extractedDir, exclusions);
 
         const checkCodeReview = (fileName) => {
             const basename = path.basename(fileName).toLowerCase();
@@ -586,7 +599,7 @@ module.exports = function(students, config, labDir, configDir = null) {
                 const gameNames = partGameNames[part.id] || [];
                 const partDir = findPartDir(student.extractedDir, gameNames, part.folderPattern);
                 if (partDir) {
-                    const partFiles = getAllFiles(partDir, [], exclusions);
+                    const partFiles = getAllFiles(partDir, exclusions);
                     analysis.partFeatures[part.id] = countFeatures(partFiles, config.analysis && config.analysis.features);
                     const featureLog = (config.analysis && config.analysis.features || []).map(f =>
                         `${f.id}=${analysis.partFeatures[part.id][f.id] || 0}`
@@ -623,7 +636,7 @@ module.exports = function(students, config, labDir, configDir = null) {
 
         // Always extract npm packages used in source code (for npm_package handler)
         {
-            const allFiles = getAllFiles(student.extractedDir, [], ['node_modules', 'dist', '.git']);
+            const allFiles = getAllFiles(student.extractedDir, ['node_modules', 'dist', '.git']);
             const pkgFiles = allFiles.filter(f => path.basename(f) === 'package.json');
             analysis.npmPackages = [...extractUsedPackages(student.extractedDir, pkgFiles)].sort();
         }
@@ -664,3 +677,4 @@ module.exports.normalizeDirName = normalizeDirName;
 module.exports.getAllFiles = getAllFiles;
 module.exports.getSubdirs = getSubdirs;
 module.exports.checkRepoHygiene = checkRepoHygiene;
+module.exports.detectPartsPresent = detectPartsPresent;

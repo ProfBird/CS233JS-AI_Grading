@@ -43,6 +43,31 @@
         "id": "module_imports",
         "regex": "import\\s+.*from",
         "fileRegex": "\\.js$"
+      },
+      {
+        "id": "filter_names",
+        "regex": "\\b(?:grayscale|sepia|contrast|brightness|blur|saturate|hue-rotate|invert|opacity)\\b",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "stroke_text",
+        "regex": "\\bstrokeText\\(",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "canvas_clip_shape",
+        "regex": "\\b(?:arc|ellipse|roundRect)\\(",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "canvas_advanced_feature",
+        "regex": "\\b(?:scale|lineTo|drawImage)\\(",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "canvas_styling",
+        "regex": "(?:\\.fillStyle|\\.strokeStyle|\\.font)\\s*=",
+        "fileRegex": "\\.js$"
       }
     ]
   },
@@ -50,55 +75,74 @@
     {
       "cell": "C7",
       "commentCell": "E7",
-      "type": "manual",
+      "type": "feature",
+      "featureId": "local_storage",
+      "minCount": 1,
       "maxScore": 5,
-      "msg": "NEEDS MANUAL CHECK (profile stored in localStorage)"
+      "successMsg": "Yes - localStorage usage found",
+      "failMsg": "No localStorage usage found"
     },
     {
       "cell": "C8",
       "commentCell": "E8",
-      "type": "manual",
+      "type": "feature",
+      "featureId": "filter_names",
+      "minCount": 4,
       "maxScore": 3,
-      "msg": "NEEDS MANUAL CHECK (at least 4 filters)"
+      "successMsg": "Yes - 4+ filter keywords found",
+      "failMsg": "Fewer than 4 filter keywords found"
     },
     {
       "cell": "C9",
       "commentCell": "E9",
       "type": "npm_package",
+      "exclude": ["vite", "bootstrap"],
       "maxScore": 3
     },
     {
       "cell": "C10",
       "commentCell": "E10",
-      "type": "manual",
+      "type": "feature",
+      "featureId": "stroke_text",
+      "minCount": 1,
       "maxScore": 3,
-      "msg": "NEEDS MANUAL CHECK (outline text and color)"
+      "successMsg": "Yes - strokeText() found",
+      "failMsg": "strokeText() not found"
     },
     {
       "cell": "C11",
       "commentCell": "E11",
-      "type": "manual",
+      "type": "feature",
+      "featureId": "canvas_clip_shape",
+      "minCount": 1,
       "maxScore": 4,
-      "msg": "NEEDS MANUAL CHECK (profile frame: circular, oval, or rounded)"
+      "successMsg": "Yes - arc/ellipse/roundRect found",
+      "failMsg": "No arc/ellipse/roundRect found"
     },
     {
       "cell": "C12",
       "commentCell": "E12",
-      "type": "manual",
+      "type": "feature",
+      "featureId": "canvas_advanced_feature",
+      "minCount": 4,
       "maxScore": 5,
-      "msg": "NEEDS MANUAL CHECK (zoom, stickers, or freestyle drawing)"
+      "successMsg": "Yes - zoom/drawing/sticker pattern found",
+      "failMsg": "scale/lineTo/drawImage count too low"
     },
     {
       "cell": "C13",
       "commentCell": "E13",
-      "type": "manual",
+      "type": "feature",
+      "featureId": "canvas_styling",
+      "minCount": 2,
       "maxScore": 3,
-      "msg": "NEEDS MANUAL CHECK (change background, font color, or font style)"
+      "successMsg": "Yes - canvas style assignments found",
+      "failMsg": "Fewer than 2 canvas style assignments found"
     },
     {
       "cell": "C14",
       "commentCell": "E14",
-      "type": "build_check",
+      "type": "browser_check",
       "maxScore": 2
     },
     {

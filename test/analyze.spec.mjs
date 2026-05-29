@@ -4,13 +4,13 @@
  * Smoke tests for the analysis module's pure utility functions.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import analyzeCode from '../pipeline/analyze_code.js';
 import lab02Analyzer from '../configs/Lab02/lab02_analyzer.js';
 
-const { stripComments, normalizeDirName } = analyzeCode;
+const { stripComments, normalizeDirName, detectPartsPresent } = analyzeCode;
 
 // ── stripComments ────────────────────────────────────────────────────────
 
@@ -88,6 +88,73 @@ describe('normalizeDirName', () => {
 
     it('handles dir names that are just a word', () => {
         expect(normalizeDirName('game')).toBe('game');
+    });
+});
+
+// ── detectPartsPresent ───────────────────────────────────────────────────────
+
+describe('detectPartsPresent', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'parts-test-'));
+    });
+
+    afterEach(() => {
+        rmSync(tmpDir, { recursive: true });
+    });
+
+    it('detects part1 from a subdirectory named "part1"', () => {
+        mkdirSync(join(tmpDir, 'part1'));
+        const result = detectPartsPresent(tmpDir, {}, {});
+        expect(result.part1).toBe(true);
+        expect(result.allPresent).toBe(true);
+    });
+
+    it('detects part1 from a subdirectory named "Part 1"', () => {
+        mkdirSync(join(tmpDir, 'Part 1'));
+        const result = detectPartsPresent(tmpDir, {}, {});
+        expect(result.part1).toBe(true);
+    });
+
+    it('detects part1 from a filename at the root (e.g. CS233JS_Lab01_Part1.html)', () => {
+        writeFileSync(join(tmpDir, 'CS233JS_Lab01_Part1.html'), '');
+        writeFileSync(join(tmpDir, 'CS233JS_Lab01_Part1.js'), '');
+        const result = detectPartsPresent(tmpDir, {}, {});
+        expect(result.part1).toBe(true);
+        expect(result.allPresent).toBe(true);
+    });
+
+    it('detects part1 from a filename in a subdirectory', () => {
+        const sub = join(tmpDir, 'MyGame');
+        mkdirSync(sub);
+        writeFileSync(join(sub, 'Lab02_Part1_exercises.html'), '');
+        const result = detectPartsPresent(tmpDir, {}, {});
+        expect(result.part1).toBe(true);
+    });
+
+    it('does not false-positive on a file named "counterpart1.js"', () => {
+        writeFileSync(join(tmpDir, 'counterpart1.js'), '');
+        const result = detectPartsPresent(tmpDir, {}, {});
+        expect(result.part1).toBeUndefined();
+        expect(result.allPresent).toBe(false);
+    });
+
+    it('prefers directory detection over file fallback when directories exist', () => {
+        mkdirSync(join(tmpDir, 'part1'));
+        // a file that would also match — directory detection runs first
+        writeFileSync(join(tmpDir, 'part2_notes.html'), '');
+        const result = detectPartsPresent(tmpDir, {}, {});
+        expect(result.part1).toBe(true);
+        // part2 should NOT be set via file fallback since part1 dir was found
+        expect(result.part2).toBeUndefined();
+    });
+
+    it('returns allPresent false when no parts are found at all', () => {
+        writeFileSync(join(tmpDir, 'index.html'), '');
+        writeFileSync(join(tmpDir, 'gameLogic.js'), '');
+        const result = detectPartsPresent(tmpDir, {}, {});
+        expect(result.allPresent).toBe(false);
     });
 });
 

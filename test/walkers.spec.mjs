@@ -19,9 +19,10 @@
  *   - getAllJsFiles:      exclusions are CASE-INSENSITIVE substring matches; skips
  *                         dot-dirs and "__MACOSX"; still collects dot-files ending
  *                         in .js; returns only .js; skips symlinks.
- *   - findAllIndexHtmlDirs: hardcoded skip of node_modules/dist/dot-dirs, but NOT
+ *   - findAllIndexHtmlDirs: skips node_modules (substring)/dist/dot-dirs, but NOT
  *                         "__MACOSX"; returns dirs directly containing index.html.
- *   - findDistIndexHtmlDirs: returns dist/ dirs that contain index.html.
+ *   - findDistIndexHtmlDirs: descends into dist/ dirs and returns those containing
+ *                         index.html; skips node_modules (substring) and dot-dirs.
  *   - findPackageJsonDirs: skips node_modules (substring), dot-dirs, and "dist"
  *                         (exact name); returns dirs containing package.json.
  */
@@ -116,7 +117,7 @@ afterAll(() => {
 
 describe('getAllFiles', () => {
     it('with no exclusions: collects every file (incl. dot-dirs, node_modules, dist)', () => {
-        expect(rel(getAllFiles(root, []))).toEqual(sorted([
+        expect(rel(getAllFiles(root))).toEqual(sorted([
             '.eslintrc.js',
             '.hidden/index.html',
             '.hidden/secret.js',
@@ -140,7 +141,7 @@ describe('getAllFiles', () => {
     });
 
     it('with exclusions: drops paths containing any excluded substring (but keeps dot-dirs and __MACOSX)', () => {
-        expect(rel(getAllFiles(root, [], ['node_modules', 'dist', '.git']))).toEqual(sorted([
+        expect(rel(getAllFiles(root, ['node_modules', 'dist', '.git']))).toEqual(sorted([
             '.eslintrc.js',
             '.hidden/index.html',
             '.hidden/secret.js',
@@ -369,6 +370,39 @@ describe('walk', () => {
         const dirs = [];
         walk(wroot, { visit: d => dirs.push(d), maxDepth: 1 });
         expect(relTo(wroot, dirs)).toEqual(sorted(['.', 'sub']));
+    });
+
+    it('onDir fires for every non-skipped directory entry, before shouldDescend is consulted', () => {
+        const dirs = [];
+        walk(wroot, {
+            onDir: (full, name) => dirs.push(name),
+            shouldDescend: () => false    // nothing is recursed into
+        });
+        // Only immediate child dirs of wroot (sub); link-dir is a symlink so excluded
+        expect(sorted(dirs)).toEqual(['sub']);
+    });
+
+    it('onDir fires at every depth during normal traversal', () => {
+        const dirs = [];
+        walk(wroot, { onDir: (full, name) => dirs.push(name) });
+        // 'sub' found from root, 'deep' found from inside sub
+        expect(sorted(dirs)).toEqual(sorted(['sub', 'deep']));
+    });
+
+    it('onDir fires for a dir even when shouldDescend returns false for it', () => {
+        const dirs = [];
+        walk(wroot, {
+            onDir: (full, name) => dirs.push(name),
+            shouldDescend: (full, name) => name !== 'sub'
+        });
+        expect(dirs).toContain('sub');    // onDir fired
+        expect(dirs).not.toContain('deep'); // but sub was not descended into
+    });
+
+    it('onDir does not fire for the root directory itself, only for children', () => {
+        const dirs = [];
+        walk(wroot, { onDir: (full, name) => dirs.push(full) });
+        expect(dirs).not.toContain(wroot);
     });
 
     it('followSymlinks: true surfaces symlinks to onFile but does NOT traverse symlinked dirs (lstat-based)', () => {

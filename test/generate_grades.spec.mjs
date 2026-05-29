@@ -17,6 +17,7 @@ describe('handler registry', () => {
         expect(VALID_MAPPING_TYPES.has('manual')).toBe(true);
         expect(VALID_MAPPING_TYPES.has('lint')).toBe(true);
         expect(VALID_MAPPING_TYPES.has('build_check')).toBe(true);
+        expect(VALID_MAPPING_TYPES.has('browser_check')).toBe(true);
         expect(VALID_MAPPING_TYPES.has('url_check')).toBe(true);
         expect(VALID_MAPPING_TYPES.has('developer_comments')).toBe(true);
         expect(VALID_MAPPING_TYPES.has('code_review')).toBe(true);
@@ -384,6 +385,119 @@ describe('build_check handler', () => {
     it('handles missing runtimeCheck', () => {
         const map = { maxScore: 1 };
         expect(handler(map, {})).toEqual({ score: 0, comment: 'Build failed' });
+    });
+
+    // "both" mode: build_check only scores the build phase
+    it('"both" mode: returns maxScore when buildSuccess is true, ignoring browser errors', () => {
+        const map = { maxScore: 1 };
+        const student = { runtimeCheck: { buildSuccess: true, buildErrors: [], browserSuccess: false, browserErrors: ['TypeError: x is undefined'] } };
+        expect(handler(map, student)).toEqual({ score: 1, comment: 'Build successful' });
+    });
+
+    it('"both" mode: returns 0 when buildSuccess is false', () => {
+        const map = { maxScore: 1 };
+        const student = { runtimeCheck: { buildSuccess: false, buildErrors: ['npm run build failed'] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'Build failed: npm run build failed' });
+    });
+
+    it('"both" mode: returns 0 with generic message when buildErrors is empty', () => {
+        const map = { maxScore: 1 };
+        const student = { runtimeCheck: { buildSuccess: false, buildErrors: [] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'Build failed' });
+    });
+});
+
+// ── browser_check handler ──────────────────────────────────────────────────
+
+describe('browser_check handler', () => {
+    const handler = getHandler('browser_check');
+
+    // "both" mode paths
+    it('"both" mode: returns maxScore when build and browser both pass', () => {
+        const map = { maxScore: 1 };
+        const student = { runtimeCheck: { buildSuccess: true, browserSuccess: true, browserErrors: [] } };
+        expect(handler(map, student)).toEqual({ score: 1, comment: 'No console errors' });
+    });
+
+    it('"both" mode: returns 0 with error list when browser has console errors', () => {
+        const map = { maxScore: 1 };
+        const student = { runtimeCheck: { buildSuccess: true, browserSuccess: false, browserErrors: ['TypeError: x is undefined', 'ReferenceError: foo is not defined'] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'TypeError: x is undefined; ReferenceError: foo is not defined' });
+    });
+
+    it('"both" mode: returns 0 with skip message when build failed', () => {
+        const map = { maxScore: 1 };
+        const student = { runtimeCheck: { buildSuccess: false, buildErrors: ['npm run build failed'], browserSuccess: null, browserErrors: [] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'Build failed; browser check skipped' });
+    });
+
+    it('"both" mode: returns 0 with generic message when browser errors list is empty', () => {
+        const map = { maxScore: 1 };
+        const student = { runtimeCheck: { buildSuccess: true, browserSuccess: false, browserErrors: [] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'Console errors detected' });
+    });
+
+    // "browser" mode fallback (no buildSuccess field present)
+    it('"browser" mode fallback: returns maxScore on success', () => {
+        const map = { maxScore: 2 };
+        const student = { runtimeCheck: { success: true, errors: [] } };
+        expect(handler(map, student)).toEqual({ score: 2, comment: 'No console errors' });
+    });
+
+    it('"browser" mode fallback: returns 0 with errors on failure', () => {
+        const map = { maxScore: 2 };
+        const student = { runtimeCheck: { success: false, errors: ['SyntaxError in app.js'] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'SyntaxError in app.js' });
+    });
+
+    it('"browser" mode fallback: returns 0 with generic message when errors list is empty', () => {
+        const map = { maxScore: 2 };
+        const student = { runtimeCheck: { success: false, errors: [] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'Check failed' });
+    });
+
+    it('handles missing runtimeCheck', () => {
+        const map = { maxScore: 1 };
+        expect(handler(map, {})).toEqual({ score: 0, comment: 'Check failed' });
+    });
+});
+
+// ── npm_package handler ────────────────────────────────────────────────────
+
+describe('npm_package handler', () => {
+    const handler = getHandler('npm_package');
+
+    it('returns maxScore when packages are found', () => {
+        const map = { maxScore: 3 };
+        const student = { analysis: { npmPackages: ['lena-js', 'canvas-confetti'] } };
+        expect(handler(map, student)).toEqual({ score: 3, comment: 'Yes - lena-js, canvas-confetti' });
+    });
+
+    it('returns 0 when no packages found', () => {
+        const map = { maxScore: 3 };
+        expect(handler(map, { analysis: { npmPackages: [] } })).toEqual({ score: 0, comment: 'No npm packages imported' });
+        expect(handler(map, {})).toEqual({ score: 0, comment: 'No npm packages imported' });
+    });
+
+    it('excludes specified packages before scoring', () => {
+        const map = { maxScore: 3, exclude: ['vite', 'bootstrap'] };
+        const student = { analysis: { npmPackages: ['lena-js', 'vite', 'bootstrap'] } };
+        expect(handler(map, student)).toEqual({ score: 3, comment: 'Yes - lena-js' });
+    });
+
+    it('returns 0 with informative comment when only excluded packages are present', () => {
+        const map = { maxScore: 3, exclude: ['vite', 'bootstrap'] };
+        const student = { analysis: { npmPackages: ['vite', 'bootstrap'] } };
+        expect(handler(map, student)).toEqual({
+            score: 0,
+            comment: 'No qualifying packages (found only excluded: vite, bootstrap)'
+        });
+    });
+
+    it('treats no exclude field the same as an empty exclude list', () => {
+        const map = { maxScore: 3 };
+        const student = { analysis: { npmPackages: ['vite'] } };
+        expect(handler(map, student)).toEqual({ score: 3, comment: 'Yes - vite' });
     });
 });
 

@@ -63,9 +63,8 @@ function serveDir(dir) {
     });
 }
 
-// Skips node_modules, dist, and dot-dirs when recursing (shared by the two
-// index.html walkers below).
-const skipBuildDirs = (full, name) => name !== 'node_modules' && name !== 'dist' && !name.startsWith('.');
+// Skips node_modules (substring match), dist, and dot-dirs when recursing.
+const skipBuildDirs = (full, name) => !name.includes('node_modules') && name !== 'dist' && !name.startsWith('.');
 
 function findAllIndexHtmlDirs(dir) {
     const results = [];
@@ -77,20 +76,17 @@ function findAllIndexHtmlDirs(dir) {
 }
 
 // Finds dist/ subdirectories that contain index.html (used after a successful build).
+// Descends into dist/ dirs so walk() can visit them directly, but does not descend
+// into node_modules or dot-dirs.
 function findDistIndexHtmlDirs(dir) {
     const results = [];
     walk(dir, {
         visit: (d, names) => {
-            if (!names.includes('dist')) return;
-            const distPath = path.join(d, 'dist');
-            try {
-                if (fs.lstatSync(distPath).isDirectory()) {
-                    const distFiles = fs.readdirSync(distPath);
-                    if (distFiles.includes('index.html')) results.push(distPath);
-                }
-            } catch (e) {}
+            if (path.basename(d) === 'dist' && names.includes('index.html')) {
+                results.push(d);
+            }
         },
-        shouldDescend: skipBuildDirs
+        shouldDescend: (full, name) => !name.includes('node_modules') && !name.startsWith('.')
     });
     return results;
 }
@@ -271,17 +267,30 @@ module.exports = async function(students, config, labDir) {
                 console.log(`  FAIL: ${student.name}: ${result.errors.join('; ')}`);
             }
         } else {
-            // "both": build first, then browser-check the built dist/
+            // "both": build first, then browser-check the built dist/.
+            // Build and browser results are stored as separate fields so that
+            // build_check and browser_check mappings can score them independently.
             const buildResult = await checkBuild(student.extractedDir);
             if (!buildResult.success) {
-                student.runtimeCheck = buildResult;
+                student.runtimeCheck = {
+                    success: false,
+                    buildSuccess: false,
+                    buildErrors: buildResult.errors,
+                    browserSuccess: null,
+                    browserErrors: [],
+                    errors: buildResult.errors
+                };
                 console.log(`  FAIL: ${student.name}: Build failed (${buildResult.errors.join(', ')})`);
             } else {
                 const distDirs = findDistIndexHtmlDirs(student.extractedDir);
                 const browserResult = await runBrowserCheck(distDirs, browser, student.extractedDir);
                 student.runtimeCheck = {
                     success: browserResult.success,
-                    errors: [...buildResult.errors, ...browserResult.errors]
+                    buildSuccess: true,
+                    buildErrors: [],
+                    browserSuccess: browserResult.success,
+                    browserErrors: browserResult.errors,
+                    errors: browserResult.errors
                 };
                 if (browserResult.success) {
                     console.log(`  OK: ${student.name}: Build and browser checks passed`);

@@ -200,6 +200,18 @@ registerHandler('lint', (map, student) => {
 
 registerHandler('build_check', (map, student) => {
     const rt = student.runtimeCheck || {};
+
+    // "both" mode stores build and browser results separately. Score only the
+    // build phase so that browser errors don't penalise the build cell.
+    if (rt.buildSuccess !== undefined) {
+        if (rt.buildSuccess) {
+            return { score: map.maxScore, comment: 'Build successful' };
+        }
+        const errs = (rt.buildErrors || []).join('; ');
+        return { score: 0, comment: errs ? `Build failed: ${errs}` : 'Build failed' };
+    }
+
+    // "build" or "browser" mode: rt.success covers the whole check.
     if (rt.success) {
         return { score: map.maxScore, comment: 'Error free' };
     }
@@ -226,6 +238,31 @@ registerHandler('build_check', (map, student) => {
     if (resourceErrors.length) parts.push(`Resource: ${resourceErrors.join('; ')}`);
     if (runtimeErrors.length) parts.push(`Runtime: ${runtimeErrors.join('; ')}`);
     return { score: 0, comment: parts.join(' | ') };
+});
+
+// browser_check: scores the browser phase of a "both"-mode runtime check.
+// Falls back to the unified runtimeCheck result for "browser"-only labs.
+registerHandler('browser_check', (map, student) => {
+    const rt = student.runtimeCheck || {};
+
+    // "both" mode: use the browser sub-result directly.
+    if (rt.browserSuccess !== undefined) {
+        if (rt.buildSuccess === false) {
+            return { score: 0, comment: 'Build failed; browser check skipped' };
+        }
+        if (rt.browserSuccess) {
+            return { score: map.maxScore, comment: 'No console errors' };
+        }
+        const errs = rt.browserErrors || [];
+        return { score: 0, comment: errs.length ? errs.join('; ') : 'Console errors detected' };
+    }
+
+    // "browser" mode fallback (no separate build step).
+    if (rt.success) {
+        return { score: map.maxScore, comment: 'No console errors' };
+    }
+    const errors = rt.errors || [];
+    return { score: 0, comment: errors.length ? errors.join('; ') : 'Check failed' };
 });
 
 registerHandler('manual', (map, student) => {
@@ -257,9 +294,14 @@ registerHandler('manual', (map, student) => {
 
 registerHandler('npm_package', (map, student) => {
     const a = student.analysis || {};
-    const packages = a.npmPackages || [];
-    if (packages.length > 0) {
-        return { score: map.maxScore, comment: `Yes - ${packages.join(', ')}` };
+    const excluded = new Set(map.exclude || []);
+    const all = a.npmPackages || [];
+    const qualifying = all.filter(p => !excluded.has(p));
+    if (qualifying.length > 0) {
+        return { score: map.maxScore, comment: `Yes - ${qualifying.join(', ')}` };
+    }
+    if (excluded.size > 0 && all.length > 0) {
+        return { score: 0, comment: `No qualifying packages (found only excluded: ${all.join(', ')})` };
     }
     return { score: 0, comment: 'No npm packages imported' };
 });
@@ -319,7 +361,8 @@ function mappingDescription(map) {
     if (map.msg) return map.msg.replace('NEEDS MANUAL CHECK (', '').replace(')', '');
     if (map.featureId) return map.featureId;
     switch (map.type) {
-        case 'build_check': return 'App loads and runs without errors';
+        case 'build_check': return 'App builds without errors';
+        case 'browser_check': return 'No run-time console errors';
         case 'lint': return 'Style and best practices';
         case 'developer_comments': return 'Developer name/date in files';
         case 'github_repo': return 'GitHub repo set up correctly';

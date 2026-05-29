@@ -3,7 +3,7 @@
   "titleCell": "A1",
   "titleText": "Lab 4: Node and Vite",
   "summaryCell": "A2",
-  "runtimeCheck": "build",
+  "runtimeCheck": "both",
   "variations": {
     "A": { "appName": "Web Page Bookmarker" },
     "B": { "appName": "Expense Tracker" },
@@ -107,9 +107,8 @@
     {
       "cell": "C14",
       "commentCell": "E14",
-      "type": "manual",
-      "maxScore": 1,
-      "msg": "NEEDS MANUAL CHECK (no run-time console errors)"
+      "type": "browser_check",
+      "maxScore": 1
     },
     {
       "cell": "C15",

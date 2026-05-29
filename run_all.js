@@ -433,15 +433,21 @@ async function main() {
                 skipRubric = true;
                 break;
             } else {
-                console.error(`\nERROR: Rubric file not found at expected path:`);
-                console.error(`  ${rubricCheckPath}`);
-                console.error(`  (Copy the rubric template into configs/${labName}/ or check the filename.)\n`);
-                const newName = await askRl(
-                    'Enter the correct rubric filename\n' +
-                    '  (e.g. CS233JS_Lab04_Rubric.xlsm, or type "skip" to generate .txt reports instead): '
-                );
-                if (!newName.trim() || newName.trim().toLowerCase() === 'skip') {
+                console.log(`\nRubric file not found at expected path:`);
+                console.log(`  ${rubricCheckPath}\n`);
+                const provideRubric = await askRl('Would you like to provide a rubric spreadsheet? (y/n): ');
+                if (provideRubric.trim().toLowerCase() !== 'y' && provideRubric.trim().toLowerCase() !== 'yes') {
                     console.log('  Continuing without rubric — will generate .txt grade reports.\n');
+                    skipRubric = true;
+                    textReport = true;
+                    break;
+                }
+                const newName = await askRl(
+                    'Enter the rubric filename\n' +
+                    `  (e.g. CS233JS_${labName}_Rubric.xlsm): `
+                );
+                if (!newName.trim()) {
+                    console.log('  No filename entered — will generate .txt grade reports.\n');
                     skipRubric = true;
                     textReport = true;
                     break;

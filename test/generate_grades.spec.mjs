@@ -338,15 +338,15 @@ describe('lint handler', () => {
         expect(result.comment).toContain('40 issues');
     });
 
-    it('handles no JS files', () => {
+    it('scores 0 when there are no JS files', () => {
         const map = { maxScore: 2 };
         expect(handler(map, { lint: { jsFiles: 0, errors: 0, warnings: 0, messages: [] } }))
-            .toEqual({ score: '', comment: 'No JS files to lint' });
+            .toEqual({ score: 0, comment: 'No JS files to lint' });
     });
 
-    it('handles missing lint data', () => {
+    it('scores 0 when lint data is missing', () => {
         const map = { maxScore: 2 };
-        expect(handler(map, {})).toEqual({ score: '', comment: 'No JS files to lint' });
+        expect(handler(map, {})).toEqual({ score: 0, comment: 'No JS files to lint' });
     });
 
     it('includes top issues in comment', () => {

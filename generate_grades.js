@@ -394,7 +394,7 @@ registerHandler('url_check', (map, student) => {
     const a = student.analysis || {};
     const url = a.urls && a.urls[map.urlType];
     if (url) {
-        return { score: map.maxScore, comment: `NEEDS CHECK: ${url}` };
+        return { score: map.maxScore ?? '', comment: `NEEDS CHECK: ${url}` };
     }
     return { score: 0, comment: `No ${map.urlType} URL provided` };
 });
@@ -477,7 +477,7 @@ registerHandler('lint', (map, student) => {
             return { score: 0, comment: `${count} issues (${topIssues})` };
         }
     }
-    return { score: map.maxScore, comment: 'No JS files to lint' };
+    return { score: 0, comment: 'No JS files to lint' };
 });
 
 registerHandler('build_check', (map, student) => {
@@ -534,7 +534,7 @@ registerHandler('manual', (map, student) => {
             return { score, comment };
         }
     }
-    return { score: map.maxScore, comment: map.msg || 'NEEDS MANUAL CHECK' };
+    return { score: map.maxScore ?? '', comment: map.msg || 'NEEDS MANUAL CHECK' };
 });
 
 registerHandler('npm_package', (map, student) => {

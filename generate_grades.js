@@ -597,7 +597,7 @@ function isCodeSourceType(map) {
 
 // --- Text report helpers ---
 
-function mappingDescription(map, index) {
+function mappingDescription(map) {
     if (map.msg) return map.msg.replace('NEEDS MANUAL CHECK (', '').replace(')', '');
     if (map.featureId) return map.featureId;
     switch (map.type) {
@@ -619,18 +619,48 @@ function mappingDescription(map, index) {
     }
 }
 
-async function gradeStudentMappings(student, config) {
+// Yields each { part, fc } featureCount entry across all configured parts.
+function* partFeatureMaps(config) {
+    for (const part of (config.parts || [])) {
+        if (!part.featureCounts) continue;
+        for (const fc of part.featureCounts) yield { part, fc };
+    }
+}
+
+const num = v => (v != null ? v : 0);
+
+/**
+ * Computes the per-mapping grading results for a student — the single source of
+ * truth shared by both the spreadsheet and text-report renderers. Each result
+ * carries the rendered { desc, score, maxScore, comment } plus the spreadsheet
+ * cell references it should be written to.
+ */
+async function computeResults(student, config) {
     const results = [];
     const analysis = student.analysis || {};
 
+    // Extraction failure: every item is unavailable. Code-source items report the
+    // underlying error; everything else (including part features) is marked N/A.
     if (analysis.extractionError) {
         for (const map of config.mappings) {
-            const desc = mappingDescription(map, results.length);
-            if (isCodeSourceType(map)) {
-                results.push({ desc, score: 0, maxScore: map.maxScore || 0, comment: `ERROR: ${analysis.extractionError}` });
-            } else {
-                results.push({ desc, score: 0, maxScore: map.maxScore || 0, comment: 'N/A (code unavailable)' });
-            }
+            results.push({
+                desc: mappingDescription(map),
+                score: 0,
+                maxScore: map.maxScore || 0,
+                comment: isCodeSourceType(map) ? `ERROR: ${analysis.extractionError}` : 'N/A (code unavailable)',
+                cell: map.cell,
+                commentCell: map.commentCell
+            });
+        }
+        for (const { part, fc } of partFeatureMaps(config)) {
+            results.push({
+                desc: fc.featureId || `${part.id} feature`,
+                score: 0,
+                maxScore: fc.maxScore || 0,
+                comment: 'N/A (code unavailable)',
+                cell: fc.cell,
+                commentCell: fc.commentCell
+            });
         }
         return results;
     }
@@ -649,40 +679,54 @@ async function gradeStudentMappings(student, config) {
         }
 
         results.push({
-            desc: mappingDescription(map, results.length),
-            score: score != null ? score : 0,
+            desc: mappingDescription(map),
+            score: num(score),
             maxScore: map.maxScore || 0,
-            comment
+            comment,
+            cell: map.cell,
+            commentCell: map.commentCell,
+            linkCell: map.linkCell,
+            linkUrlType: map.linkUrlType
         });
     }
 
     // Per-part feature counts
     if (config.parts && analysis.partFeatures) {
-        for (const part of config.parts) {
-            if (!part.featureCounts) continue;
-            for (const fc of part.featureCounts) {
-                const virtualMap = {
-                    type: 'part_feature',
-                    partId: part.id,
-                    featureId: fc.featureId,
-                    minCount: fc.minCount || 1,
-                    maxScore: fc.maxScore,
-                    successMsg: fc.successMsg,
-                    failMsg: fc.failMsg
-                };
-                const handler = getHandler('part_feature');
-                const result = await handler(virtualMap, student);
-                results.push({
-                    desc: fc.featureId || `${part.id} feature`,
-                    score: result.score != null ? result.score : 0,
-                    maxScore: fc.maxScore || 0,
-                    comment: result.comment
-                });
-            }
+        const partFeatureHandler = getHandler('part_feature');
+        for (const { part, fc } of partFeatureMaps(config)) {
+            const virtualMap = {
+                type: 'part_feature',
+                partId: part.id,
+                featureId: fc.featureId,
+                minCount: fc.minCount || 1,
+                maxScore: fc.maxScore,
+                successMsg: fc.successMsg,
+                failMsg: fc.failMsg
+            };
+            const result = await partFeatureHandler(virtualMap, student);
+            results.push({
+                desc: fc.featureId || `${part.id} feature`,
+                score: num(result.score),
+                maxScore: fc.maxScore || 0,
+                comment: result.comment,
+                cell: fc.cell,
+                commentCell: fc.commentCell
+            });
         }
     }
 
     return results;
+}
+
+// Writes computed results into the Grade sheet at each result's cell references.
+function writeResultsToSheet(sheet, results, analysis) {
+    for (const r of results) {
+        if (r.cell) setCellValue(sheet, r.cell, r.score);
+        if (r.commentCell) setCellValue(sheet, r.commentCell, r.comment);
+        if (r.linkCell && r.linkUrlType && analysis.urls && analysis.urls[r.linkUrlType]) {
+            setCellValue(sheet, r.linkCell, analysis.urls[r.linkUrlType]);
+        }
+    }
 }
 
 function formatTextReport(student, config, results, labTitle) {
@@ -782,7 +826,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
             fs.mkdirSync(gradeDir, { recursive: true });
 
             try {
-                const results = await gradeStudentMappings(student, config);
+                const results = await computeResults(student, config);
                 const report = formatTextReport(student, config, results, labTitle);
 
                 const outputPath = path.join(gradeDir, `${student.name}_Grade.txt`);
@@ -891,80 +935,10 @@ module.exports = async function(students, config, labDir, opts = {}) {
                 setCellValue(sheet, groupCell, group);
             }
 
-            // If code could not be extracted, write extraction-available info to relevant cells,
-            // mark everything else N/A
-            if (analysis.extractionError) {
-                for (const map of config.mappings) {
-                    if (isCodeSourceType(map)) {
-                        setCellValue(sheet, map.cell, 0);
-                        if (map.commentCell) setCellValue(sheet, map.commentCell, `ERROR: ${analysis.extractionError}`);
-                    } else {
-                        if (map.cell) setCellValue(sheet, map.cell, 0);
-                        if (map.commentCell) setCellValue(sheet, map.commentCell, 'N/A (code unavailable)');
-                    }
-                }
-                for (const part of (config.parts || [])) {
-                    if (!part.featureCounts) continue;
-                    for (const fc of part.featureCounts) {
-                        if (fc.cell) setCellValue(sheet, fc.cell, 0);
-                        if (fc.commentCell) setCellValue(sheet, fc.commentCell, 'N/A (code unavailable)');
-                    }
-                }
-                stripToGradeSheet(wb, sheet);
-                forceRecalc(sheet);
-                const outputExt = isXlsm ? '.xlsm' : '.xlsx';
-                const outputPath = path.join(gradeDir, `${student.name}_Grade${outputExt}`);
-                xlsx.writeFile(wb, outputPath, isXlsm ? { bookType: 'xlsm' } : undefined);
-                if (isXlsm) preserveTemplateDrawings(rubricPath, outputPath);
-                console.log(`  PARTIAL: ${student.name} -> ${path.basename(outputPath)} (extraction failed)`);
-                summary.successful.push(student.name);
-                generated++;
-                continue;
-            }
-
-            // Normal grading
-            for (const map of config.mappings) {
-                const handler = getHandler(map.type);
-                let score, comment;
-
-                if (handler) {
-                    const result = await handler(map, student);
-                    score = result.score;
-                    comment = result.comment;
-                } else {
-                    score = 0;
-                    comment = `ERROR: Unknown mapping type "${map.type}" — check config`;
-                    console.warn(`  WARNING: Unknown map.type "${map.type}" for ${student.name}`);
-                }
-
-                if (map.cell) setCellValue(sheet, map.cell, score);
-                if (map.commentCell) setCellValue(sheet, map.commentCell, comment);
-                if (map.linkCell && map.linkUrlType && analysis.urls && analysis.urls[map.linkUrlType]) {
-                    setCellValue(sheet, map.linkCell, analysis.urls[map.linkUrlType]);
-                }
-            }
-
-            // Per-part feature counts — processed through handler pipeline
-            if (config.parts && analysis.partFeatures) {
-                for (const part of config.parts) {
-                    if (!part.featureCounts) continue;
-                    for (const fc of part.featureCounts) {
-                        const virtualMap = {
-                            type: 'part_feature',
-                            partId: part.id,
-                            featureId: fc.featureId,
-                            minCount: fc.minCount || 1,
-                            maxScore: fc.maxScore,
-                            successMsg: fc.successMsg,
-                            failMsg: fc.failMsg
-                        };
-                        const handler = getHandler('part_feature');
-                        const result = await handler(virtualMap, student);
-                        if (fc.cell) setCellValue(sheet, fc.cell, result.score);
-                        if (fc.commentCell) setCellValue(sheet, fc.commentCell, result.comment);
-                    }
-                }
-            }
+            // Per-mapping scores/comments — computed once (shared with the text
+            // renderer) and written to their configured cells.
+            const results = await computeResults(student, config);
+            writeResultsToSheet(sheet, results, analysis);
 
             stripToGradeSheet(wb, sheet);
             forceRecalc(sheet);
@@ -973,7 +947,11 @@ module.exports = async function(students, config, labDir, opts = {}) {
             const outputPath = path.join(gradeDir, `${student.name}_Grade${outputExt}`);
             xlsx.writeFile(wb, outputPath, isXlsm ? { bookType: 'xlsm' } : undefined);
             if (isXlsm) preserveTemplateDrawings(rubricPath, outputPath);
-            console.log(`  OK: ${student.name} -> ${path.basename(outputPath)}`);
+            if (analysis.extractionError) {
+                console.log(`  PARTIAL: ${student.name} -> ${path.basename(outputPath)} (extraction failed)`);
+            } else {
+                console.log(`  OK: ${student.name} -> ${path.basename(outputPath)}`);
+            }
             summary.successful.push(student.name);
             generated++;
 
@@ -992,3 +970,4 @@ module.exports.registerHandler = registerHandler;
 module.exports.getHandler = getHandler;
 module.exports.VALID_MAPPING_TYPES = VALID_MAPPING_TYPES;
 module.exports.isCodeSourceType = isCodeSourceType;
+module.exports.computeResults = computeResults;

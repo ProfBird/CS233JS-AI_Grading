@@ -73,26 +73,11 @@ function parseGroupFromTable(html) {
     return null;
 }
 
-function parseScoreFromCell(text) {
-    const match = text.match(/(\d+)\s*\/\s*\d+/);
-    return match ? parseInt(match[1], 10) : null;
-}
-
-/**
- * Check if a cell has any meaningful content (fraction, Y, N, Yes, No).
- */
-function isCellFilled(text) {
-    if (!text || !text.trim()) return false;
-    if (/\d+\s*\/\s*\d+/.test(text)) return true;
-    if (/^(y|yes|n|no)$/i.test(text.trim())) return true;
-    return false;
-}
-
 /**
  * Parse a table cell to extract score and yes/no semantics.
  * Returns { score, filled, affirmative } where:
  *   - score: numeric score from fraction, or null
- *   - filled: true if cell has meaningful content
+ *   - filled: true if cell has meaningful content (fraction or Y/N)
  *   - affirmative: true for fraction/Y/Yes, false for N/No, null if empty
  */
 function parseCellValue(text) {
@@ -103,6 +88,9 @@ function parseCellValue(text) {
     if (/^(n|no)$/i.test(text.trim())) return { score: null, filled: true, affirmative: false };
     return { score: null, filled: false, affirmative: null };
 }
+
+const parseScoreFromCell = text => parseCellValue(text).score;
+const isCellFilled = text => parseCellValue(text).filled;
 
 /**
  * Parse all HTML tables and return the one most likely to contain review scores
@@ -213,17 +201,6 @@ function parseTableScores(html) {
     };
 }
 
-// Legacy: parse flat scores list (used as fallback)
-function parseScores(text) {
-    const scores = [];
-    const fractionRe = /(\d+)\s*\/\s*\d+/g;
-    let m;
-    while ((m = fractionRe.exec(text)) !== null) {
-        scores.push(parseInt(m[1], 10));
-    }
-    return scores;
-}
-
 // --- Main export ---
 
 module.exports = async function (students, config) {
@@ -249,15 +226,12 @@ module.exports = async function (students, config) {
             const text = textResult.value;
 
             const group = parseGroupFromTable(html) || parseGroupLetter(text);
-            const scores = parseScores(text);
-
             const tableData = parseTableScores(html);
 
             student.codeReview = {
                 found: true,
                 docxPath,
                 group,
-                scores,
                 items: tableData ? tableData.items : [],
                 productionCompleted: tableData ? tableData.productionCompleted : false,
                 groupSource: group ? 'form' : 'none'
@@ -272,7 +246,6 @@ module.exports = async function (students, config) {
                 found: true,
                 docxPath,
                 group: null,
-                scores: [],
                 items: [],
                 productionCompleted: false,
                 parseError: err.message

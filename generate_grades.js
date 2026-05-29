@@ -56,23 +56,16 @@ registerHandler('feature', (map, student) => {
     return { score: 0, comment: `${map.failMsg || 'Missing'} (only ${count} found)` };
 });
 
-registerHandler('part1_completed', (map, student) => {
+function partCompletedHandler(map, student) {
     const pp = (student.analysis && student.analysis.partPresence) || {};
     const partId = map.partId || 'part1';
-    if (pp[partId]) {
-        return { score: map.maxScore, comment: 'Part files found' };
-    }
-    return { score: 0, comment: 'Part files not found' };
-});
+    return pp[partId]
+        ? { score: map.maxScore, comment: `${partId} files found` }
+        : { score: 0, comment: `${partId} files not found` };
+}
 
-registerHandler('part_completed', (map, student) => {
-    const pp = (student.analysis && student.analysis.partPresence) || {};
-    const partId = map.partId || 'part1';
-    if (pp[partId]) {
-        return { score: map.maxScore, comment: `${partId} files found` };
-    }
-    return { score: 0, comment: `${partId} files not found` };
-});
+registerHandler('part1_completed', partCompletedHandler);
+registerHandler('part_completed', partCompletedHandler);
 
 registerHandler('apps_in_repo', (map, student) => {
     const a = student.analysis || {};

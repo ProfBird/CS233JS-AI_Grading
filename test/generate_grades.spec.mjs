@@ -145,30 +145,30 @@ describe('part1_completed handler', () => {
     it('returns maxScore when part1 is present in partPresence', () => {
         const map = { maxScore: 10 };
         const student = { analysis: { partPresence: { part1: true } } };
-        expect(handler(map, student)).toEqual({ score: 10, comment: 'Part files found' });
+        expect(handler(map, student)).toEqual({ score: 10, comment: 'part1 files found' });
     });
 
     it('returns 0 when part1 is false', () => {
         const map = { maxScore: 10 };
         const student = { analysis: { partPresence: { part1: false } } };
-        expect(handler(map, student)).toEqual({ score: 0, comment: 'Part files not found' });
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'part1 files not found' });
     });
 
     it('returns 0 when partPresence is empty', () => {
         const map = { maxScore: 10 };
         const student = { analysis: { partPresence: {} } };
-        expect(handler(map, student)).toEqual({ score: 0, comment: 'Part files not found' });
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'part1 files not found' });
     });
 
     it('supports custom partId from map', () => {
         const map = { maxScore: 10, partId: 'part2' };
         const student = { analysis: { partPresence: { part2: true } } };
-        expect(handler(map, student)).toEqual({ score: 10, comment: 'Part files found' });
+        expect(handler(map, student)).toEqual({ score: 10, comment: 'part2 files found' });
     });
 
     it('handles missing analysis', () => {
         const map = { maxScore: 10 };
-        expect(handler(map, {})).toEqual({ score: 0, comment: 'Part files not found' });
+        expect(handler(map, {})).toEqual({ score: 0, comment: 'part1 files not found' });
     });
 });
 

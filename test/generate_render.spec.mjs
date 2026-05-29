@@ -33,13 +33,14 @@ afterAll(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Write a minimal .xlsx rubric with a 'Grade' sheet spanning A1:Z200. */
+/** Write a minimal rubric with a 'Grade' sheet spanning A1:Z200 (.xlsx or .xlsm). */
 function makeRubric(name) {
     const sheet = { '!ref': 'A1:Z200' };
     const wb = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(wb, sheet, 'Grade');
     const p = join(dir, name);
-    xlsx.writeFile(wb, p);
+    const bookType = name.toLowerCase().endsWith('.xlsm') ? 'xlsm' : 'xlsx';
+    xlsx.writeFile(wb, p, { bookType });
     return p;
 }
 
@@ -48,7 +49,8 @@ async function gradeToSheet(student, config, rubricName) {
     config.rubricName = rubricName;
     student.gradeDir = join(dir, student.name);
     const summary = await generateGrades([student], config, dir, { rubricDir: dir });
-    const out = join(student.gradeDir, `${student.name}_Grade.xlsx`);
+    const ext = rubricName.toLowerCase().endsWith('.xlsm') ? '.xlsm' : '.xlsx';
+    const out = join(student.gradeDir, `${student.name}_Grade${ext}`);
     expect(summary.successful).toContain(student.name);
     expect(existsSync(out)).toBe(true);
     return xlsx.readFile(out).Sheets['Grade'];
@@ -120,6 +122,17 @@ describe('spreadsheet path', () => {
         expect(cellVal(s, 'C6')).toBe('N/A (code unavailable)');
         expect(cellVal(s, 'B10')).toBe(0);
         expect(cellVal(s, 'C10')).toBe('N/A (code unavailable)');
+    });
+
+    it('writes an .xlsm output with scores when the rubric is .xlsm', async () => {
+        makeRubric('macro.xlsm');
+        const config = {
+            mappings: [{ type: 'feature', featureId: 'arrow', maxScore: 2, cell: 'B5', commentCell: 'C5' }],
+        };
+        const student = { name: 'Xena', analysis: { features: { arrow: 1 } } };
+        const s = await gradeToSheet(student, config, 'macro.xlsm');
+        expect(cellVal(s, 'B5')).toBe(2);
+        expect(cellVal(s, 'C5')).toBe('Yes (1 found)');
     });
 
     it('writes 0 (not a blank cell) when a passing mapping omits maxScore', async () => {

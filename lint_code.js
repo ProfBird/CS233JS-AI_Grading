@@ -7,32 +7,20 @@
 
 const fs = require('fs');
 const path = require('path');
+const { walk } = require('./file_walker');
 
 const LINT_REPORT = 'lint_report.json';
 
+// Collects .js files under dir. Exclusions are case-insensitive substring matches.
+// Skips dot-dirs and "__MACOSX", and does not descend into symlinks — but still
+// collects dot-files that end in .js (e.g. .eslintrc.js).
 function getAllJsFiles(dir, exclusions = []) {
-    let results = [];
-    try {
-        const items = fs.readdirSync(dir);
-        for (const item of items) {
-            const full = path.join(dir, item);
-            const isExcluded = exclusions.some(ex => full.toLowerCase().includes(ex.toLowerCase()));
-
-            if (isExcluded) continue;
-
-            let stats;
-            try { stats = fs.lstatSync(full); } catch (e) { continue; }
-            if (stats.isSymbolicLink()) continue;
-
-            if (stats.isDirectory()) {
-                if (!item.startsWith('.') && item !== '__MACOSX') {
-                    results = results.concat(getAllJsFiles(full, exclusions));
-                }
-            } else if (item.endsWith('.js')) {
-                results.push(full);
-            }
-        }
-    } catch (e) { /* skip */ }
+    const results = [];
+    walk(dir, {
+        shouldSkip: full => exclusions.some(ex => full.toLowerCase().includes(ex.toLowerCase())),
+        shouldDescend: (full, name) => !name.startsWith('.') && name !== '__MACOSX',
+        onFile: (full, name) => { if (name.endsWith('.js')) results.push(full); }
+    });
     return results;
 }
 
@@ -207,3 +195,5 @@ module.exports = async function(students, config, labDir) {
     fs.writeFileSync(path.join(labDir, LINT_REPORT), JSON.stringify(report, null, 2));
     console.log(`Created ${LINT_REPORT} for ${report.length} students.`);
 };
+
+module.exports.getAllJsFiles = getAllJsFiles;

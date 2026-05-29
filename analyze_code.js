@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { walk } = require('./file_walker');
 let xlsx;
 try { xlsx = require('xlsx'); } catch (e) {}
 
@@ -38,24 +39,15 @@ function escapeRegex(word) {
     return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Collects every file under dirPath. Exclusions are substring matches against
+// the full path, applied to both files and directories. Does not descend into
+// symlinks; does NOT skip dot-dirs unless they match an exclusion.
 function getAllFiles(dirPath, arrayOfFiles, exclusions = []) {
-    let files;
-    try { files = fs.readdirSync(dirPath); } catch (e) { return arrayOfFiles; }
-
     arrayOfFiles = arrayOfFiles || [];
-    files.forEach(function (file) {
-        let fullP = path.join(dirPath, file);
-        if (exclusions.some(ex => fullP.includes(ex))) return;
-        let stats;
-        try { stats = fs.lstatSync(fullP); } catch (e) { return; }
-        if (stats.isSymbolicLink()) return;
-        if (stats.isDirectory()) {
-            arrayOfFiles = getAllFiles(fullP, arrayOfFiles, exclusions);
-        } else {
-            arrayOfFiles.push(fullP);
-        }
+    walk(dirPath, {
+        shouldSkip: full => exclusions.some(ex => full.includes(ex)),
+        onFile: full => arrayOfFiles.push(full)
     });
-
     return arrayOfFiles;
 }
 
@@ -367,27 +359,20 @@ function checkRepoHygiene(extractedDir, hygiene) {
         return { passed: found.length === 0, foundDirs: found };
     }
 
-    // Fallback for zip-based submissions: scan the filesystem
+    // Fallback for zip-based submissions: scan the filesystem (max 4 levels deep).
+    // Report any excluded entry name we encounter, and don't descend into excluded dirs.
     const found = [];
-
-    function searchDir(dirPath, depth) {
-        if (depth > 4) return;
-        let entries;
-        try { entries = fs.readdirSync(dirPath); } catch (e) { return; }
-        for (const entry of entries) {
-            if (!hygiene.excludedFromRepo.includes(entry)) {
-                const fullPath = path.join(dirPath, entry);
-                let stat;
-                try { stat = fs.lstatSync(fullPath); } catch (e) { continue; }
-                if (!stat.isSymbolicLink() && stat.isDirectory()) searchDir(fullPath, depth + 1);
-                continue;
+    walk(extractedDir, {
+        maxDepth: 4,
+        visit: (d, names) => {
+            for (const name of names) {
+                if (hygiene.excludedFromRepo.includes(name) && !found.includes(name)) {
+                    found.push(name);
+                }
             }
-            if (!found.includes(entry)) found.push(entry);
-            // don't recurse into excluded dirs/files
-        }
-    }
-
-    searchDir(extractedDir, 0);
+        },
+        shouldDescend: (full, name) => !hygiene.excludedFromRepo.includes(name)
+    });
     return { passed: found.length === 0, foundDirs: found };
 }
 
@@ -676,3 +661,6 @@ module.exports = function(students, config, labDir, configDir = null) {
 
 module.exports.stripComments = stripComments;
 module.exports.normalizeDirName = normalizeDirName;
+module.exports.getAllFiles = getAllFiles;
+module.exports.getSubdirs = getSubdirs;
+module.exports.checkRepoHygiene = checkRepoHygiene;

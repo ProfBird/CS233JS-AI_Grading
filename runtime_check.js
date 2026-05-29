@@ -16,6 +16,7 @@ const http = require('http');
 const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
+const { walk } = require('./file_walker');
 
 const RUNTIME_REPORT = 'runtime_report.json';
 
@@ -62,44 +63,35 @@ function serveDir(dir) {
     });
 }
 
-function findAllIndexHtmlDirs(dir, results = []) {
-    try {
-        const files = fs.readdirSync(dir);
-        if (files.includes('index.html')) results.push(dir);
-        for (const f of files) {
-            if (f === 'node_modules' || f === 'dist' || f.startsWith('.')) continue;
-            const full = path.join(dir, f);
-            let stats;
-            try { stats = fs.lstatSync(full); } catch (e) { continue; }
-            if (stats.isSymbolicLink()) continue;
-            if (stats.isDirectory()) findAllIndexHtmlDirs(full, results);
-        }
-    } catch (e) {}
+// Skips node_modules, dist, and dot-dirs when recursing (shared by the two
+// index.html walkers below).
+const skipBuildDirs = (full, name) => name !== 'node_modules' && name !== 'dist' && !name.startsWith('.');
+
+function findAllIndexHtmlDirs(dir) {
+    const results = [];
+    walk(dir, {
+        visit: (d, names) => { if (names.includes('index.html')) results.push(d); },
+        shouldDescend: skipBuildDirs
+    });
     return results;
 }
 
 // Finds dist/ subdirectories that contain index.html (used after a successful build).
-function findDistIndexHtmlDirs(dir, results = []) {
-    try {
-        const files = fs.readdirSync(dir);
-        if (files.includes('dist')) {
-            const distPath = path.join(dir, 'dist');
+function findDistIndexHtmlDirs(dir) {
+    const results = [];
+    walk(dir, {
+        visit: (d, names) => {
+            if (!names.includes('dist')) return;
+            const distPath = path.join(d, 'dist');
             try {
                 if (fs.lstatSync(distPath).isDirectory()) {
                     const distFiles = fs.readdirSync(distPath);
                     if (distFiles.includes('index.html')) results.push(distPath);
                 }
             } catch (e) {}
-        }
-        for (const f of files) {
-            if (f === 'node_modules' || f === 'dist' || f.startsWith('.')) continue;
-            const full = path.join(dir, f);
-            let stats;
-            try { stats = fs.lstatSync(full); } catch (e) { continue; }
-            if (stats.isSymbolicLink()) continue;
-            if (stats.isDirectory()) findDistIndexHtmlDirs(full, results);
-        }
-    } catch (e) {}
+        },
+        shouldDescend: skipBuildDirs
+    });
     return results;
 }
 
@@ -176,22 +168,12 @@ async function runBrowserCheck(htmlDirs, browser, baseDir) {
 
 // ========== Build-based check ==========
 
-function findPackageJsonDirs(dirPath, arrayOfDirs = []) {
-    try {
-        const files = fs.readdirSync(dirPath);
-        if (files.includes('package.json')) {
-            arrayOfDirs.push(dirPath);
-        }
-        files.forEach(file => {
-            const fullP = path.join(dirPath, file);
-            let stats;
-            try { stats = fs.lstatSync(fullP); } catch (e) { return; }
-            if (stats.isSymbolicLink()) return;
-            if (stats.isDirectory() && !file.includes('node_modules') && !file.startsWith('.') && file !== 'dist') {
-                findPackageJsonDirs(fullP, arrayOfDirs);
-            }
-        });
-    } catch (e) {}
+function findPackageJsonDirs(dirPath) {
+    const arrayOfDirs = [];
+    walk(dirPath, {
+        visit: (d, names) => { if (names.includes('package.json')) arrayOfDirs.push(d); },
+        shouldDescend: (full, name) => !name.includes('node_modules') && !name.startsWith('.') && name !== 'dist'
+    });
     return arrayOfDirs;
 }
 
@@ -320,3 +302,7 @@ module.exports = async function(students, config, labDir) {
     fs.writeFileSync(path.join(labDir, RUNTIME_REPORT), JSON.stringify(report, null, 2));
     console.log(`Created ${RUNTIME_REPORT} for ${report.length} students.`);
 };
+
+module.exports.findAllIndexHtmlDirs = findAllIndexHtmlDirs;
+module.exports.findDistIndexHtmlDirs = findDistIndexHtmlDirs;
+module.exports.findPackageJsonDirs = findPackageJsonDirs;

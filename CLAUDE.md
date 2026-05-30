@@ -14,6 +14,7 @@ node run_all.js Lab06 --text-report     # grade without rubric spreadsheet, gene
 npx eslint --format json path/to/files/*.js
 
 node bin/rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
+node bin/create_lab.js [LabXX]                # interactive wizard to create a new lab config + copy rubric
 node archive/update_lab04_rubric.js            # one-time: rewrites Lab04 rubric cells to match Lab04 point design
 ```
 
@@ -71,7 +72,8 @@ AI_Grading/   ← this directory
   │   ├── rubric_writer.js
   │   └── ollama_comments.js
   ├── bin/                         # secondary CLI tools
-  │   └── rubric_to_md.js
+  │   ├── rubric_to_md.js
+  │   └── create_lab.js            # interactive lab config creation wizard
   ├── configs/
   │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
   │   └── LabXX/

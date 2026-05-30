@@ -15,6 +15,7 @@ graph TD
     subgraph "Entry Points"
         run_all[run_all.js]
         rubric_to_md[rubric_to_md.js]
+        create_lab[create_lab.js]
     end
 
     subgraph "Pipeline Modules"
@@ -69,6 +70,7 @@ graph TD
 
     style run_all fill:#4a90d9,color:#fff
     style rubric_to_md fill:#4a90d9,color:#fff
+    style create_lab fill:#4a90d9,color:#fff
     style extract fill:#50b86c,color:#fff
     style runtime fill:#50b86c,color:#fff
     style analyze fill:#50b86c,color:#fff
@@ -314,6 +316,26 @@ Dumps a rubric spreadsheet's Grade sheet as Markdown. Not part of the grading pi
 
 Usage: `node rubric_to_md.js path/to/Rubric.xlsm [output.md]`
 
+### `create_lab.js` — Lab Configuration Wizard
+
+Interactive CLI tool to create a new lab configuration from scratch. Not part of the grading pipeline.
+
+Usage: `node bin/create_lab.js [LabXX]`
+
+**Exported functions (testable):**
+| Function | Purpose |
+|---|---|
+| `parseLabNumber(input)` | Normalizes `"7"`, `"07"`, `"Lab7"`, `"Lab07"` → `"Lab07"` |
+| `colLetter(idx)` / `excelCell(col, row)` | Build Excel cell references (e.g., `"C7"`) |
+| `readRubricRows(path)` | Reads the Grade sheet from a rubric via xlsx, returns structured row objects |
+| `buildConfig(labName, responses)` | Assembles a `labXX_config.json` object from wizard responses |
+| `buildMappingEntry(rl, type, rubricRow)` | Creates a single mapping entry with type-specific fields |
+| `askBoolean(rl, q, default)` / `askOptions(rl, q, opts)` / `ask(rl, q)` | Readline-based prompt helpers |
+
+**Input mechanism:** Uses a `line`-event-based reader (not `rl.question`) for reliable behavior with both TTY and piped stdin. The `createRL()` factory creates a readline interface augmented with `_getLine(prompt)` that returns a Promise resolving to the next line or `null` on EOF.
+
+Tests live in `test/create_lab.spec.mjs`.
+
 ---
 
 ## Configuration Reference
@@ -398,6 +420,24 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
 | `mappings` | Yes | Array of rubric cell assignments |
 
 ## Adding a New Lab
+
+### Using the interactive wizard (recommended)
+
+```bash
+node bin/create_lab.js             # fully interactive, prompts for lab number
+node bin/create_lab.js Lab07       # pre-specify the lab
+```
+
+The wizard guides you through:
+1. Copying a rubric spreadsheet into `configs/LabXX/`
+2. Configuring the lab title, runtime check mode, feature regexes, and rubric cell mappings
+3. Optionally creating a `labXX_analyzer.js` skeleton for custom analysis
+
+Choose between two mapping modes:
+- **cell-by-cell wizard** — reads the rubric Grade sheet via xlsx, displays each row with auto-derived cell references, and lets you assign mapping types row by row
+- **simplified checklist** — yes/no for each of 16 common mapping types (feature, manual, lint, code_review, etc.), prompting for cell references and scores
+
+### Manual setup
 
 1. Create `configs/LabXX/` (e.g., `configs/Lab05/`)
 2. Create `configs/LabXX/labXX_config.json` following the schema above

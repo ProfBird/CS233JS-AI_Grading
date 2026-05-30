@@ -31,6 +31,21 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 
 ## Directory Setup
 
+### Creating a new lab configuration
+
+Use the interactive wizard to set up grading for a new lab:
+
+```bash
+node bin/create_lab.js             # interactive, prompts for lab number
+node bin/create_lab.js Lab07       # pre-specify lab
+```
+
+The wizard will:
+1. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm)
+2. Copy it into `configs/LabXX/` with the standard naming convention
+3. Guide you through configuring title, runtime mode, feature regexes, and rubric cell mappings
+4. Optionally create a custom analyzer skeleton
+
 ### File layout
 
 ```

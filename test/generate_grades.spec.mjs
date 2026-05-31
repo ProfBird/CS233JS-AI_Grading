@@ -13,7 +13,148 @@ import generateGrades from '../pipeline/generate_grades.js';
 const require = createRequire(import.meta.url);
 const XLSX = require('xlsx');
 
-const { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType, resolveOutputPath } = generateGrades;
+const { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType, resolveOutputPath, stockCommentFor } = generateGrades;
+
+// ── stock comments by score tier ────────────────────────────────────────────
+describe('stockCommentFor', () => {
+    const sc = { full: 'Good', partial: 'Errors', zero: 'Missing' };
+
+    it('returns the full-tier comment at max score', () => {
+        expect(stockCommentFor({ type: 'lint', maxScore: 6, stockComments: sc }, 6)).toBe('Good');
+    });
+
+    it('returns the partial-tier comment for a middle score', () => {
+        expect(stockCommentFor({ type: 'lint', maxScore: 6, stockComments: sc }, 3)).toBe('Errors');
+    });
+
+    it('returns the zero-tier comment at or below zero', () => {
+        expect(stockCommentFor({ type: 'lint', maxScore: 6, stockComments: sc }, 0)).toBe('Missing');
+    });
+
+    it('exempts manual rows so a human still grades them', () => {
+        expect(stockCommentFor({ type: 'manual', maxScore: 6, stockComments: sc }, 6)).toBeNull();
+    });
+
+    it('returns null when the mapping has no stock comments', () => {
+        expect(stockCommentFor({ type: 'lint', maxScore: 6 }, 6)).toBeNull();
+    });
+
+    it('returns null when the matching tier text is empty', () => {
+        expect(stockCommentFor({ type: 'lint', maxScore: 6, stockComments: { full: 'Good' } }, 3)).toBeNull();
+    });
+});
+
+// ── html_validate / css_validate handlers ───────────────────────────────────
+describe('html_validate handler', () => {
+    const handler = getHandler('html_validate');
+    const map = { type: 'html_validate', maxScore: 6, tolerance: 3 };
+
+    it('awards full marks for zero errors', () => {
+        expect(handler(map, { htmlValidation: { htmlFiles: 1, errors: 0 } }).score).toBe(6);
+    });
+    it('awards half (rounded, min 1) within tolerance', () => {
+        const r = handler(map, { htmlValidation: { htmlFiles: 1, errors: 2, messages: ['x: 2'] } });
+        expect(r.score).toBe(3);
+    });
+    it('awards zero beyond tolerance', () => {
+        expect(handler(map, { htmlValidation: { htmlFiles: 1, errors: 9, messages: ['x: 9'] } }).score).toBe(0);
+    });
+    it('scores zero with a clear note when there are no HTML files', () => {
+        const r = handler(map, { htmlValidation: { htmlFiles: 0, errors: 0 } });
+        expect(r.score).toBe(0);
+        expect(r.comment).toMatch(/no html files/i);
+    });
+    it('tolerates a missing htmlValidation object', () => {
+        expect(handler(map, {}).score).toBe(0);
+    });
+});
+
+describe('css_validate handler', () => {
+    const handler = getHandler('css_validate');
+    const map = { type: 'css_validate', maxScore: 4 };  // default tolerance 3
+
+    it('awards full marks for zero errors', () => {
+        expect(handler(map, { cssValidation: { cssFiles: 1, errors: 0 } }).score).toBe(4);
+    });
+    it('awards zero beyond the default tolerance', () => {
+        expect(handler(map, { cssValidation: { cssFiles: 1, errors: 5, messages: ['x: 5'] } }).score).toBe(0);
+    });
+});
+
+describe('name_check handler', () => {
+    const handler = getHandler('name_check');
+    const map = { type: 'name_check', maxScore: 2, tolerance: 2 };
+
+    it('awards full marks when there are no invalid names', () => {
+        const r = handler(map, { nameCheck: { entriesChecked: 8, errors: 0 } });
+        expect(r.score).toBe(2);
+        expect(r.comment).toMatch(/all file\/folder names are valid/i);
+    });
+    it('awards half (min 1) within tolerance and lists offenders', () => {
+        const r = handler(map, { nameCheck: { entriesChecked: 8, errors: 2, messages: ['my file.js (space)', 'bad dir (space)'] } });
+        expect(r.score).toBe(1);
+        expect(r.comment).toMatch(/my file\.js/);
+    });
+    it('awards zero beyond tolerance', () => {
+        expect(handler(map, { nameCheck: { entriesChecked: 8, errors: 5, messages: ['x (space)'] } }).score).toBe(0);
+    });
+    it('scores zero with a note when there are no files to check (empty submission)', () => {
+        const r = handler(map, { nameCheck: { entriesChecked: 0, errors: 0 } });
+        expect(r.score).toBe(0);
+        expect(r.comment).toMatch(/no files to check/i);
+    });
+});
+
+// ── stock comments wired into computeResults ─────────────────────────────────
+describe('computeResults — stock comment override', () => {
+    const { computeResults } = generateGrades;
+    const sc = { full: 'Good', partial: 'Errors', zero: 'Missing' };
+    const config = { mappings: [
+        { type: 'lint', severity: 'errors', cell: 'D7', commentCell: 'F7', maxScore: 6, stockComments: sc },
+    ] };
+
+    it('writes the full-tier stock comment when the handler scores max', async () => {
+        const student = { lint: { jsFiles: 1, errors: 0 } };
+        const [r] = await computeResults(student, config);
+        expect(r.score).toBe(6);
+        expect(r.comment).toBe('Good');           // overrode handler's "No syntax errors"
+    });
+
+    it('writes the zero-tier stock comment when the handler scores 0', async () => {
+        const student = { lint: { jsFiles: 1, errors: 4 } };
+        const [r] = await computeResults(student, config);
+        expect(r.score).toBe(0);
+        expect(r.comment).toBe('Missing');
+    });
+
+    it('leaves manual rows with their own comment (exempt)', async () => {
+        const manualCfg = { mappings: [
+            { type: 'manual', cell: 'D7', commentCell: 'F7', maxScore: 6, msg: 'CHECK ME', stockComments: sc },
+        ] };
+        const [r] = await computeResults({}, manualCfg);
+        expect(r.comment).toContain('CHECK ME');  // not 'Good'/'Missing'
+    });
+
+    it('fires the partial-tier stock comment for an html_validate row', async () => {
+        const cfg = { mappings: [
+            { type: 'html_validate', cell: 'D7', commentCell: 'F7', maxScore: 6, tolerance: 3, stockComments: sc },
+        ] };
+        const student = { htmlValidation: { htmlFiles: 1, errors: 2, messages: ['x: 2'] } };
+        const [r] = await computeResults(student, cfg);
+        expect(r.score).toBe(3);                   // half of 6
+        expect(r.comment).toBe('Errors');          // partial-tier stock comment
+    });
+
+    it('fires the zero-tier stock comment for a name_check row', async () => {
+        const cfg = { mappings: [
+            { type: 'name_check', cell: 'D7', commentCell: 'F7', maxScore: 2, tolerance: 2, stockComments: sc },
+        ] };
+        const student = { nameCheck: { entriesChecked: 8, errors: 5, messages: ['a (space)'] } };
+        const [r] = await computeResults(student, cfg);
+        expect(r.score).toBe(0);
+        expect(r.comment).toBe('Missing');         // zero-tier stock comment
+    });
+});
 
 // ── Registry ───────────────────────────────────────────────────────────────
 

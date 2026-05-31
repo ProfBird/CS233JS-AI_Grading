@@ -233,6 +233,49 @@ registerHandler('lint', (map, student) => {
     return { score: 0, comment: 'No JS files to lint' };
 });
 
+// Shared tiered scorer for the markup validators: 0 errors = full, ≤ tolerance =
+// half, more = zero. Returns { score, comment }; the stock-comment tier override
+// in computeResults replaces the comment when the mapping carries stockComments.
+function scoreValidation(map, data, fileKey, label) {
+    const fileCount = data[fileKey] || 0;
+    if (fileCount === 0) return { score: 0, comment: `No ${label} files to validate` };
+
+    const errors = data.errors || 0;
+    const tolerance = map.tolerance ?? 3;
+    const topIssues = (data.messages || []).slice(0, 3).join(', ');
+
+    if (errors === 0) {
+        return { score: map.maxScore, comment: `Valid ${label} — no errors` };
+    } else if (errors <= tolerance) {
+        return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${errors} ${label} error${errors !== 1 ? 's' : ''} (${topIssues})` };
+    }
+    return { score: 0, comment: `${errors} ${label} errors (${topIssues})` };
+}
+
+registerHandler('html_validate', (map, student) => {
+    return scoreValidation(map, student.htmlValidation || {}, 'htmlFiles', 'HTML');
+});
+
+registerHandler('css_validate', (map, student) => {
+    return scoreValidation(map, student.cssValidation || {}, 'cssFiles', 'CSS');
+});
+
+registerHandler('name_check', (map, student) => {
+    const nc = student.nameCheck || {};
+    if ((nc.entriesChecked || 0) === 0) return { score: 0, comment: 'No files to check' };
+
+    const errors = nc.errors || 0;
+    const tolerance = map.tolerance ?? 2;
+    const offenders = (nc.messages || []).slice(0, 4).join(', ');
+
+    if (errors === 0) {
+        return { score: map.maxScore, comment: 'All file/folder names are valid' };
+    } else if (errors <= tolerance) {
+        return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${errors} invalid name${errors !== 1 ? 's' : ''}: ${offenders}` };
+    }
+    return { score: 0, comment: `${errors} invalid names: ${offenders}` };
+});
+
 registerHandler('build_check', (map, student) => {
     const rt = student.runtimeCheck || {};
 
@@ -399,6 +442,9 @@ function mappingDescription(map) {
         case 'build_check': return 'App builds without errors';
         case 'browser_check': return 'No run-time console errors';
         case 'lint': return 'Style and best practices';
+        case 'html_validate': return 'HTML is valid';
+        case 'css_validate': return 'CSS is valid';
+        case 'name_check': return 'File/folder names are valid';
         case 'developer_comments': return 'Developer name/date in files';
         case 'github_repo': return 'GitHub repo set up correctly';
         case 'deploy_check': return 'Deployed and running on citstudent';
@@ -424,6 +470,16 @@ function* partFeatureMaps(config) {
 }
 
 const num = v => (v != null ? v : 0);
+
+// Returns the grader-authored stock comment for a mapping at the given score, or null
+// when none applies. Manual rows are exempt (a human still grades them), and missing
+// tier text falls through to null so the handler's own comment stands.
+function stockCommentFor(map, score) {
+    if (!map.stockComments || map.type === 'manual') return null;
+    const max  = map.maxScore || 0;
+    const tier = (max > 0 && score >= max) ? 'full' : (score <= 0 ? 'zero' : 'partial');
+    return map.stockComments[tier] || null;
+}
 
 /**
  * Computes the per-mapping grading results for a student — the single source of
@@ -473,6 +529,12 @@ async function computeResults(student, config) {
             score = 0;
             comment = `ERROR: Unknown mapping type "${map.type}"`;
         }
+
+        // Grader-authored stock comments override the generic message at the matching
+        // score tier. Manual rows are exempt — they keep their "needs manual grading"
+        // flag so a human still grades them.
+        const stock = stockCommentFor(map, num(score));
+        if (stock !== null) comment = stock;
 
         results.push({
             desc: mappingDescription(map),
@@ -768,3 +830,4 @@ module.exports.VALID_MAPPING_TYPES = VALID_MAPPING_TYPES;
 module.exports.isCodeSourceType = isCodeSourceType;
 module.exports.resolveOutputPath = resolveOutputPath;
 module.exports.computeResults = computeResults;
+module.exports.stockCommentFor = stockCommentFor;

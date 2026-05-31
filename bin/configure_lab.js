@@ -8,7 +8,7 @@ const path = require('path');
 
 const {
     normalizeAssignmentName, colLetter, findSpreadsheets, copyRubric,
-    readRubricRows, promptRubricRows, buildConfig, writeLab,
+    readRubricRows, readRubricCriteria, promptRubricRows, buildConfig, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
     buildMappingEntry, promptFields, createRL, ask, askBoolean, askOptions, askInt,
 } = require('./create_lab.js');
@@ -27,6 +27,11 @@ function makeHelpers(rl) {
         askBoolean:  (q, def) => askBoolean(rl, q, def),
         askOptions:  (prompt, opts, def) => askOptions(rl, prompt, opts, def ?? 0),
     };
+}
+
+// Builds a prompt string that shows the current value as a [default] when present.
+function defPrompt(text, current) {
+    return current ? `${text} [${current}]: ` : `${text} (or blank): `;
 }
 
 // ── LLM prompt construction ───────────────────────────────────────────────
@@ -56,11 +61,20 @@ function buildRowTable(scoringRows) {
     return [header, sep, ...rows].join('\n');
 }
 
-function buildLLMPrompt(labName, scoringRows) {
+function buildCriteriaRef(criteria) {
+    if (!criteria.length) return '';
+    const header = '| Item | Points | Criteria (what the grader checks) |';
+    const sep    = '|------|--------|-----------------------------------|';
+    const rows   = criteria.map(c => `| ${c.label} | ${c.points || ''} | ${c.criteria} |`);
+    return `\nRUBRIC SHEET (reference — item descriptions; correlate these with the rows to configure):
+${[header, sep, ...rows].join('\n')}\n`;
+}
+
+function buildLLMPrompt(labName, scoringRows, criteria = []) {
     return `Assignment: ${labName}
 
 ${buildTypeRef()}
-
+${buildCriteriaRef(criteria)}
 RUBRIC ROWS TO CONFIGURE:
 ${buildRowTable(scoringRows)}
 
@@ -71,10 +85,13 @@ Required fields for every object:
   type         – one of the mapping types listed above
   maxScore     – integer from "Possible" column (0 if blank)
 
+Use the RUBRIC SHEET descriptions above to infer the most accurate type for each row.
+Do NOT use type "feature" — it requires a regex that is not yet defined; prefer
+manual, package_check, build_check, or lint instead.
+
 Type-specific extra fields:
   manual       → msg: short description of what to check
   lint         → severity: "errors" or "warnings"
-  feature      → featureId: string, minCount: integer (default 1), successMsg, failMsg
 
 Example (3 rows):
 [
@@ -91,9 +108,34 @@ const SYSTEM_PROMPT =
 
 // ── Draft generation ──────────────────────────────────────────────────────
 
-function heuristicDraft(scoringRows) {
+// Downgrade a "feature" guess to "manual" unless its featureId already has a
+// matching analysis.features regex — otherwise the row silently scores 0 at grade time.
+function guardFeatureType(type, featureId, knownFeatureIds) {
+    if (type !== 'feature') return type;
+    if (featureId && knownFeatureIds.has(featureId)) return type;
+    return 'manual';
+}
+
+// Best-effort match of a Grade-sheet label to a Rubric-sheet criteria entry by token
+// overlap (the two sheets word/order items differently, so no exact join exists).
+function findCriteria(label, criteria) {
+    const norm = s => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(w => w.length > 2);
+    const want = new Set(norm(label));
+    if (!want.size) return '';
+    let best = null, bestScore = 0;
+    for (const c of criteria) {
+        const tokens = norm(`${c.label} ${c.criteria}`);
+        const hits = tokens.filter(t => want.has(t)).length;
+        if (hits > bestScore) { bestScore = hits; best = c; }
+    }
+    return bestScore >= 1 && best ? best.criteria : '';
+}
+
+function heuristicDraft(scoringRows, criteria = [], knownFeatureIds = new Set()) {
     return scoringRows.map(rr => {
-        const type   = guessMappingType(rr.label);
+        const extra  = findCriteria(rr.label, criteria);
+        const guessed = guessMappingType(extra ? `${rr.label} ${extra}` : rr.label);
+        const type   = guardFeatureType(guessed, undefined, knownFeatureIds);
         const schema = MAPPING_TYPE_SCHEMA[type] ?? GENERIC_MAPPING_SCHEMA;
         const entry  = {
             cell:        rr.scoreCell,
@@ -108,6 +150,7 @@ function heuristicDraft(scoringRows) {
             if (f.type === 'options') entry[f.key] = f.options[0].value;
             else if (f.default !== undefined) entry[f.key] = f.default;
         }
+        if (rr.stockComments) entry.stockComments = rr.stockComments;
         return entry;
     });
 }
@@ -120,11 +163,12 @@ function extractJSON(text) {
     return text;
 }
 
-function mergeLLMResponse(llmDraft, scoringRows) {
+function mergeLLMResponse(llmDraft, scoringRows, knownFeatureIds = new Set()) {
     const validTypes = new Set(MAPPING_TYPES.map(t => t.value));
     return scoringRows.map((rr, i) => {
         const src = llmDraft[i] ?? {};
-        const type = validTypes.has(src.type) ? src.type : guessMappingType(rr.label);
+        const rawType = validTypes.has(src.type) ? src.type : guessMappingType(rr.label);
+        const type = guardFeatureType(rawType, src.featureId, knownFeatureIds);
         const maxScore = typeof src.maxScore === 'number' && src.maxScore >= 0
             ? src.maxScore
             : parseInt(rr.possible, 10) || 0;
@@ -146,50 +190,53 @@ function mergeLLMResponse(llmDraft, scoringRows) {
             else if (f.type === 'options') entry[f.key] = f.options[0].value;
             else if (f.default !== undefined) entry[f.key] = f.default;
         }
+        if (rr.stockComments) entry.stockComments = rr.stockComments;
         return entry;
     });
 }
 
-async function generateDraft(llm, labName, rubricRows) {
+async function generateDraft(llm, labName, rubricRows, criteria = [], knownFeatureIds = new Set()) {
     const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
 
-    if (!llm) return heuristicDraft(scoringRows);
+    if (!llm) return heuristicDraft(scoringRows, criteria, knownFeatureIds);
 
     process.stdout.write('  Asking AI to draft configuration...');
-    const response = await llm.chat(SYSTEM_PROMPT, buildLLMPrompt(labName, scoringRows));
+    const response = await llm.chat(SYSTEM_PROMPT, buildLLMPrompt(labName, scoringRows, criteria));
     if (!response) {
         console.log(' failed. Using heuristic fallback.');
-        return heuristicDraft(scoringRows);
+        return heuristicDraft(scoringRows, criteria, knownFeatureIds);
     }
 
     try {
         const parsed = JSON.parse(extractJSON(response));
         if (!Array.isArray(parsed)) throw new Error('not an array');
         console.log(' done.');
-        return mergeLLMResponse(parsed, scoringRows);
+        return mergeLLMResponse(parsed, scoringRows, knownFeatureIds);
     } catch (e) {
         console.log(` parse error (${e.message}). Using heuristic fallback.`);
-        return heuristicDraft(scoringRows);
+        return heuristicDraft(scoringRows, criteria, knownFeatureIds);
     }
 }
 
 // ── Draft table display ───────────────────────────────────────────────────
 
 function summaryNotes(entry) {
+    let note = '';
     if (entry.type === 'manual' && entry.msg)
-        return `"${String(entry.msg).slice(0, 28)}"`;
-    if (entry.type === 'lint' && entry.severity)
-        return `severity: ${entry.severity}`;
-    if (entry.type === 'feature' && entry.featureId)
-        return `featureId: ${entry.featureId}`;
-    if (entry.type === 'github_repo' && entry.linkCell)
-        return `linkCell: ${entry.linkCell}`;
-    return '';
+        note = `"${String(entry.msg).slice(0, 24)}"`;
+    else if (entry.type === 'lint' && entry.severity)
+        note = `severity: ${entry.severity}`;
+    else if (entry.type === 'feature' && entry.featureId)
+        note = `featureId: ${entry.featureId}`;
+    else if (entry.type === 'github_repo' && entry.linkCell)
+        note = `linkCell: ${entry.linkCell}`;
+    if (entry.stockComments) note = (note ? note + ' ' : '') + '+stock';
+    return note;
 }
 
 function printDraftTable(draft) {
     const maxLabel = Math.min(34, Math.max(5, ...draft.map(d => (d._label || '').length)));
-    const maxType  = Math.max(4, ...draft.map(d => d.type.length));
+    const maxType  = Math.max(6, ...draft.map(d => (d._skip ? '(skip)' : d.type).length));
 
     const bar = (w) => '─'.repeat(w);
     console.log(
@@ -202,9 +249,9 @@ function printDraftTable(draft) {
         const num   = String(i + 1).padStart(3);
         const label = (e._label || '').slice(0, maxLabel).padEnd(maxLabel);
         const cell  = (e.cell || '').padEnd(5);
-        const type  = e.type.padEnd(maxType);
-        const max   = String(e.maxScore ?? 0).padStart(3);
-        const notes = summaryNotes(e);
+        const type  = (e._skip ? '(skip)' : e.type).padEnd(maxType);
+        const max   = String(e._skip ? '' : (e.maxScore ?? 0)).padStart(3);
+        const notes = e._skip ? 'no mapping — graded by hand' : summaryNotes(e);
         console.log(`  ${num} │ ${label} │ ${cell} │ ${type} │ ${max} │ ${notes}`);
     });
     console.log();
@@ -232,15 +279,28 @@ async function reviewDraft(rl, draft, rubricRows) {
         }
         if (!indices.length) { console.log('  No valid row numbers.'); continue; }
 
+        const SKIP = { label: '— skip (no mapping, graded by hand) —', value: '__skip__' };
+        const typeChoices = [...MAPPING_TYPES, SKIP];
+
         for (const idx of indices) {
             const rr      = scoringRows[idx];
             const current = draft[idx];
             console.log(`\n  Row ${idx + 1}: "${current._label || rr.label}"  [${current.cell}]`);
 
-            const guessedIdx = Math.max(0, MAPPING_TYPES.findIndex(t => t.value === current.type));
-            const newType    = await askOptions(rl, '  Mapping type:', MAPPING_TYPES, guessedIdx);
-            const newEntry   = await buildMappingEntry(rl, newType, rr, current);
-            if (newEntry) draft[idx] = { ...newEntry, _label: rr.label };
+            const guessedIdx = current._skip
+                ? typeChoices.length - 1
+                : Math.max(0, MAPPING_TYPES.findIndex(t => t.value === current.type));
+            const newType = await askOptions(rl, '  Mapping type:', typeChoices, guessedIdx);
+            if (newType === '__skip__') {
+                draft[idx] = { _label: rr.label, cell: rr.scoreCell, _skip: true };
+                continue;
+            }
+            const newEntry = await buildMappingEntry(rl, newType, rr, current);
+            if (newEntry) {
+                const entry = { ...newEntry, _label: rr.label };
+                if (rr.stockComments) entry.stockComments = rr.stockComments;
+                draft[idx] = entry;
+            }
         }
     }
 
@@ -322,6 +382,14 @@ async function main() {
         }
         const rubricPath = path.join(labDir, rubricName);
 
+        // Load any existing config now — used for defaults, feature-id guard, and preservation.
+        let existingConfig = null;
+        const configPath = path.join(labDir, `${labName.toLowerCase()}_config.json`);
+        try { existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (e) {}
+        const knownFeatureIds = new Set(
+            (existingConfig?.analysis?.features || []).map(f => f.id).filter(Boolean)
+        );
+
         // 4. Read rubric with column confirmation
         console.log('\n--- Reading Rubric ---');
         const rubricRows = await promptRubricRows(rl, rubricPath);
@@ -329,34 +397,38 @@ async function main() {
         const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
         console.log(`  ${scoringRows.length} scoring rows, ${rubricRows.length - scoringRows.length} section headers.`);
 
+        // Read Criteria descriptions from the Rubric sheet (reference context for the LLM).
+        const criteria = readRubricCriteria(rubricPath);
+        if (criteria.length) console.log(`  Found ${criteria.length} criteria descriptions on the Rubric sheet.`);
+
         // 5. Generate draft
         console.log('\n--- Generating Draft ---');
-        let draft = await generateDraft(llm, labName, rubricRows);
+        let draft = await generateDraft(llm, labName, rubricRows, criteria, knownFeatureIds);
 
         // 6. Review + edit
         console.log('\n--- Review Draft ---');
         draft = await reviewDraft(rl, draft, rubricRows);
 
-        // 7. Global config questions
+        // 7. Global config questions (defaults pre-filled from any existing config)
         console.log('\n--- Assignment Settings ---');
-        const titleText    = await ask(rl, 'Assignment title (or blank): ');
-        const runtimeCheck = await askOptions(rl, 'Runtime check mode:', [
+        const ex = existingConfig || {};
+        const titleText    = await ask(rl, defPrompt('Assignment title', ex.titleText)) || ex.titleText || '';
+        const runtimeOpts  = [
             { label: 'browser', value: 'browser', desc: 'Puppeteer' },
             { label: 'build',   value: 'build',   desc: 'npm install + npm run build' },
             { label: 'both',    value: 'both',     desc: 'Browser + build' },
-        ]);
-        const summaryCell = await ask(rl, 'Summary cell (e.g. A2, or blank): ');
-        const graderCell  = await ask(rl, 'Grader cell (e.g. E1, or blank): ');
-        const titleCell   = await ask(rl, 'Title cell (e.g. A1, or blank): ');
+        ];
+        const rtIdx = Math.max(0, runtimeOpts.findIndex(o => o.value === ex.runtimeCheck));
+        const runtimeCheck = await askOptions(rl, 'Runtime check mode:', runtimeOpts, rtIdx);
+        const summaryCell = await ask(rl, defPrompt('Summary cell (e.g. A2)', ex.summaryCell)) || ex.summaryCell || '';
+        const graderCell  = await ask(rl, defPrompt('Grader cell (e.g. E1)',  ex.graderCell))  || ex.graderCell  || '';
+        const titleCell   = await ask(rl, defPrompt('Title cell (e.g. A1)',   ex.titleCell))   || ex.titleCell   || '';
 
-        // 8. Preserve existing config fields (parts, analysis, etc.)
-        let existingConfig = null;
-        const configPath = path.join(labDir, `${labName.toLowerCase()}_config.json`);
-        try { existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (e) {}
-
-        // 9. Build and write
-        // Strip the _label display field from each entry before saving
-        const mappings = draft.map(({ _label, ...rest }) => rest);
+        // 8. Build and write
+        // Drop skipped rows and the _label display field before saving.
+        const mappings = draft
+            .filter(e => !e._skip)
+            .map(({ _label, _skip, ...rest }) => rest);
 
         const config = buildConfig(labName, {
             rubricName,
@@ -391,7 +463,15 @@ async function main() {
     }
 }
 
-main().catch(err => {
-    console.error('Fatal error:', err);
-    process.exit(1);
-});
+module.exports = {
+    heuristicDraft, mergeLLMResponse, guardFeatureType, findCriteria,
+    buildLLMPrompt, buildCriteriaRef, extractJSON, summaryNotes, defPrompt,
+    printDraftTable,
+};
+
+if (require.main === module) {
+    main().catch(err => {
+        console.error('Fatal error:', err);
+        process.exit(1);
+    });
+}

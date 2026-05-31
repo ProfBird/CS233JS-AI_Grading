@@ -188,12 +188,12 @@ describe('getSubdirs', () => {
 // ── getAllJsFiles (lint_code.js) ───────────────────────────────────────────
 
 describe('getAllJsFiles', () => {
-    it('with no exclusions: collects .js files, skipping dot-dirs and __MACOSX (but keeping dot-files)', () => {
+    it('with no exclusions: collects .js files, skipping dot-dirs, node_modules, dist, and __MACOSX (but keeping dot-files)', () => {
+        // node_modules/dist/build are hard-skipped by the shared collector — the
+        // validation phases run after the build, so they must never be scanned.
         expect(rel(getAllJsFiles(root))).toEqual(sorted([
             '.eslintrc.js',
             'app.js',
-            'dist/bundle.js',
-            'node_modules/dep/dep.js',
             'src/components/Btn.js',
             'src/main.js',
             'src/util.js',

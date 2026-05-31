@@ -20,6 +20,9 @@ const { spawnSync } = require('child_process');
 const extractCode = require('./pipeline/extract_code.js');
 const analyzeCode = require('./pipeline/analyze_code.js');
 const lintCode = require('./pipeline/lint_code.js');
+const validateHtml = require('./pipeline/validate_html.js');
+const validateCss = require('./pipeline/validate_css.js');
+const checkNames = require('./pipeline/check_names.js');
 const runtimeCheck = require('./pipeline/runtime_check.js');
 const generateGrades = require('./pipeline/generate_grades.js');
 const readCodeReview = require('./pipeline/read_code_review.js');
@@ -563,6 +566,13 @@ async function main() {
 
     // 5. Linting — attaches to student.lint
     await lintCode(toGrade, config, artifactsDir);
+
+    // 5b. HTML / CSS validation — attaches student.htmlValidation / student.cssValidation
+    await validateHtml(toGrade, config, artifactsDir);
+    await validateCss(toGrade, config, artifactsDir);
+
+    // 5c. File/folder name legality — attaches student.nameCheck
+    await checkNames(toGrade, config, artifactsDir);
 
     // 6. Generation — reads from student objects
     let generateSummary;

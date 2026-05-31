@@ -7,21 +7,15 @@
 
 const fs = require('fs');
 const path = require('path');
-const { walk } = require('../lib/file_walker');
+const { getAllFilesByExt } = require('../lib/file_walker');
 
 const LINT_REPORT = 'lint_report.json';
 
 // Collects .js files under dir. Exclusions are case-insensitive substring matches.
-// Skips dot-dirs and "__MACOSX", and does not descend into symlinks — but still
-// collects dot-files that end in .js (e.g. .eslintrc.js).
+// Skips dot-dirs, node_modules/dist/build, and "__MACOSX"; does not descend into
+// symlinks. Delegates to the shared collector so the skip list stays in one place.
 function getAllJsFiles(dir, exclusions = []) {
-    const results = [];
-    walk(dir, {
-        shouldSkip: full => exclusions.some(ex => full.toLowerCase().includes(ex.toLowerCase())),
-        shouldDescend: (full, name) => !name.startsWith('.') && name !== '__MACOSX',
-        onFile: (full, name) => { if (name.endsWith('.js')) results.push(full); }
-    });
-    return results;
+    return getAllFilesByExt(dir, '.js', exclusions);
 }
 
 async function lintFiles(jsFiles, eslintConfigFile, extractedDir) {

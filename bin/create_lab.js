@@ -174,7 +174,22 @@ function detectRubricLayout(rows, searchRe = POSSIBLE_HEADER_RE) {
     if (scoreCol    < 0) scoreCol    = possibleCol + 1;
     if (commentCol  < 0) commentCol  = scoreCol + 2;
 
-    return { headerRow, possibleCol, scoreCol, commentCol };
+    // Optional stock-comment columns: a "Stock comments" banner sits on the header
+    // row or the row just above it; the three tiers (100% / <100% / 0%) occupy that
+    // column and the next two, left-to-right.
+    let fullCol = -1, partialCol = -1, zeroCol = -1;
+    for (let r = Math.max(0, headerRow - 1); r <= headerRow; r++) {
+        const scanRow = rows[r] ?? [];
+        for (let c = 0; c < scanRow.length; c++) {
+            if (/stock\s*comments?/i.test((scanRow[c] ?? '').toString().trim())) {
+                fullCol = c; partialCol = c + 1; zeroCol = c + 2;
+                break;
+            }
+        }
+        if (fullCol >= 0) break;
+    }
+
+    return { headerRow, possibleCol, scoreCol, commentCol, fullCol, partialCol, zeroCol };
 }
 
 // Reads rubric rows using a pre-confirmed layout object or an optional custom headerLabel.
@@ -208,6 +223,7 @@ function readRubricRows(rubricPath, layoutOrLabel = null) {
     }
 
     const { headerRow, possibleCol, scoreCol, commentCol } = layout;
+    const { fullCol = -1, partialCol = -1, zeroCol = -1 } = layout;
 
     let tableEnd = rows.length;
     for (let i = headerRow + 1; i < rows.length; i++) {
@@ -233,16 +249,76 @@ function readRubricRows(rubricPath, layoutOrLabel = null) {
             && cellText(row, scoreCol)   === ''
             && cellText(row, commentCol) === '';
 
-        rubricRows.push({
+        const entry = {
             excelRow: i + 1,
             label,
             possible,
             scoreCell:   excelCell(scoreCol,   i + 1),
             commentCell: excelCell(commentCol, i + 1),
             isSectionHeader
-        });
+        };
+
+        // Capture grader-authored stock comments (100% / <100% / 0%) when present.
+        if (fullCol >= 0 && !isSectionHeader) {
+            const full    = cellText(row, fullCol);
+            const partial = cellText(row, partialCol);
+            const zero    = cellText(row, zeroCol);
+            if (full || partial || zero) {
+                const sc = {};
+                if (full)    sc.full    = full;
+                if (partial) sc.partial = partial;
+                if (zero)    sc.zero    = zero;
+                entry.stockComments = sc;
+            }
+        }
+
+        rubricRows.push(entry);
     }
     return rubricRows;
+}
+
+// Reads the optional "Rubric" sheet and returns item descriptions from its "Criteria"
+// column (position varies between rubrics). Used as holistic reference context for the
+// LLM — NOT joined per-row, since the Rubric and Grade sheets order/word items differently.
+// Returns [{ label, points, criteria }] or [] when no Rubric sheet / no Criteria column.
+function readRubricCriteria(rubricPath) {
+    let wb;
+    try { wb = XLSX.readFile(rubricPath); } catch (e) { return []; }
+    const ws = wb.Sheets['Rubric'];
+    if (!ws) return [];
+    const rows = sheetRows(ws);
+
+    // Find the header row that contains a "Criteria" column.
+    let headerRow = -1, criteriaCol = -1, pointsCol = -1;
+    for (let i = 0; i < rows.length; i++) {
+        const hrow = rows[i];
+        const cc = hrow.findIndex(c => /^criteria$/i.test((c ?? '').toString().trim()));
+        if (cc >= 0) {
+            headerRow = i;
+            criteriaCol = cc;
+            pointsCol = hrow.findIndex(c => /^(possible|points?|pts|max)$/i.test((c ?? '').toString().trim()));
+            break;
+        }
+    }
+    if (headerRow < 0) return [];
+
+    const out = [];
+    for (let i = headerRow + 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (isBlankRow(row)) continue;
+        const label = cellText(row, 0) || cellText(row, 1);
+        if (!label) continue;
+        const lower = label.toLowerCase();
+        if (lower.startsWith('total') || lower.startsWith('sub-total')) continue;
+        const criteria = cellText(row, criteriaCol);
+        if (!criteria) continue;
+        out.push({
+            label,
+            points: pointsCol >= 0 ? cellText(row, pointsCol) : '',
+            criteria,
+        });
+    }
+    return out;
 }
 
 // Converts space-separated keywords into a case-insensitive OR regex for folder matching.
@@ -310,6 +386,9 @@ async function promptRubricRows(rl, rubricPath) {
     console.log(`    Max points : ${colLetter(layout.possibleCol)}`);
     console.log(`    Score      : ${colLetter(layout.scoreCol)}`);
     console.log(`    Comments   : ${colLetter(layout.commentCol)}`);
+    if (layout.fullCol >= 0) {
+        console.log(`    Stock comments (100%/<100%/0%): ${colLetter(layout.fullCol)}/${colLetter(layout.partialCol)}/${colLetter(layout.zeroCol)}`);
+    }
 
     const ok = await askBoolean(rl, '  Are these columns correct?', true);
     if (!ok) {
@@ -399,6 +478,9 @@ const MAPPING_TYPES = [
     { label: 'feature', value: 'feature', desc: 'Regex feature count → score' },
     { label: 'manual', value: 'manual', desc: 'Manual review item (uses code review form scores)' },
     { label: 'lint', value: 'lint', desc: 'ESLint errors or warnings' },
+    { label: 'html_validate', value: 'html_validate', desc: 'HTML validity (html-validate) — counts errors' },
+    { label: 'css_validate', value: 'css_validate', desc: 'CSS validity (csstree) — counts errors' },
+    { label: 'name_check', value: 'name_check', desc: 'File/folder names are Linux-safe (POSIX chars, no spaces)' },
     { label: 'code_review', value: 'code_review', desc: 'Code review form submitted + production completed' },
     { label: 'deploy_check', value: 'deploy_check', desc: 'Check citstudent deployment (bundled + reachable)' },
     { label: 'build_check', value: 'build_check', desc: 'npm install && npm run build check' },
@@ -423,6 +505,9 @@ function guessMappingType(label) {
     if (/build|vite|webpack|bundle|npm\s*run/.test(l))          return 'build_check';
     if (/package\.json|npm\s*package|dependency/.test(l))       return 'package_check';
     if (/lint|eslint|code\s*style/.test(l))                     return 'lint';
+    if (/\bhtml\b|index\.html/.test(l))                         return 'html_validate';
+    if (/\bcss\b|stylesheet|style\s*sheet/.test(l))             return 'css_validate';
+    if (/file\s*nam|folder\s*(structure|nam)|directory\s*(structure|nam)|naming\s*conventi/.test(l)) return 'name_check';
     if (/code\s*review|peer\s*review/.test(l))                  return 'code_review';
     if (/developer\s*comment|jsdoc|documentation/.test(l))      return 'developer_comments';
     if (/\burl\b|live\s*link/.test(l))                          return 'url_check';
@@ -463,7 +548,7 @@ async function promptMappingCellByCell(rl, rubricRows) {
 }
 
 const CHECKLIST_TYPES = [
-    'feature', 'manual', 'lint', 'code_review', 'deploy_check',
+    'feature', 'manual', 'lint', 'html_validate', 'css_validate', 'name_check', 'code_review', 'deploy_check',
     'build_check', 'browser_check', 'package_check', 'github_repo',
     'repo_hygiene', 'developer_comments', 'url_check',
     'part_completed', 'part1_completed', 'apps_in_repo', 'npm_package',
@@ -519,6 +604,24 @@ const MAPPING_TYPE_SCHEMA = {
                 { label: 'errors',   value: 'errors',   desc: 'Only syntax/error-level issues' },
                 { label: 'warnings', value: 'warnings', desc: 'Only style/warning-level issues' },
             ]},
+        ]
+    },
+    html_validate: {
+        fields: [
+            { key: 'maxScore',  prompt: '  Max score [0]: ',                 type: 'int', default: 0 },
+            { key: 'tolerance', prompt: '  Errors allowed for half credit [3]: ', type: 'int', default: 3 },
+        ]
+    },
+    css_validate: {
+        fields: [
+            { key: 'maxScore',  prompt: '  Max score [0]: ',                 type: 'int', default: 0 },
+            { key: 'tolerance', prompt: '  Errors allowed for half credit [3]: ', type: 'int', default: 3 },
+        ]
+    },
+    name_check: {
+        fields: [
+            { key: 'maxScore',  prompt: '  Max score [0]: ',                 type: 'int', default: 0 },
+            { key: 'tolerance', prompt: '  Bad names allowed for half credit [2]: ', type: 'int', default: 2 },
         ]
     },
     deploy_check: {
@@ -1088,7 +1191,7 @@ async function main() {
 // Export testable functions for unit tests
 module.exports = {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
-    sheetRows, readRubricRows, buildConfig, buildMappingEntry, promptFields,
+    sheetRows, readRubricRows, readRubricCriteria, buildConfig, buildMappingEntry, promptFields,
     promptFeatures, copyRubric, writeLab, findSpreadsheets, keywordsToFolderPattern,
     promptRubricRows, detectRubricLayout, colLetterToIndex, guessMappingType, POSSIBLE_HEADER_RE,
     askBoolean, askOptions, ask, askInt, createRL,

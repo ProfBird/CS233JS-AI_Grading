@@ -13,7 +13,9 @@
   "license": "ISC",
   "dependencies": {
     "adm-zip": "^0.5.17",
+    "csstree-validator": "^4.0.1",
     "globals": "^17.6.0",
+    "html-validate": "^11.4.0",
     "mammoth": "^1.12.0",
     "node": "^26.1.0",
     "puppeteer": "^24.42.0",

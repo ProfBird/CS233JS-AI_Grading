@@ -10,11 +10,19 @@ import { tmpdir } from 'os';
 
 const {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
-    readRubricRows, buildConfig, buildMappingEntry,
+    readRubricRows, readRubricCriteria, buildConfig, buildMappingEntry,
     askBoolean, askOptions, ask, askInt,
     promptFeatures, copyRubric, writeLab, findSpreadsheets, keywordsToFolderPattern,
     promptRubricRows, guessMappingType,
 } = await import('../bin/create_lab.js');
+
+const {
+    heuristicDraft, mergeLLMResponse, guardFeatureType, findCriteria, printDraftTable,
+} = await import('../bin/configure_lab.js');
+
+const TERM_RUBRIC = join(import.meta.dirname, '..', 'configs', 'TermProject',
+    'DevEnvAndStaticSite', 'CS233JS_TermProjectDevEnv_Rubric.xlsm');
+const LAB04_RUBRIC = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
 
 // ── mock rl factory ─────────────────────────────────────────────────────
 
@@ -229,6 +237,53 @@ describe('readRubricRows — custom headerLabel', () => {
 
     it('returns null for a wrong header label', () => {
         expect(readRubricRows(realRubric, 'MaxPoints')).toBeNull();
+    });
+});
+
+// ── stock comments (new rubric format) ──────────────────────────────────
+
+describe('readRubricRows — stock comments', () => {
+    it('attaches per-row stockComments when the Grade sheet has them', () => {
+        const rows = readRubricRows(TERM_RUBRIC);
+        const withStock = rows.filter(r => r.stockComments);
+        expect(withStock.length).toBeGreaterThan(0);
+
+        const indexHtml = rows.find(r => r.label === 'index.html');
+        expect(indexHtml.stockComments).toEqual({ full: 'Good', partial: 'Errors', zero: 'Missing' });
+    });
+
+    it('never attaches stockComments to section headers', () => {
+        const rows = readRubricRows(TERM_RUBRIC);
+        for (const r of rows.filter(r => r.isSectionHeader)) {
+            expect(r.stockComments).toBeUndefined();
+        }
+    });
+
+    it('omits stockComments entirely when the rubric has no stock columns', () => {
+        const rows = readRubricRows(LAB04_RUBRIC);
+        expect(rows.every(r => r.stockComments === undefined)).toBe(true);
+    });
+});
+
+// ── readRubricCriteria ──────────────────────────────────────────────────
+
+describe('readRubricCriteria', () => {
+    it('returns label/points/criteria entries from the Rubric sheet', () => {
+        const crit = readRubricCriteria(TERM_RUBRIC);
+        expect(crit.length).toBeGreaterThan(0);
+        const first = crit[0];
+        expect(first).toHaveProperty('label');
+        expect(first).toHaveProperty('points');
+        expect(first).toHaveProperty('criteria');
+        expect(first.criteria).toMatch(/free of errors/i);
+    });
+
+    it('returns [] when no Criteria column / no Rubric sheet exists', () => {
+        expect(readRubricCriteria(LAB04_RUBRIC)).toEqual([]);
+    });
+
+    it('returns [] for a non-existent file', () => {
+        expect(readRubricCriteria('/nonexistent/path.xlsm')).toEqual([]);
     });
 });
 
@@ -1027,8 +1082,6 @@ describe('keywordsToFolderPattern', () => {
 
 describe('guessMappingType', () => {
     it('guesses manual for generic labels', () => {
-        expect(guessMappingType('index.html')).toBe('manual');
-        expect(guessMappingType('css file')).toBe('manual');
         expect(guessMappingType('Professional looking')).toBe('manual');
         expect(guessMappingType('Collaborators added')).toBe('manual');
     });
@@ -1037,6 +1090,28 @@ describe('guessMappingType', () => {
         expect(guessMappingType('Code style and best practices')).toBe('lint');
         expect(guessMappingType('ESLint errors')).toBe('lint');
         expect(guessMappingType('Lint check')).toBe('lint');
+    });
+
+    it('guesses html_validate for HTML rows', () => {
+        expect(guessMappingType('index.html')).toBe('html_validate');
+        expect(guessMappingType('One or more HTML pages')).toBe('html_validate');
+        expect(guessMappingType('HTML page(s) are free of errors')).toBe('html_validate');
+    });
+
+    it('guesses css_validate for CSS rows', () => {
+        expect(guessMappingType('css file')).toBe('css_validate');
+        expect(guessMappingType('One or more CSS files')).toBe('css_validate');
+        expect(guessMappingType('stylesheet is valid')).toBe('css_validate');
+    });
+
+    it('does not mistake "Code style" for css_validate (substring guard)', () => {
+        expect(guessMappingType('Code style and best practices')).toBe('lint');
+    });
+
+    it('guesses name_check for file/folder naming rows', () => {
+        expect(guessMappingType('Directory structure and file naming')).toBe('name_check');
+        expect(guessMappingType('Folder structure and file names')).toBe('name_check');
+        expect(guessMappingType('Appropriate naming conventions')).toBe('name_check');
     });
 
     it('guesses github_repo for GitHub repo rows', () => {
@@ -1096,5 +1171,87 @@ describe('askOptions — defaultIdx', () => {
     it('still accepts explicit selection regardless of default', async () => {
         const rl = mockRL(['1']);
         expect(await askOptions(rl, 'Pick:', opts, 2)).toBe('a');
+    });
+});
+
+// ── configure_lab: draft generation ─────────────────────────────────────
+
+describe('guardFeatureType', () => {
+    it('downgrades feature to manual when the featureId is unknown', () => {
+        expect(guardFeatureType('feature', 'vite-config', new Set())).toBe('manual');
+        expect(guardFeatureType('feature', undefined, new Set())).toBe('manual');
+    });
+
+    it('keeps feature when the featureId is already defined', () => {
+        expect(guardFeatureType('feature', 'vite-config', new Set(['vite-config']))).toBe('feature');
+    });
+
+    it('leaves non-feature types untouched', () => {
+        expect(guardFeatureType('lint', undefined, new Set())).toBe('lint');
+        expect(guardFeatureType('build_check', 'x', new Set())).toBe('build_check');
+    });
+});
+
+describe('findCriteria', () => {
+    const criteria = [
+        { label: 'One or more HTML pages', criteria: 'HTML page(s) are free of errors' },
+        { label: 'vite', criteria: 'Vite is in the package.json file' },
+    ];
+
+    it('matches by token overlap across differently-worded labels', () => {
+        expect(findCriteria('index.html (HTML pages)', criteria)).toMatch(/free of errors/i);
+        expect(findCriteria('vite', criteria)).toMatch(/package\.json/i);
+    });
+
+    it('returns empty string when nothing overlaps', () => {
+        expect(findCriteria('completely unrelated thing', criteria)).toBe('');
+    });
+});
+
+describe('heuristicDraft', () => {
+    const rows = readRubricRows(TERM_RUBRIC).filter(r => !r.isSectionHeader);
+
+    it('captures stockComments onto each entry that has them', () => {
+        const draft = heuristicDraft(rows, [], new Set());
+        const idx = draft.find(d => d._label === 'index.html');
+        expect(idx.stockComments).toEqual({ full: 'Good', partial: 'Errors', zero: 'Missing' });
+    });
+
+    it('never emits a feature type without a known featureId', () => {
+        const draft = heuristicDraft(rows, [], new Set());
+        expect(draft.every(d => d.type !== 'feature')).toBe(true);
+    });
+
+    it('uses cell (not scoreCell) as the score-cell key', () => {
+        const draft = heuristicDraft(rows, [], new Set());
+        expect(draft[0]).toHaveProperty('cell');
+        expect(draft[0].scoreCell).toBeUndefined();
+    });
+});
+
+describe('mergeLLMResponse', () => {
+    const rows = readRubricRows(TERM_RUBRIC).filter(r => !r.isSectionHeader).slice(0, 2);
+
+    it('downgrades an LLM feature guess with an unknown featureId', () => {
+        const llm = rows.map(r => ({ type: 'feature', featureId: 'made-up', maxScore: 5 }));
+        const merged = mergeLLMResponse(llm, rows, new Set());
+        expect(merged.every(m => m.type !== 'feature')).toBe(true);
+    });
+
+    it('captures stockComments from the rubric row, not the LLM output', () => {
+        const llm = rows.map(() => ({ type: 'lint', maxScore: 6 }));
+        const merged = mergeLLMResponse(llm, rows, new Set());
+        const idx = merged.find(m => m._label === 'index.html');
+        expect(idx.stockComments).toEqual({ full: 'Good', partial: 'Errors', zero: 'Missing' });
+    });
+});
+
+describe('printDraftTable', () => {
+    it('renders a skipped row (no type field) without throwing', () => {
+        // Guards the regression where maxType read d.type.length on a skip entry.
+        expect(() => printDraftTable([
+            { _label: 'index.html', cell: 'D7', type: 'manual', maxScore: 6 },
+            { _label: 'css file', cell: 'D8', _skip: true },
+        ])).not.toThrow();
     });
 });

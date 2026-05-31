@@ -38,7 +38,7 @@ graph TD
 
     subgraph "Configuration"
         local_config[configs/local-config.json]
-        lab_configs[configs/LabXX/labXX_config.json]
+        lab_configs[configs/{AssignmentName}/{assignmentname}_config.json]
         eslint_config[~/.eslint/eslint.config.mjs]
     end
 
@@ -87,9 +87,9 @@ sequenceDiagram
     participant User
     participant run_all as run_all.js
     participant lc as configs/local-config.json
-    participant config as configs/LabXX/labXX_config.json
+    participant config as configs/{AssignmentName}/{assignmentname}_config.json
 
-    User->>run_all: node run_all.js [LabXX] [flags]
+    User->>run_all: node run_all.js [AssignmentName] [flags]
 
     Note over run_all: === Startup ===
     run_all->>lc: read labRoot + codeRoot
@@ -98,11 +98,11 @@ sequenceDiagram
         run_all->>lc: save for next run
     end
 
-    Note over run_all: === Lab Selection ===
-    run_all->>run_all: scan configs/ subdirs for matching labXX_config.json
+    Note over run_all: === Assignment Selection ===
+    run_all->>run_all: scan configs/ subdirs for matching {assignmentname}_config.json
 
-    alt no labName arg
-        User->>run_all: select lab from menu
+    alt no assignment name arg
+        User->>run_all: select assignment from menu
     end
 
     run_all->>config: read lab config
@@ -201,7 +201,7 @@ The entry point. Handles CLI argument parsing, interactive menus, env configurat
 
 **Key behaviors:**
 - Reads `labRoot` and `codeRoot` from `AI_Grading/configs/local-config.json` (prompts & saves if missing; migrates from old `env.json` automatically)
-- Scans `configs/` for subdirectories containing a matching `labXX_config.json` to build the lab menu
+- Scans `configs/` for subdirectories containing a matching `{assignmentname}_config.json` to build the assignment menu
 - Computes `repoClonePath = <codeRoot>/<labName>` so different labs' extracted code stays in separate subdirectories
 - `--reclone` wipes both old-style dirs (inside submission folders) and the `<codeRoot>/<labName>` tree
 - Validates config on startup — checks required keys, known mapping types, cell reference format, part structure, feature definitions
@@ -258,7 +258,7 @@ Regex-based analysis of student JavaScript files.
 - `findPartDir()` — multi-pass search for part subdirectories (game name matching, folder pattern fallback)
 - Checks for developer comments (name/date markers in files) and code review documents
 - `detectPartsPresent()` — scans extracted directory for part subdirectories; auto-detects `part1`, `part2`, etc. even without explicit `parts` config. Results stored in `analysis.partPresence`
-- **Custom analyzer hook** — `config.analysis.customAnalyzer` specifies a JS module (relative to `configs/LabXX/`) that receives `(jsFiles, analysis, config, student)` and can mutate `analysis` directly. Enables lab-specific checks beyond regex (e.g., Lab02's `modules` feature requires both `import` AND `export`, implemented in `configs/Lab02/lab02_analyzer.js`)
+- **Custom analyzer hook** — `config.analysis.customAnalyzer` specifies a JS module (relative to `configs/{AssignmentName}/`) that receives `(jsFiles, analysis, config, student)` and can mutate `analysis` directly. Enables lab-specific checks beyond regex (e.g., Lab02's `modules` feature requires both `import` AND `export`, implemented in `configs/Lab02/lab02_analyzer.js`)
 
 ### `lint_code.js` — ESLint Runner
 
@@ -316,19 +316,19 @@ Dumps a rubric spreadsheet's Grade sheet as Markdown. Not part of the grading pi
 
 Usage: `node rubric_to_md.js path/to/Rubric.xlsm [output.md]`
 
-### `create_lab.js` — Lab Configuration Wizard
+### `create_lab.js` — Assignment Configuration Wizard
 
-Interactive CLI tool to create a new lab configuration from scratch. Not part of the grading pipeline.
+Interactive CLI tool to create a new lab or assignment configuration from scratch. Not part of the grading pipeline.
 
-Usage: `node bin/create_lab.js [LabXX]`
+Usage: `node bin/create_lab.js [AssignmentName]`
 
 **Exported functions (testable):**
 | Function | Purpose |
 |---|---|
-| `parseLabNumber(input)` | Normalizes `"7"`, `"07"`, `"Lab7"`, `"Lab07"` → `"Lab07"` |
+| `normalizeAssignmentName(input)` | Digits-only → `"Lab07"`; `Lab`-prefixed → normalized `"Lab07"`; other slug (e.g. `"TermProject"`) → returned as-is |
 | `colLetter(idx)` / `excelCell(col, row)` | Build Excel cell references (e.g., `"C7"`) |
 | `readRubricRows(path)` | Reads the Grade sheet from a rubric via xlsx, returns structured row objects |
-| `buildConfig(labName, responses)` | Assembles a `labXX_config.json` object from wizard responses |
+| `buildConfig(labName, responses)` | Assembles a `{assignmentname}_config.json` object from wizard responses |
 | `buildMappingEntry(rl, type, rubricRow)` | Creates a single mapping entry with type-specific fields |
 | `askBoolean(rl, q, default)` / `askOptions(rl, q, opts)` / `ask(rl, q)` | Readline-based prompt helpers |
 
@@ -358,11 +358,11 @@ Machine-specific. Gitignored. Created on first run. Both paths are prompted for 
 
 On first run after upgrading from the old `env.json` / `_env.json` layout, `labRoot` is read from `env.json` automatically; `codeRoot` will be prompted for once and saved.
 
-### `configs/LabXX/labXX_config.json` schema
+### `configs/{AssignmentName}/{assignmentname}_config.json` schema
 
 ```json
 {
-  "rubricName": "CS233JS_LabXX_Rubric.xlsx",
+  "rubricName": "CS233JS_{AssignmentName}_Rubric.xlsx",
   "titleCell": "A1",
   "titleText": "Lab X: Title",
   "summaryCell": "A2",
@@ -386,7 +386,7 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
         "fileRegex": "\\.js$"
       }
     ],
-    "customAnalyzer": "labXX_analyzer.js"
+    "customAnalyzer": "{assignmentname}_analyzer.js"
   },
   "parts": [
     {
@@ -415,7 +415,7 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
 | `lint.exclude` | No | Path substrings to skip during linting |
 | `repoHygiene.excludedFromRepo` | No | Folder names that should not be committed to the repo (e.g. `node_modules`, `dist`). Checked via `git ls-files`; only applies to git-cloned submissions. |
 | `analysis.features` | Yes | Array of features to detect via regex |
-| `analysis.customAnalyzer` | No | Path (relative to `configs/LabXX/`) to a JS module for lab-specific analysis |
+| `analysis.customAnalyzer` | No | Path (relative to `configs/{AssignmentName}/`) to a JS module for assignment-specific analysis |
 | `parts` | No | Multi-part lab configuration |
 | `mappings` | Yes | Array of rubric cell assignments |
 
@@ -424,14 +424,15 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
 ### Using the interactive wizard (recommended)
 
 ```bash
-node bin/create_lab.js             # fully interactive, prompts for lab number
-node bin/create_lab.js Lab07       # pre-specify the lab
+node bin/create_lab.js               # fully interactive, prompts for assignment name
+node bin/create_lab.js Lab07         # pre-specify a lab by number or name
+node bin/create_lab.js TermProject   # pre-specify a non-numbered assignment
 ```
 
 The wizard guides you through:
-1. Copying a rubric spreadsheet into `configs/LabXX/`
-2. Configuring the lab title, runtime check mode, feature regexes, and rubric cell mappings
-3. Optionally creating a `labXX_analyzer.js` skeleton for custom analysis
+1. Copying a rubric spreadsheet into `configs/{AssignmentName}/`
+2. Configuring the title, runtime check mode, feature regexes, and rubric cell mappings
+3. Optionally creating a `{assignmentname}_analyzer.js` skeleton for custom analysis
 
 Choose between two mapping modes:
 - **cell-by-cell wizard** — reads the rubric Grade sheet via xlsx, displays each row with auto-derived cell references, and lets you assign mapping types row by row
@@ -439,12 +440,12 @@ Choose between two mapping modes:
 
 ### Manual setup
 
-1. Create `configs/LabXX/` (e.g., `configs/Lab05/`)
-2. Create `configs/LabXX/labXX_config.json` following the schema above
-3. Copy the rubric spreadsheet (`CS233JS_LabXX_Rubric.xlsx` or `.xlsm`) into `configs/LabXX/`
-4. ESLint config is shared across all labs via `~/.eslint/eslint.config.mjs` — no per-lab config needed. Edit that file if lint rules need to change globally.
-5. (Optional) Create `configs/LabXX/labXX_analyzer.js` if the lab needs custom analysis beyond regex-based feature counting. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`
-6. Run `node run_all.js` — the new lab will appear in the menu automatically (the menu scans `configs/` subdirectories for a matching `labXX_config.json`)
+1. Create `configs/{AssignmentName}/` (e.g., `configs/Lab05/` or `configs/TermProject/`)
+2. Create `configs/{AssignmentName}/{assignmentname}_config.json` following the schema above
+3. Copy the rubric spreadsheet (`CS233JS_{AssignmentName}_Rubric.xlsx` or `.xlsm`) into `configs/{AssignmentName}/`
+4. ESLint config is shared across all assignments via `~/.eslint/eslint.config.mjs` — no per-assignment config needed. Edit that file if lint rules need to change globally.
+5. (Optional) Create `configs/{AssignmentName}/{assignmentname}_analyzer.js` if the assignment needs custom analysis beyond regex-based feature counting. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`
+6. Run `node run_all.js` — the new assignment will appear in the menu automatically (the menu scans `configs/` subdirectories for a matching `{assignmentname}_config.json`)
 
 ## Data Flow
 

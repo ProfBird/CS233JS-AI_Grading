@@ -524,7 +524,14 @@ module.exports = function(students, config, labDir, configDir = null) {
     const partGameNames = {};
     if (config.parts) {
         config.parts.forEach(part => {
-            partGameNames[part.id] = readGameNamesFromRubric(rubricPath, part.rubricTitleRow);
+            if (part.rubricName) {
+                const partRubricPath = path.join(configDir || labDir, part.rubricName);
+                partGameNames[part.id] = readGameNamesFromRubric(partRubricPath, 1);
+            } else if (part.rubricTitleRow != null) {
+                partGameNames[part.id] = readGameNamesFromRubric(rubricPath, part.rubricTitleRow);
+            } else {
+                partGameNames[part.id] = [];
+            }
             console.log(`  Part "${part.id}" game names from rubric: ${partGameNames[part.id].join(', ') || '(none found)'}`);
         });
     }

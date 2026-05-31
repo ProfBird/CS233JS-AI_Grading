@@ -36,13 +36,14 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 Use the interactive wizard to set up grading for a new lab:
 
 ```bash
-node bin/create_lab.js             # interactive, prompts for lab number
-node bin/create_lab.js Lab07       # pre-specify lab
+node bin/create_lab.js               # interactive, prompts for assignment name
+node bin/create_lab.js Lab07         # pre-specify a lab by number or name
+node bin/create_lab.js TermProject   # pre-specify a non-numbered assignment
 ```
 
 The wizard will:
 1. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm)
-2. Copy it into `configs/LabXX/` with the standard naming convention
+2. Copy it into `configs/{AssignmentName}/` with the standard naming convention
 3. Guide you through configuring title, runtime mode, feature regexes, and rubric cell mappings
 4. Optionally create a custom analyzer skeleton
 
@@ -53,19 +54,19 @@ AI_Grading/                   ← this tool (git repo)
   ├── run_all.js              ← main entry point
   └── configs/
       ├── local-config.json   ← machine-specific paths (auto-created, gitignored)
-      └── LabXX/
-          ├── labXX_config.json        ← per-lab rubric configuration
-          └── CS233JS_LabXX_Rubric.xlsx  ← rubric template
+      └── {AssignmentName}/
+          ├── {assignmentname}_config.json     ← rubric configuration
+          └── CS233JS_{AssignmentName}_Rubric.xlsx  ← rubric template
 
-<labRoot>/                    ← your lab data (on Google Drive)
-  └── LabXX/
+<labRoot>/                    ← your assignment data (on Google Drive)
+  └── {AssignmentName}/
       ├── StudentName_12345_assignsubmission_file/
       │   └── submission.zip
       └── StudentName_12345_assignsubmission_onlinetext/
           └── onlinetext.html
 
 <codeRoot>/                   ← local folder outside Google Drive
-  └── LabXX/                  ← created automatically per lab
+  └── {AssignmentName}/       ← created automatically per assignment
       └── StudentName/
           └── repo/  (or extracted_code/)
 ```

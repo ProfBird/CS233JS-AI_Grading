@@ -14,7 +14,7 @@ node run_all.js Lab06 --text-report     # grade without rubric spreadsheet, gene
 npx eslint --format json path/to/files/*.js
 
 node bin/rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
-node bin/create_lab.js [LabXX]                # interactive wizard to create a new lab config + copy rubric
+node bin/create_lab.js [AssignmentName]       # interactive wizard to create a new lab/assignment config + copy rubric
 node archive/update_lab04_rubric.js            # one-time: rewrites Lab04 rubric cells to match Lab04 point design
 ```
 
@@ -51,9 +51,9 @@ npx vitest                  # watch mode
 - **lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
 - **lib/ollama_comments.js** — HTTP client for a local Ollama server; generates one-sentence AI rubric summaries.
 
-### Config files (`configs/LabXX/labXX_config.json`)
+### Config files (`configs/{AssignmentName}/{assignmentname}_config.json`)
 
-Per-lab JSON specifying rubric filename, runtime check mode, feature regexes, and cell mappings. The `parts` key (optional) handles multi-part labs with per-part feature counts. The rubric template (`.xlsx`/`.xlsm`) is stored alongside the config in the same `configs/LabXX/` directory.
+Per-assignment JSON specifying rubric filename, runtime check mode, feature regexes, and cell mappings. The `parts` key (optional) handles multi-part labs with per-part feature counts. The rubric template (`.xlsx`/`.xlsm`) is stored alongside the config in the same `configs/{AssignmentName}/` directory.
 
 ### Directory structure
 
@@ -76,21 +76,21 @@ AI_Grading/   ← this directory
   │   └── create_lab.js            # interactive lab config creation wizard
   ├── configs/
   │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
-  │   └── LabXX/
-  │       ├── labXX_config.json    # rubric config, feature regexes, cell mappings
-  │       ├── CS233JS_LabXX_Rubric.xlsm  # rubric template (tracked in git)
-  │       └── labXX_analyzer.js   # optional custom analyzer (if any)
+  │   └── {AssignmentName}/
+  │       ├── {assignmentname}_config.json    # rubric config, feature regexes, cell mappings
+  │       ├── CS233JS_{AssignmentName}_Rubric.xlsm  # rubric template (tracked in git)
+  │       └── {assignmentname}_analyzer.js   # optional custom analyzer (if any)
   └── ...
 
 <labRoot>/    (on Google Drive — raw Moodle downloads only, nothing created here)
-  └── LabXX/
+  └── {AssignmentName}/
       ├── StudentName_12345_assignsubmission_file/
       │   └── (zip files uploaded by student, if any)
       └── StudentName_12345_assignsubmission_onlinetext/
           └── onlinetext.html
 
 <codeRoot>/   (local, outside Google Drive)
-  └── LabXX/  ← created automatically; keeps different labs separate
+  └── {AssignmentName}/  ← created automatically; keeps different assignments separate
       ├── ArtifactsAndRubrics/   ← grader-produced files (reports, log)
       │   ├── analysis_report.json
       │   ├── lint_report.json
@@ -108,7 +108,7 @@ AI_Grading/   ← this directory
 - In **normal mode** (no flags), students whose grade spreadsheet already exists are skipped entirely — no runtime check, analysis, linting, or spreadsheet rewrite. Use `--regrade` to re-process them.
 - Each pipeline phase attaches data to the shared `students` array; `generate_grades` consumes the combined output.
 
-### Config schema (configs/LabXX/labXX_config.json)
+### Config schema (configs/{AssignmentName}/{assignmentname}_config.json)
 
   - rubricName: string — rubric filename in the lab directory
 
@@ -121,7 +121,7 @@ AI_Grading/   ← this directory
   - codeReview: { studentNameCell, groupCell, manualFallback } (optional) — `studentNameCell`/`groupCell` name the cells where the student name and lab group letter are written. There is **no default**: if a cell is not specified, that value is not written (generic code makes no assumption about rubric layout). All current lab rubrics use `B1`/`C1`.
 
   - analysis.features[]: { id, regex, fileRegex } — features to count via regex
-  - analysis.customAnalyzer: string (optional) — path (relative to configs/LabXX/) to a JS module that receives (jsFiles, analysis, config, student) and merges its return into analysis. The return may include `reportSections: [{ title, lines[] }]` — the text-report renderer prints these generically (used by Lab06 for its "API Integration Pipeline" breakdown), so lab-specific report content lives in the analyzer, not in pipeline code.
+  - analysis.customAnalyzer: string (optional) — path (relative to configs/{AssignmentName}/) to a JS module that receives (jsFiles, analysis, config, student) and merges its return into analysis. The return may include `reportSections: [{ title, lines[] }]` — the text-report renderer prints these generically (used by Lab06 for its "API Integration Pipeline" breakdown), so lab-specific report content lives in the analyzer, not in pipeline code.
 
   - parts[]: { id, gameNames[], folderPattern, featureCounts[] } — multi-part lab config (optional). gameNames is the list of expected game/project names for that part; folderPattern is a regex fallback for "Part1/Pt2"-style folder naming.
 

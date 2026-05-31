@@ -176,8 +176,6 @@ function validateConfig(config, labName) {
             config.parts.forEach((part, i) => {
                 const prefix = `parts[${i}]`;
                 if (!part.id) errors.push(`${prefix}: missing "id"`);
-                if (part.rubricTitleRow == null) errors.push(`${prefix}: missing "rubricTitleRow"`);
-                if (!part.folderPattern) errors.push(`${prefix}: missing "folderPattern"`);
             });
         }
     }
@@ -237,7 +235,15 @@ async function main() {
     let config, labDir, labConfigDir, artifactsDir, submissionsDir;
     let skipRubric = false;
 
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let completions = [];
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        completer: line => {
+            const hits = completions.filter(c => c.toLowerCase().startsWith(line.toLowerCase()));
+            return [hits, line];
+        }
+    });
     const askRl = q => new Promise(resolve => rl.question(q, resolve));
 
     try {
@@ -300,21 +306,23 @@ async function main() {
             console.log('╚══════════════════════════════════╝');
             console.log('  (Run with --help to see all command-line options)\n');
 
-            console.log('Available labs:');
+            console.log('Available assignments:');
             labs.forEach((lab, i) => console.log(`  ${i + 1}) ${lab}`));
             console.log();
 
+            completions = labs;
             while (!labName) {
-                const input = await askRl('Select a lab (number or name): ');
+                const input = await askRl('Select an assignment (number or name): ');
                 const num = parseInt(input);
                 if (!isNaN(num) && num >= 1 && num <= labs.length) {
                     labName = labs[num - 1];
-                } else if (labs.includes(input.trim())) {
-                    labName = input.trim();
+                } else if (labs.find(l => l.toLowerCase() === input.trim().toLowerCase())) {
+                    labName = labs.find(l => l.toLowerCase() === input.trim().toLowerCase());
                 } else {
                     console.log('  Invalid selection, try again.');
                 }
             }
+            completions = [];
         }
 
         labConfigDir = path.join(__dirname, 'configs', labName);

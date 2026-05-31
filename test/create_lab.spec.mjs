@@ -9,9 +9,11 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const {
-    colLetter, excelCell, parseLabNumber, cellText, isBlankRow,
+    colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
     readRubricRows, buildConfig, buildMappingEntry,
-    askBoolean, askOptions, ask
+    askBoolean, askOptions, ask, askInt,
+    promptFeatures, copyRubric, writeLab, findSpreadsheets, keywordsToFolderPattern,
+    promptRubricRows, guessMappingType,
 } = await import('../bin/create_lab.js');
 
 // ── mock rl factory ─────────────────────────────────────────────────────
@@ -39,8 +41,14 @@ describe('colLetter', () => {
     it('returns Z for index 25', () => {
         expect(colLetter(25)).toBe('Z');
     });
-    it('wraps for index 26 (single letter alphabet wraps)', () => {
-        expect(colLetter(26)).toBe('[');
+    it('returns AA for index 26 (first two-letter column)', () => {
+        expect(colLetter(26)).toBe('AA');
+    });
+    it('returns AZ for index 51', () => {
+        expect(colLetter(51)).toBe('AZ');
+    });
+    it('returns BA for index 52', () => {
+        expect(colLetter(52)).toBe('BA');
     });
     it('returns E for index 4', () => {
         expect(colLetter(4)).toBe('E');
@@ -61,38 +69,50 @@ describe('excelCell', () => {
     });
 });
 
-// ── parseLabNumber ─────────────────────────────────────────────────────
+// ── normalizeAssignmentName ────────────────────────────────────────────
 
-describe('parseLabNumber', () => {
+describe('normalizeAssignmentName', () => {
     it('parses "7" → Lab07', () => {
-        expect(parseLabNumber('7')).toBe('Lab07');
+        expect(normalizeAssignmentName('7')).toBe('Lab07');
     });
     it('parses "07" → Lab07', () => {
-        expect(parseLabNumber('07')).toBe('Lab07');
+        expect(normalizeAssignmentName('07')).toBe('Lab07');
     });
     it('parses "Lab7" → Lab07', () => {
-        expect(parseLabNumber('Lab7')).toBe('Lab07');
+        expect(normalizeAssignmentName('Lab7')).toBe('Lab07');
     });
     it('parses "Lab07" → Lab07', () => {
-        expect(parseLabNumber('Lab07')).toBe('Lab07');
+        expect(normalizeAssignmentName('Lab07')).toBe('Lab07');
     });
     it('parses "lab03" → Lab03', () => {
-        expect(parseLabNumber('lab03')).toBe('Lab03');
+        expect(normalizeAssignmentName('lab03')).toBe('Lab03');
     });
     it('parses "Lab99" → Lab99', () => {
-        expect(parseLabNumber('Lab99')).toBe('Lab99');
+        expect(normalizeAssignmentName('Lab99')).toBe('Lab99');
     });
     it('parses "10" → Lab10', () => {
-        expect(parseLabNumber('10')).toBe('Lab10');
-    });
-    it('returns null for "abc"', () => {
-        expect(parseLabNumber('abc')).toBeNull();
-    });
-    it('returns null for empty string', () => {
-        expect(parseLabNumber('')).toBeNull();
+        expect(normalizeAssignmentName('10')).toBe('Lab10');
     });
     it('parses "123" → Lab123', () => {
-        expect(parseLabNumber('123')).toBe('Lab123');
+        expect(normalizeAssignmentName('123')).toBe('Lab123');
+    });
+    it('accepts "TermProject" as-is', () => {
+        expect(normalizeAssignmentName('TermProject')).toBe('TermProject');
+    });
+    it('accepts "FinalExam" as-is', () => {
+        expect(normalizeAssignmentName('FinalExam')).toBe('FinalExam');
+    });
+    it('accepts "Midterm_2" as-is', () => {
+        expect(normalizeAssignmentName('Midterm_2')).toBe('Midterm_2');
+    });
+    it('returns null for empty string', () => {
+        expect(normalizeAssignmentName('')).toBeNull();
+    });
+    it('returns null for string with spaces', () => {
+        expect(normalizeAssignmentName('Term Project')).toBeNull();
+    });
+    it('returns null for string starting with a digit (non-numeric)', () => {
+        expect(normalizeAssignmentName('1abc')).toBeNull();
     });
 });
 
@@ -193,6 +213,40 @@ describe('readRubricRows', () => {
         for (const h of sectionHeaders) {
             expect(h.possible).toBe('');
         }
+    });
+});
+
+// ── readRubricRows (custom header) ──────────────────────────────────────
+
+describe('readRubricRows — custom headerLabel', () => {
+    const realRubric = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
+
+    it('succeeds with the default label (case-insensitive)', () => {
+        expect(readRubricRows(realRubric)).not.toBeNull();
+        expect(readRubricRows(realRubric, 'Possible')).not.toBeNull();
+        expect(readRubricRows(realRubric, 'POSSIBLE')).not.toBeNull();
+    });
+
+    it('returns null for a wrong header label', () => {
+        expect(readRubricRows(realRubric, 'MaxPoints')).toBeNull();
+    });
+});
+
+// ── promptRubricRows ────────────────────────────────────────────────────
+
+describe('promptRubricRows', () => {
+    const realRubric = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
+
+    it('returns rows when default header is found and user confirms columns', async () => {
+        const rl = mockRL(['']);  // empty = accept default (Y) for "Are these columns correct?"
+        const rows = await promptRubricRows(rl, realRubric);
+        expect(rows).not.toBeNull();
+        expect(rows.length).toBeGreaterThan(0);
+    });
+
+    it('returns null when rubric is unreadable and user leaves alternative blank', async () => {
+        const rl = mockRL(['']);
+        expect(await promptRubricRows(rl, '/nonexistent/rubric.xlsx')).toBeNull();
     });
 });
 
@@ -345,7 +399,7 @@ describe('buildConfig', () => {
     });
 
     it('includes analysis.parts when provided', () => {
-        const parts = [{ id: 'part1', rubricTitleRow: 7 }];
+        const parts = [{ id: 'part1', rubricName: 'Part1/CS233JS_Lab99_Part1_Rubric.xlsm' }];
         const config = buildConfig('Lab99', {
             rubricName: 'r.xlsm',
             titleText: 'T',
@@ -708,9 +762,339 @@ describe('buildMappingEntry', () => {
         expect(result.type).toBe('npm_package');
     });
 
-    it('parses maxScore 0 for non-numeric input', async () => {
-        const rl = mockRL(['abc']);
+    it('re-prompts on non-numeric maxScore then accepts valid input', async () => {
+        const rl = mockRL(['abc', '5']);
         const result = await buildMappingEntry(rl, 'build_check', rubricRow);
-        expect(result.maxScore).toBe(0);
+        expect(result.maxScore).toBe(5);
+    });
+});
+
+// ── askInt ──────────────────────────────────────────────────────────────
+
+describe('askInt', () => {
+    it('returns integer on valid input', async () => {
+        const rl = mockRL(['7']);
+        expect(await askInt(rl, 'N: ', 0)).toBe(7);
+    });
+
+    it('returns default on empty input', async () => {
+        const rl = mockRL(['']);
+        expect(await askInt(rl, 'N: ', 3)).toBe(3);
+    });
+
+    it('returns 0 default on empty when default is 0', async () => {
+        const rl = mockRL(['']);
+        expect(await askInt(rl, 'N: ', 0)).toBe(0);
+    });
+
+    it('re-prompts on non-numeric input then accepts valid', async () => {
+        const rl = mockRL(['abc', 'xyz', '10']);
+        expect(await askInt(rl, 'N: ', 0)).toBe(10);
+    });
+
+    it('throws on EOF while waiting for valid input', async () => {
+        const rl = mockRL(['abc']);
+        await expect(askInt(rl, 'N: ', 0)).rejects.toThrow('ended unexpectedly');
+    });
+});
+
+// ── promptFeatures ──────────────────────────────────────────────────────
+
+describe('promptFeatures', () => {
+    it('returns empty array when user declines to add features', async () => {
+        const rl = mockRL(['n']);
+        const result = await promptFeatures(rl);
+        expect(result).toEqual([]);
+    });
+
+    it('adds a feature with id and regex', async () => {
+        const rl = mockRL(['y', 'fetch_api', 'fetch\\s*\\(', '', 'n']);
+        const result = await promptFeatures(rl);
+        expect(result).toHaveLength(1);
+        expect(result[0]).toEqual({ id: 'fetch_api', regex: 'fetch\\s*\\(' });
+    });
+
+    it('includes fileRegex when provided', async () => {
+        const rl = mockRL(['y', 'my_feat', '\\.test\\(', '\\.js$', 'n']);
+        const result = await promptFeatures(rl);
+        expect(result[0].fileRegex).toBe('\\.js$');
+    });
+
+    it('omits fileRegex when blank', async () => {
+        const rl = mockRL(['y', 'my_feat', '\\.test\\(', '', 'n']);
+        const result = await promptFeatures(rl);
+        expect(result[0].fileRegex).toBeUndefined();
+    });
+
+    it('re-prompts when feature ID is empty', async () => {
+        // empty ID → "required" → loops back to askBoolean → 'y' again → then valid id
+        const rl = mockRL(['y', '', 'y', 'valid_id', 'foo\\(', '', 'n']);
+        const result = await promptFeatures(rl);
+        expect(result[0].id).toBe('valid_id');
+    });
+
+    it('re-prompts when regex is empty', async () => {
+        const rl = mockRL(['y', 'my_feat', '', 'foo\\(', '', 'n']);
+        const result = await promptFeatures(rl);
+        expect(result[0].regex).toBe('foo\\(');
+    });
+
+    it('re-prompts when regex is invalid', async () => {
+        const rl = mockRL(['y', 'my_feat', '(unclosed', 'foo\\(', '', 'n']);
+        const result = await promptFeatures(rl);
+        expect(result[0].regex).toBe('foo\\(');
+    });
+
+    it('adds multiple features', async () => {
+        const rl = mockRL(['y', 'a', 'a\\(', '', 'y', 'b', 'b\\(', '', 'n']);
+        const result = await promptFeatures(rl);
+        expect(result).toHaveLength(2);
+        expect(result[0].id).toBe('a');
+        expect(result[1].id).toBe('b');
+    });
+});
+
+// ── copyRubric ──────────────────────────────────────────────────────────
+
+describe('copyRubric', () => {
+    let tmpDir;
+    const realRubric = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
+
+    beforeEach(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'create_lab_test_'));
+    });
+
+    afterEach(() => {
+        rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('accepts a valid rubric path and returns rubricPath + rubricName', async () => {
+        const rl = mockRL([realRubric, '']);
+        const result = await copyRubric(rl, 'Lab04');
+        expect(result.rubricPath).toBe(realRubric);
+        expect(result.rubricName).toBe('CS233JS_Lab04_Rubric.xlsm');
+    });
+
+    it('uses a custom name when the user types one', async () => {
+        const rl = mockRL([realRubric, 'MyCustomRubric.xlsm']);
+        const result = await copyRubric(rl, 'Lab04');
+        expect(result.rubricName).toBe('MyCustomRubric.xlsm');
+    });
+});
+
+// ── writeLab ────────────────────────────────────────────────────────────
+
+describe('writeLab', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'create_lab_test_'));
+        mkdirSync(join(tmpDir, 'Lab99'));
+    });
+
+    afterEach(() => {
+        rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('writes a valid config JSON file', () => {
+        const labDir = join(tmpDir, 'Lab99');
+        const config = { rubricName: 'r.xlsm', mappings: [] };
+        writeLab(labDir, config, null, null);
+        const written = JSON.parse(require('fs').readFileSync(join(labDir, 'lab99_config.json'), 'utf8'));
+        expect(written).toEqual(config);
+    });
+
+    it('writes the analyzer file when analyzerContent is provided', () => {
+        const labDir = join(tmpDir, 'Lab99');
+        const config = { rubricName: 'r.xlsm', mappings: [] };
+        writeLab(labDir, config, 'module.exports = () => {};', 'lab99_analyzer.js');
+        const content = require('fs').readFileSync(join(labDir, 'lab99_analyzer.js'), 'utf8');
+        expect(content).toBe('module.exports = () => {};');
+    });
+
+    it('does not write analyzer file when analyzerContent is null', () => {
+        const labDir = join(tmpDir, 'Lab99');
+        writeLab(labDir, { rubricName: 'r.xlsm', mappings: [] }, null, null);
+        expect(require('fs').existsSync(join(labDir, 'lab99_analyzer.js'))).toBe(false);
+    });
+});
+
+// ── findSpreadsheets ────────────────────────────────────────────────────
+
+describe('findSpreadsheets', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'find_xlsx_test_'));
+    });
+
+    afterEach(() => {
+        rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('returns empty array for directory with no spreadsheets', () => {
+        writeFileSync(join(tmpDir, 'readme.txt'), '');
+        expect(findSpreadsheets(tmpDir)).toEqual([]);
+    });
+
+    it('finds a spreadsheet in the root directory', () => {
+        writeFileSync(join(tmpDir, 'Rubric.xlsx'), '');
+        expect(findSpreadsheets(tmpDir)).toEqual(['Rubric.xlsx']);
+    });
+
+    it('finds an xlsm in the root directory', () => {
+        writeFileSync(join(tmpDir, 'Rubric.xlsm'), '');
+        expect(findSpreadsheets(tmpDir)).toContain('Rubric.xlsm');
+    });
+
+    it('finds a spreadsheet inside an immediate sub-folder', () => {
+        mkdirSync(join(tmpDir, 'Part1'));
+        writeFileSync(join(tmpDir, 'Part1', 'Rubric.xlsm'), '');
+        const results = findSpreadsheets(tmpDir);
+        expect(results).toHaveLength(1);
+        expect(results[0]).toBe(join('Part1', 'Rubric.xlsm'));
+    });
+
+    it('finds spreadsheets in both root and sub-folders', () => {
+        writeFileSync(join(tmpDir, 'Root.xlsx'), '');
+        mkdirSync(join(tmpDir, 'Sub'));
+        writeFileSync(join(tmpDir, 'Sub', 'Sub.xlsm'), '');
+        const results = findSpreadsheets(tmpDir);
+        expect(results).toHaveLength(2);
+        expect(results).toContain('Root.xlsx');
+        expect(results).toContain(join('Sub', 'Sub.xlsm'));
+    });
+
+    it('does not recurse more than one level deep', () => {
+        mkdirSync(join(tmpDir, 'A', 'B'), { recursive: true });
+        writeFileSync(join(tmpDir, 'A', 'B', 'Deep.xlsx'), '');
+        expect(findSpreadsheets(tmpDir)).toEqual([]);
+    });
+
+    it('ignores non-spreadsheet files in sub-folders', () => {
+        mkdirSync(join(tmpDir, 'Sub'));
+        writeFileSync(join(tmpDir, 'Sub', 'notes.txt'), '');
+        writeFileSync(join(tmpDir, 'Sub', 'Rubric.xlsm'), '');
+        const results = findSpreadsheets(tmpDir);
+        expect(results).toHaveLength(1);
+        expect(results[0]).toBe(join('Sub', 'Rubric.xlsm'));
+    });
+});
+
+// ── keywordsToFolderPattern ─────────────────────────────────────────────
+
+describe('keywordsToFolderPattern', () => {
+    it('returns empty string for blank input', () => {
+        expect(keywordsToFolderPattern('')).toBe('');
+        expect(keywordsToFolderPattern('   ')).toBe('');
+    });
+
+    it('returns single keyword as-is', () => {
+        expect(keywordsToFolderPattern('dev')).toBe('dev');
+    });
+
+    it('joins multiple keywords with |', () => {
+        expect(keywordsToFolderPattern('dev env')).toBe('dev|env');
+    });
+
+    it('handles extra whitespace between keywords', () => {
+        expect(keywordsToFolderPattern('  dev   env  ')).toBe('dev|env');
+    });
+
+    it('escapes regex special characters in keywords', () => {
+        expect(keywordsToFolderPattern('part1 (beta)')).toBe('part1|\\(beta\\)');
+    });
+
+    it('generated pattern matches folder names case-insensitively', () => {
+        const pattern = keywordsToFolderPattern('dev env');
+        const regex = new RegExp(pattern, 'i');
+        expect(regex.test('DevEnvAndStaticSite')).toBe(true);
+        expect(regex.test('dev-environment')).toBe(true);
+        expect(regex.test('my-env-setup')).toBe(true);
+        expect(regex.test('FinalApp')).toBe(false);
+    });
+
+    it('three keywords — any one match is sufficient', () => {
+        const pattern = keywordsToFolderPattern('alpha beta gamma');
+        const regex = new RegExp(pattern, 'i');
+        expect(regex.test('beta-version')).toBe(true);
+        expect(regex.test('GammaRelease')).toBe(true);
+        expect(regex.test('delta')).toBe(false);
+    });
+});
+
+// ── guessMappingType ────────────────────────────────────────────────────
+
+describe('guessMappingType', () => {
+    it('guesses manual for generic labels', () => {
+        expect(guessMappingType('index.html')).toBe('manual');
+        expect(guessMappingType('css file')).toBe('manual');
+        expect(guessMappingType('Professional looking')).toBe('manual');
+        expect(guessMappingType('Collaborators added')).toBe('manual');
+    });
+
+    it('guesses lint for style/lint rows', () => {
+        expect(guessMappingType('Code style and best practices')).toBe('lint');
+        expect(guessMappingType('ESLint errors')).toBe('lint');
+        expect(guessMappingType('Lint check')).toBe('lint');
+    });
+
+    it('guesses github_repo for GitHub repo rows', () => {
+        expect(guessMappingType('GitHub private repo')).toBe('github_repo');
+        expect(guessMappingType('github repo link')).toBe('github_repo');
+    });
+
+    it('guesses repo_hygiene for gitignore / hygiene rows', () => {
+        expect(guessMappingType('.gitignore file')).toBe('repo_hygiene');
+        expect(guessMappingType('repo hygiene check')).toBe('repo_hygiene');
+    });
+
+    it('guesses build_check for build / vite rows', () => {
+        expect(guessMappingType('vite build passes')).toBe('build_check');
+        expect(guessMappingType('npm run build')).toBe('build_check');
+        expect(guessMappingType('webpack bundle')).toBe('build_check');
+    });
+
+    it('guesses package_check for package.json rows', () => {
+        expect(guessMappingType('package.json scripts')).toBe('package_check');
+        expect(guessMappingType('npm package dependency')).toBe('package_check');
+    });
+
+    it('guesses deploy_check for deployment rows', () => {
+        expect(guessMappingType('deployed to citstudent')).toBe('deploy_check');
+        expect(guessMappingType('live site reachable')).toBe('deploy_check');
+    });
+
+    it('guesses code_review for review rows', () => {
+        expect(guessMappingType('code review submitted')).toBe('code_review');
+    });
+
+    it('guesses developer_comments for comment rows', () => {
+        expect(guessMappingType('developer comments present')).toBe('developer_comments');
+    });
+
+    it('is case-insensitive', () => {
+        expect(guessMappingType('GITHUB PRIVATE REPO')).toBe('github_repo');
+        expect(guessMappingType('LINT CHECK')).toBe('lint');
+    });
+});
+
+// ── askOptions with non-zero default ────────────────────────────────────
+
+describe('askOptions — defaultIdx', () => {
+    const opts = [
+        { label: 'alpha', value: 'a' },
+        { label: 'beta',  value: 'b' },
+        { label: 'gamma', value: 'g' },
+    ];
+
+    it('returns the default-index option on empty input', async () => {
+        const rl = mockRL(['']);
+        expect(await askOptions(rl, 'Pick:', opts, 1)).toBe('b');
+    });
+
+    it('still accepts explicit selection regardless of default', async () => {
+        const rl = mockRL(['1']);
+        expect(await askOptions(rl, 'Pick:', opts, 2)).toBe('a');
     });
 });

@@ -321,12 +321,109 @@ function readRubricCriteria(rubricPath) {
     return out;
 }
 
+// Interactive version of readRubricCriteria: shows detected columns, lets user confirm/correct.
+async function promptRubricCriteria(rl, rubricPath) {
+    let wb;
+    try { wb = XLSX.readFile(rubricPath); } catch (e) { return []; }
+    const ws = wb.Sheets['Rubric'];
+    if (!ws) {
+        console.log('  No "Rubric" sheet found — skipping criteria descriptions.');
+        return [];
+    }
+    const rows = sheetRows(ws);
+
+    // Auto-detect header row by looking for a "Criteria" column.
+    let headerRow = -1, criteriaCol = -1, labelCol = 0, pointsCol = -1;
+    for (let i = 0; i < rows.length; i++) {
+        const hrow = rows[i];
+        const cc = hrow.findIndex(c => /^criteria$/i.test((c ?? '').toString().trim()));
+        if (cc >= 0) {
+            headerRow = i;
+            criteriaCol = cc;
+            pointsCol = hrow.findIndex(c => /^(possible|points?|pts|max)$/i.test((c ?? '').toString().trim()));
+            // Label is usually col A or B; pick first non-empty non-criteria non-points col.
+            labelCol = hrow.findIndex((c, idx) =>
+                idx !== criteriaCol && idx !== pointsCol &&
+                (c ?? '').toString().trim() !== ''
+            );
+            if (labelCol < 0) labelCol = 0;
+            break;
+        }
+    }
+
+    if (headerRow < 0) {
+        console.log('  No "Criteria" column found on the Rubric sheet.');
+        const alt = await ask(rl, '  What is the exact header text for the criteria column? (blank to skip): ');
+        if (!alt) return [];
+        const altRe = new RegExp(`^${alt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+        for (let i = 0; i < rows.length; i++) {
+            const cc = rows[i].findIndex(c => altRe.test((c ?? '').toString().trim()));
+            if (cc >= 0) { headerRow = i; criteriaCol = cc; break; }
+        }
+        if (headerRow < 0) {
+            console.log(`  Still could not find "${alt}" on the Rubric sheet. Skipping criteria.`);
+            return [];
+        }
+    }
+
+    console.log(`  Detected columns in Rubric sheet (row ${headerRow + 1}):`);
+    console.log(`    Item label  : ${colLetter(labelCol)}`);
+    console.log(`    Criteria    : ${colLetter(criteriaCol)}`);
+    if (pointsCol >= 0) console.log(`    Points      : ${colLetter(pointsCol)}`);
+
+    const ok = await askBoolean(rl, '  Are these columns correct?', true);
+    if (!ok) {
+        const l = await ask(rl, `  Item-label column letter [${colLetter(labelCol)}]: `);
+        const c = await ask(rl, `  Criteria column letter [${colLetter(criteriaCol)}]: `);
+        const p = await ask(rl, `  Points column letter (blank to skip) [${pointsCol >= 0 ? colLetter(pointsCol) : 'none'}]: `);
+        if (l) labelCol    = colLetterToIndex(l);
+        if (c) criteriaCol = colLetterToIndex(c);
+        if (p) pointsCol   = colLetterToIndex(p);
+        else if (!p && pointsCol >= 0) pointsCol = -1;
+    }
+
+    const out = [];
+    for (let i = headerRow + 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (isBlankRow(row)) continue;
+        const label = cellText(row, labelCol) || cellText(row, labelCol === 0 ? 1 : 0);
+        if (!label) continue;
+        const lower = label.toLowerCase();
+        if (lower.startsWith('total') || lower.startsWith('sub-total')) continue;
+        const criteria = cellText(row, criteriaCol);
+        if (!criteria) continue;
+        out.push({
+            label,
+            points: pointsCol >= 0 ? cellText(row, pointsCol) : '',
+            criteria,
+        });
+    }
+    console.log(`  Found ${out.length} criteria descriptions.`);
+    return out;
+}
+
 // Converts space-separated keywords into a case-insensitive OR regex for folder matching.
 // e.g. "dev env" → "dev|env"  (any keyword present in the folder name is a match)
 function keywordsToFolderPattern(keywords) {
     const words = keywords.trim().split(/\s+/).filter(Boolean);
     if (!words.length) return '';
     return words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+}
+
+// Returns all assignment directories in CONFIGS_DIR, with a flag for whether a config JSON exists.
+function getExistingAssignments() {
+    const results = [];
+    let entries;
+    try { entries = fs.readdirSync(CONFIGS_DIR); } catch (e) { return results; }
+    for (const entry of entries) {
+        const full = path.join(CONFIGS_DIR, entry);
+        let stat;
+        try { stat = fs.statSync(full); } catch (e) { continue; }
+        if (!stat.isDirectory()) continue;
+        const configFile = path.join(full, `${entry.toLowerCase()}_config.json`);
+        results.push({ name: entry, hasConfig: fs.existsSync(configFile) });
+    }
+    return results.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // Returns spreadsheet paths (relative to dir) found in dir and its immediate sub-folders.
@@ -414,10 +511,17 @@ async function copyRubric(rl, labName) {
     let rubricPath;
     for (let attempt = 0; attempt < 3; attempt++) {
         const raw = await ask(rl, 'Path to rubric file: ');
-        rubricPath = raw.replace(/^["']|["']$/g, '');
-        if (fs.existsSync(rubricPath)) break;
-        console.log(`  File not found: ${rubricPath}`);
-        rubricPath = null;
+        const candidate = raw.replace(/^["']|["']$/g, '');
+        if (!fs.existsSync(candidate)) {
+            console.log(`  File not found: ${candidate}`);
+            continue;
+        }
+        if (!fs.statSync(candidate).isFile()) {
+            console.log(`  That's a directory, not a file. Please provide the full path to the .xlsx or .xlsm file.`);
+            continue;
+        }
+        rubricPath = candidate;
+        break;
     }
     if (!rubricPath) {
         console.log('  No rubric provided after 3 attempts. Aborting.');
@@ -432,7 +536,7 @@ async function copyRubric(rl, labName) {
     const suggestedName = `CS233JS_${labName}_Rubric${ext}`;
     console.log(`  Suggested name: ${suggestedName}`);
     const nameInput = await ask(rl, '  Use this name? Press Enter to accept, or type a new name: ');
-    const rubricName = nameInput || suggestedName;
+    const rubricName = path.basename(nameInput || suggestedName);
 
     return { rubricPath, rubricName, ext };
 }
@@ -483,12 +587,13 @@ const MAPPING_TYPES = [
     { label: 'name_check', value: 'name_check', desc: 'File/folder names are Linux-safe (POSIX chars, no spaces)' },
     { label: 'code_review', value: 'code_review', desc: 'Code review form submitted + production completed' },
     { label: 'deploy_check', value: 'deploy_check', desc: 'Check citstudent deployment (bundled + reachable)' },
-    { label: 'build_check', value: 'build_check', desc: 'npm install && npm run build check' },
-    { label: 'browser_check', value: 'browser_check', desc: 'Puppeteer browser runtime check' },
+    { label: 'build_check', value: 'build_check', desc: 'Vite/webpack/npm run build — scores 0 if build fails (build errors)' },
+    { label: 'browser_check', value: 'browser_check', desc: 'Puppeteer headless browser runtime — scores 0 if browser console errors detected' },
+    { label: 'build_and_browser_check', value: 'build_and_browser_check', desc: 'Both build (Vite) and browser (Puppeteer) checks — half credit if only one fails' },
     { label: 'package_check', value: 'package_check', desc: 'Verify package.json dependencies' },
     { label: 'github_repo', value: 'github_repo', desc: 'GitHub repo link check' },
     { label: 'repo_hygiene', value: 'repo_hygiene', desc: 'Check excluded folders not in git' },
-    { label: 'developer_comments', value: 'developer_comments', desc: 'Sufficient developer comments' },
+    { label: 'developer_comments', value: 'developer_comments', desc: 'Developer name, date, and/or comments present in code files' },
     { label: 'url_check', value: 'url_check', desc: 'URL reachability check' },
     { label: 'part_completed', value: 'part_completed', desc: 'Multi-part: subdir completion check' },
     { label: 'part1_completed', value: 'part1_completed', desc: 'Single-part: part 1 completion check' },
@@ -502,14 +607,18 @@ function guessMappingType(label) {
     if (/github.*repo|private\s*repo/.test(l))                  return 'github_repo';
     if (/\.gitignore|repo.hygiene|node.?modules.*repo/.test(l)) return 'repo_hygiene';
     if (/deploy|live\s*site|citstudent/.test(l))                return 'deploy_check';
-    if (/build|vite|webpack|bundle|npm\s*run/.test(l))          return 'build_check';
+    const hasBuild   = /build.{0,10}error|vite|webpack|bundle|npm\s*run/.test(l);
+    const hasBrowser = /console.{0,10}error|browser.{0,10}error|runtime.{0,10}error/.test(l);
+    if (hasBuild && hasBrowser) return 'build_and_browser_check';
+    if (hasBuild)   return 'build_check';
+    if (hasBrowser) return 'browser_check';
     if (/package\.json|npm\s*package|dependency/.test(l))       return 'package_check';
     if (/lint|eslint|code\s*style/.test(l))                     return 'lint';
     if (/\bhtml\b|index\.html/.test(l))                         return 'html_validate';
     if (/\bcss\b|stylesheet|style\s*sheet/.test(l))             return 'css_validate';
     if (/file\s*nam|folder\s*(structure|nam)|directory\s*(structure|nam)|naming\s*conventi/.test(l)) return 'name_check';
     if (/code\s*review|peer\s*review/.test(l))                  return 'code_review';
-    if (/developer\s*comment|jsdoc|documentation/.test(l))      return 'developer_comments';
+    if (/developer\s*(comment|name|date)|dev\s*name|name.*date.*file|jsdoc|documentation/.test(l)) return 'developer_comments';
     if (/\burl\b|live\s*link/.test(l))                          return 'url_check';
     if (/browser\s*check|runs?\s*in\s*browser/.test(l))         return 'browser_check';
     if (/all\s*app|apps?\s*in\s*repo/.test(l))                  return 'apps_in_repo';
@@ -549,7 +658,7 @@ async function promptMappingCellByCell(rl, rubricRows) {
 
 const CHECKLIST_TYPES = [
     'feature', 'manual', 'lint', 'html_validate', 'css_validate', 'name_check', 'code_review', 'deploy_check',
-    'build_check', 'browser_check', 'package_check', 'github_repo',
+    'build_check', 'browser_check', 'build_and_browser_check', 'package_check', 'github_repo',
     'repo_hygiene', 'developer_comments', 'url_check',
     'part_completed', 'part1_completed', 'apps_in_repo', 'npm_package',
 ];
@@ -1002,8 +1111,9 @@ async function runPartSetup(rl, labDir, labName, existingConfig) {
 
 async function main() {
     let labName = process.argv[2] || '';
+    let isEditingExisting = false;
 
-    console.log('\n=== Create New Lab Configuration ===\n');
+    console.log('\n=== Create / Edit Lab Configuration ===\n');
 
     const rl = createRL();
 
@@ -1016,32 +1126,60 @@ async function main() {
                 process.exit(1);
             }
             labName = parsed;
+            const configFile = path.join(CONFIGS_DIR, labName, `${labName.toLowerCase()}_config.json`);
+            isEditingExisting = fs.existsSync(configFile);
         } else {
-            while (true) {
-                const raw = await ask(rl, 'Assignment name (e.g. 07, Lab07, TermProject): ');
-                const parsed = normalizeAssignmentName(raw);
-                if (parsed) {
-                    labName = parsed;
-                    break;
+            // Show existing assignments as a selection menu
+            const existing = getExistingAssignments();
+            const options = [
+                ...existing.map(a => ({
+                    label: a.name,
+                    value: a.name,
+                    desc: a.hasConfig ? 'has config' : 'no config yet',
+                })),
+                { label: 'Add new assignment', value: '__new__', desc: 'Create a brand-new assignment configuration' },
+            ];
+
+            const choice = await askOptions(rl, 'Select an assignment to edit, or add a new one:', options);
+
+            if (choice === '__new__') {
+                while (true) {
+                    const raw = await ask(rl, 'Assignment name (e.g. 07, Lab07, TermProject): ');
+                    const parsed = normalizeAssignmentName(raw);
+                    if (parsed) { labName = parsed; break; }
+                    console.log('  Please enter a name like "07", "Lab07", or "TermProject".');
                 }
-                console.log('  Please enter a name like "07", "Lab07", or "TermProject".');
+                isEditingExisting = false;
+            } else {
+                labName = choice;
+                const configFile = path.join(CONFIGS_DIR, labName, `${labName.toLowerCase()}_config.json`);
+                isEditingExisting = fs.existsSync(configFile);
             }
         }
 
         const labDir = path.join(CONFIGS_DIR, labName);
         let useExisting = false;
         if (fs.existsSync(labDir)) {
-            console.log(`\n  Warning: Directory already exists: ${labDir}`);
-            const choice = await askOptions(rl, '  How do you want to proceed?', [
-                { label: 'Abort',                value: 'abort' },
-                { label: 'Keep existing files',  value: 'keep',      desc: 'Preserves rubric and other files; rewrites config only' },
-                { label: 'Overwrite everything', value: 'overwrite', desc: 'Full wizard, existing files may be replaced' },
-            ]);
-            if (choice === 'abort') {
-                console.log('  Aborted.');
-                process.exit(0);
+            if (isEditingExisting) {
+                // User explicitly selected an existing assignment — default to keeping files
+                console.log(`\n  Editing existing assignment: ${labName}`);
+                const choice = await askOptions(rl, '  How do you want to proceed?', [
+                    { label: 'Keep existing files',  value: 'keep',      desc: 'Preserves rubric and other files; rewrites config only' },
+                    { label: 'Overwrite everything', value: 'overwrite', desc: 'Full wizard, existing files may be replaced' },
+                    { label: 'Abort',                value: 'abort' },
+                ]);
+                if (choice === 'abort') { console.log('  Aborted.'); process.exit(0); }
+                useExisting = (choice === 'keep');
+            } else {
+                console.log(`\n  Warning: Directory already exists: ${labDir}`);
+                const choice = await askOptions(rl, '  How do you want to proceed?', [
+                    { label: 'Abort',                value: 'abort' },
+                    { label: 'Keep existing files',  value: 'keep',      desc: 'Preserves rubric and other files; rewrites config only' },
+                    { label: 'Overwrite everything', value: 'overwrite', desc: 'Full wizard, existing files may be replaced' },
+                ]);
+                if (choice === 'abort') { console.log('  Aborted.'); process.exit(0); }
+                useExisting = (choice === 'keep');
             }
-            useExisting = (choice === 'keep');
         } else {
             fs.mkdirSync(labDir, { recursive: true });
         }
@@ -1191,11 +1329,12 @@ async function main() {
 // Export testable functions for unit tests
 module.exports = {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
-    sheetRows, readRubricRows, readRubricCriteria, buildConfig, buildMappingEntry, promptFields,
+    sheetRows, readRubricRows, readRubricCriteria, promptRubricCriteria, buildConfig, buildMappingEntry, promptFields,
     promptFeatures, copyRubric, writeLab, findSpreadsheets, keywordsToFolderPattern,
     promptRubricRows, detectRubricLayout, colLetterToIndex, guessMappingType, POSSIBLE_HEADER_RE,
     askBoolean, askOptions, ask, askInt, createRL,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA,
+    getExistingAssignments,
 };
 
 if (require.main === module) {

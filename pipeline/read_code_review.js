@@ -164,7 +164,7 @@ function parseTableScores(html) {
     }
 
     const items = [];
-    let allProdFilled = true;
+    let anyProdFilled = false;
 
     for (let r = 1; r < rows.length; r++) {
         const row = rows[r];
@@ -175,17 +175,7 @@ function parseTableScores(html) {
             ? parseCellValue(row[prodCol])
             : { score: null, filled: false, affirmative: null };
 
-        // Only consider this row "active" if the beta column has content.
-        // Rows with no beta score are for options the student isn't doing,
-        // so an empty production cell there is expected and shouldn't count
-        // against productionCompleted.
-        const betaFilled = betaCol >= 0 && betaCol < row.length
-            ? isCellFilled(row[betaCol])
-            : false;
-
-        if (betaFilled && !prodCell.filled) {
-            allProdFilled = false;
-        }
+        if (prodCell.filled) anyProdFilled = true;
 
         items.push({
             betaScore,
@@ -197,7 +187,7 @@ function parseTableScores(html) {
 
     return {
         items,
-        productionCompleted: allProdFilled && items.length > 0
+        productionCompleted: anyProdFilled
     };
 }
 

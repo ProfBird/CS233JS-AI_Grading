@@ -3,8 +3,11 @@
   "titleCell": "A1",
   "titleText": "Lab 6: Async JS and Web APIs",
   "summaryCell": "A2",
-  "graderCell": "E1",
-  "codeReview": { "studentNameCell": "B1", "groupCell": "C1" },
+  "graderCell": "G1",
+  "codeReview": {
+    "studentNameCell": "B1",
+    "groupCell": "C1"
+  },
   "runtimeCheck": "both",
   "repoHygiene": {
     "excludedFromRepo": [
@@ -46,102 +49,137 @@
         "regex": "import\\s+.*from",
         "fileRegex": "\\.js$"
       }
-    ],
-    "customAnalyzer": "lab06_analyzer.js"
+    ]
   },
   "mappings": [
     {
-      "cell": "C7",
-      "commentCell": "E7",
+      "cell": "D7",
+      "commentCell": "F7",
       "type": "manual",
       "maxScore": 5,
-      "msg": "NEEDS MANUAL CHECK (module/file for fetch API requests)"
+      "msg": "NEEDS MANUAL CHECK: Verify all previous features still work",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Some",
+        "zero": "No"
+      }
     },
     {
-      "cell": "C8",
-      "commentCell": "E8",
-      "type": "manual",
-      "maxScore": 5,
-      "msg": "NEEDS MANUAL CHECK (fetch called asynchronously at right action)"
-    },
-    {
-      "cell": "C9",
-      "commentCell": "E9",
+      "cell": "D8",
+      "commentCell": "F8",
       "type": "manual",
       "maxScore": 4,
-      "msg": "NEEDS MANUAL CHECK (async/await or Promise chaining correct)"
+      "msg": "Check for a dedicated module for making API requests",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Mixed",
+        "zero": "No"
+      }
     },
     {
-      "cell": "C10",
-      "commentCell": "E10",
+      "cell": "D9",
+      "commentCell": "F9",
+      "type": "manual",
+      "maxScore": 10,
+      "msg": "Verify correct data obtained from web API",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Partial",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D10",
+      "commentCell": "F10",
       "type": "manual",
       "maxScore": 5,
-      "msg": "NEEDS MANUAL CHECK (JSON parsed, relevant fields extracted)"
+      "msg": "Check API data displayed correctly on page",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Partial",
+        "zero": "No"
+      }
     },
     {
-      "cell": "C11",
-      "commentCell": "E11",
-      "type": "feature",
-      "featureId": "local_storage",
-      "minCount": 1,
+      "cell": "D11",
+      "commentCell": "F11",
+      "type": "build_and_browser_check",
       "maxScore": 2,
-      "successMsg": "Yes",
-      "failMsg": "localStorage not found"
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Some",
+        "zero": "No"
+      }
     },
     {
-      "cell": "C12",
-      "commentCell": "E12",
-      "type": "manual",
-      "maxScore": 5,
-      "msg": "NEEDS MANUAL CHECK (lit-html renders fetched API data correctly)"
-    },
-    {
-      "cell": "C13",
-      "commentCell": "E13",
-      "type": "build_check",
-      "maxScore": 2
-    },
-    {
-      "cell": "C14",
-      "commentCell": "E14",
-      "type": "manual",
-      "maxScore": 2,
-      "msg": "NEEDS MANUAL CHECK (app works correctly)"
-    },
-    {
-      "cell": "C15",
-      "commentCell": "E15",
-      "type": "developer_comments",
-      "maxScore": 1
-    },
-    {
-      "cell": "C16",
-      "commentCell": "E16",
+      "cell": "D12",
+      "commentCell": "F12",
       "type": "lint",
-      "severity": "warnings",
-      "maxScore": 2
+      "maxScore": 2,
+      "severity": "errors",
+      "stockComments": {
+        "full": "Good",
+        "partial": "Issues",
+        "zero": "Needs improvement"
+      }
     },
     {
-      "cell": "C21",
-      "commentCell": "E21",
-      "linkCell": "F21",
-      "linkUrlType": "github",
+      "cell": "D13",
+      "commentCell": "F13",
+      "type": "developer_comments",
+      "maxScore": 1,
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Some",
+        "zero": "Missing"
+      }
+    },
+    {
+      "cell": "D16",
+      "commentCell": "F16",
       "type": "github_repo",
-      "maxScore": 2
+      "maxScore": 3,
+      "linkUrlType": "github",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Not private, bad URL",
+        "zero": "No"
+      }
     },
     {
-      "cell": "C22",
-      "commentCell": "E22",
-      "linkCell": "F22",
-      "linkUrlType": "citstudent",
+      "cell": "D17",
+      "commentCell": "F17",
+      "type": "name_check",
+      "maxScore": 2,
+      "tolerance": 0,
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Needs Improvement",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D18",
+      "commentCell": "F18",
       "type": "deploy_check",
-      "maxScore": 4
+      "maxScore": 4,
+      "urlType": "citstudent",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Bad URL",
+        "zero": "No"
+      }
     },
     {
-      "cell": "C23",
-      "commentCell": "E23",
+      "cell": "D19",
+      "commentCell": "F19",
       "type": "code_review",
-      "maxScore": 1
+      "maxScore": 2,
+      "stockComments": {
+        "full": "Yes, yes",
+        "partial": "Yes, no",
+        "zero": "No"
+      }
     }
   ]
 }

@@ -145,14 +145,56 @@ describe('computeResults — stock comment override', () => {
         expect(r.comment).toBe('Errors');          // partial-tier stock comment
     });
 
-    it('fires the zero-tier stock comment for a name_check row', async () => {
+    it('keeps the real name_check failure description instead of stock comment', async () => {
         const cfg = { mappings: [
             { type: 'name_check', cell: 'D7', commentCell: 'F7', maxScore: 2, tolerance: 2, stockComments: sc },
         ] };
         const student = { nameCheck: { entriesChecked: 8, errors: 5, messages: ['a (space)'] } };
         const [r] = await computeResults(student, cfg);
         expect(r.score).toBe(0);
-        expect(r.comment).toBe('Missing');         // zero-tier stock comment
+        expect(r.comment).toContain('5 invalid names');  // real description, not stock 'Missing'
+        expect(r.comment).toContain('a (space)');
+    });
+});
+
+// ── deploy_check failure transparency ────────────────────────────────────────
+// A grader-side network failure (thrown fetch) or an HTTP error must NOT be silently
+// scored as a stock "No" — it is indistinguishable from real non-deployment otherwise.
+// These flag for manual review and keep their diagnostic through the stock override.
+describe('deploy_check — failure comments survive stock override', () => {
+    const { computeResults } = generateGrades;
+    const sc = { full: 'Yes', partial: 'Bad URL', zero: 'No' };
+    const cfg = { mappings: [
+        { type: 'deploy_check', cell: 'D18', commentCell: 'F18', maxScore: 4, urlType: 'citstudent', stockComments: sc },
+    ] };
+    const student = { analysis: { urls: { citstudent: 'https://citstudent.lanecc.edu/~x/dist/' } } };
+
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    it('keeps the connection-error diagnostic instead of stock "No"', async () => {
+        const err = new Error('socket hang up'); err.code = 'ECONNRESET';
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(err));
+        const [r] = await computeResults(student, cfg);
+        expect(r.score).toBe(0);
+        expect(r.comment).not.toBe('No');
+        expect(r.comment).toContain('NEEDS MANUAL CHECK');
+        expect(r.comment).toContain('ECONNRESET');
+    }, 20000);
+
+    it('keeps the HTTP-status diagnostic instead of stock "No"', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+        const [r] = await computeResults(student, cfg);
+        expect(r.score).toBe(0);
+        expect(r.comment).not.toBe('No');
+        expect(r.comment).toContain('HTTP 503');
+    });
+
+    it('still applies stock "Yes" when reachable and bundled', async () => {
+        const html = '<script type="module" src="./assets/index-AbC12345.js"></script>';
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => html }));
+        const [r] = await computeResults(student, cfg);
+        expect(r.score).toBe(4);
+        expect(r.comment).toBe('Yes');
     });
 });
 

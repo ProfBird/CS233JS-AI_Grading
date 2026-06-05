@@ -5,33 +5,29 @@
 
 const fs   = require('fs');
 const path = require('path');
+const XLSX = require('xlsx');
 
 const {
-    normalizeAssignmentName, colLetter, findSpreadsheets, copyRubric,
-    readRubricRows, readRubricCriteria, promptRubricRows, buildConfig, writeLab,
+    normalizeAssignmentName, colLetter, colLetterToIndex,
+    findSpreadsheets, sheetRows, readRubricRows, readRubricCriteria, detectRubricLayout,
+    buildConfig, writeLab, getExistingAssignments,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
-    buildMappingEntry, promptFields, createRL, ask, askBoolean, askOptions, askInt,
 } = require('./create_lab.js');
 
 const { loadLLMClient, setupLLMInteractive } = require('../lib/llm_client.js');
+const { TUI } = require('../lib/tui.js');
 
 const CONFIGS_DIR       = path.join(__dirname, '..', 'configs');
 const LOCAL_CONFIG_PATH = path.join(CONFIGS_DIR, 'local-config.json');
 
-// ── Prompt helpers that forward the rl handle ─────────────────────────────
+// ── Helpers passed to setupLLMInteractive ────────────────────────────────
 
-// Wrap the rl-free ask/askBoolean/askOptions from create_lab with a curried version.
-function makeHelpers(rl) {
+function makeHelpers(tui) {
     return {
-        ask:         (prompt) => ask(rl, prompt),
-        askBoolean:  (q, def) => askBoolean(rl, q, def),
-        askOptions:  (prompt, opts, def) => askOptions(rl, prompt, opts, def ?? 0),
+        ask:        (prompt)                => tui.ask(prompt),
+        askBoolean: (q, def)               => tui.askBoolean(q, def),
+        askOptions: (prompt, opts, defIdx) => tui.askOptions(prompt, opts, defIdx ?? 0),
     };
-}
-
-// Builds a prompt string that shows the current value as a [default] when present.
-function defPrompt(text, current) {
-    return current ? `${text} [${current}]: ` : `${text} (or blank): `;
 }
 
 // ── LLM prompt construction ───────────────────────────────────────────────
@@ -86,8 +82,13 @@ Required fields for every object:
   maxScore     – integer from "Possible" column (0 if blank)
 
 Use the RUBRIC SHEET descriptions above to infer the most accurate type for each row.
-Do NOT use type "feature" — it requires a regex that is not yet defined; prefer
-manual, package_check, build_check, or lint instead.
+Do NOT use type "feature" — it requires a regex not yet defined.
+Type selection rules:
+  "lint" is ONLY for ESLint static analysis (code style/syntax) — never for build or runtime errors.
+  "build_check" for Vite/webpack/npm-run-build failures or build errors only.
+  "browser_check" for Puppeteer browser console errors or runtime errors only.
+  "build_and_browser_check" when criteria mention BOTH build errors AND console/browser errors (e.g. "No Vite build errors or browser console errors") — half credit if only one check fails.
+  "developer_comments" for developer name, date, or code comments present in files.
 
 Type-specific extra fields:
   manual       → msg: short description of what to check
@@ -108,16 +109,12 @@ const SYSTEM_PROMPT =
 
 // ── Draft generation ──────────────────────────────────────────────────────
 
-// Downgrade a "feature" guess to "manual" unless its featureId already has a
-// matching analysis.features regex — otherwise the row silently scores 0 at grade time.
 function guardFeatureType(type, featureId, knownFeatureIds) {
     if (type !== 'feature') return type;
     if (featureId && knownFeatureIds.has(featureId)) return type;
     return 'manual';
 }
 
-// Best-effort match of a Grade-sheet label to a Rubric-sheet criteria entry by token
-// overlap (the two sheets word/order items differently, so no exact join exists).
 function findCriteria(label, criteria) {
     const norm = s => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(w => w.length > 2);
     const want = new Set(norm(label));
@@ -133,11 +130,11 @@ function findCriteria(label, criteria) {
 
 function heuristicDraft(scoringRows, criteria = [], knownFeatureIds = new Set()) {
     return scoringRows.map(rr => {
-        const extra  = findCriteria(rr.label, criteria);
+        const extra   = findCriteria(rr.label, criteria);
         const guessed = guessMappingType(extra ? `${rr.label} ${extra}` : rr.label);
-        const type   = guardFeatureType(guessed, undefined, knownFeatureIds);
-        const schema = MAPPING_TYPE_SCHEMA[type] ?? GENERIC_MAPPING_SCHEMA;
-        const entry  = {
+        const type    = guardFeatureType(guessed, undefined, knownFeatureIds);
+        const schema  = MAPPING_TYPE_SCHEMA[type] ?? GENERIC_MAPPING_SCHEMA;
+        const entry   = {
             cell:        rr.scoreCell,
             commentCell: rr.commentCell,
             _label:      rr.label,
@@ -166,9 +163,9 @@ function extractJSON(text) {
 function mergeLLMResponse(llmDraft, scoringRows, knownFeatureIds = new Set()) {
     const validTypes = new Set(MAPPING_TYPES.map(t => t.value));
     return scoringRows.map((rr, i) => {
-        const src = llmDraft[i] ?? {};
-        const rawType = validTypes.has(src.type) ? src.type : guessMappingType(rr.label);
-        const type = guardFeatureType(rawType, src.featureId, knownFeatureIds);
+        const src      = llmDraft[i] ?? {};
+        const rawType  = validTypes.has(src.type) ? src.type : guessMappingType(rr.label);
+        const type     = guardFeatureType(rawType, src.featureId, knownFeatureIds);
         const maxScore = typeof src.maxScore === 'number' && src.maxScore >= 0
             ? src.maxScore
             : parseInt(rr.possible, 10) || 0;
@@ -181,7 +178,6 @@ function mergeLLMResponse(llmDraft, scoringRows, knownFeatureIds = new Set()) {
             maxScore,
         };
 
-        // Copy known extra fields from LLM output
         const schema = MAPPING_TYPE_SCHEMA[type] ?? GENERIC_MAPPING_SCHEMA;
         if (schema.fixed) Object.assign(entry, schema.fixed);
         for (const f of schema.fields) {
@@ -195,25 +191,27 @@ function mergeLLMResponse(llmDraft, scoringRows, knownFeatureIds = new Set()) {
     });
 }
 
-async function generateDraft(llm, labName, rubricRows, criteria = [], knownFeatureIds = new Set()) {
+async function generateDraft(tui, llm, labName, rubricRows, criteria = [], knownFeatureIds = new Set()) {
     const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
 
     if (!llm) return heuristicDraft(scoringRows, criteria, knownFeatureIds);
 
-    process.stdout.write('  Asking AI to draft configuration...');
+    tui.showSpinner('Asking AI to draft configuration...');
     const response = await llm.chat(SYSTEM_PROMPT, buildLLMPrompt(labName, scoringRows, criteria));
+    tui.clearSpinner();
+
     if (!response) {
-        console.log(' failed. Using heuristic fallback.');
+        tui.print('  AI request failed. Using heuristic fallback.');
         return heuristicDraft(scoringRows, criteria, knownFeatureIds);
     }
 
     try {
         const parsed = JSON.parse(extractJSON(response));
         if (!Array.isArray(parsed)) throw new Error('not an array');
-        console.log(' done.');
+        tui.print('  AI draft generated.');
         return mergeLLMResponse(parsed, scoringRows, knownFeatureIds);
     } catch (e) {
-        console.log(` parse error (${e.message}). Using heuristic fallback.`);
+        tui.print(`  AI parse error (${e.message}). Using heuristic fallback.`);
         return heuristicDraft(scoringRows, criteria, knownFeatureIds);
     }
 }
@@ -232,6 +230,10 @@ function summaryNotes(entry) {
         note = `linkCell: ${entry.linkCell}`;
     if (entry.stockComments) note = (note ? note + ' ' : '') + '+stock';
     return note;
+}
+
+function defPrompt(text, current) {
+    return current ? `${text} [${current}]: ` : `${text} (or blank): `;
 }
 
 function printDraftTable(draft) {
@@ -257,52 +259,178 @@ function printDraftTable(draft) {
     console.log();
 }
 
-// ── Review + edit loop ────────────────────────────────────────────────────
+// ── TUI-specific rubric reading ───────────────────────────────────────────
 
-async function reviewDraft(rl, draft, rubricRows) {
-    const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
+async function promptRubricRowsTUI(tui, rubricPath) {
+    let wb;
+    try { wb = XLSX.readFile(rubricPath); } catch (e) {
+        tui.print(`  Could not read rubric file: ${e.message}`);
+        return null;
+    }
+    const ws = wb?.Sheets['Grade'];
+    if (!ws) { tui.print('  No "Grade" sheet found in the rubric.'); return null; }
+    const rows = sheetRows(ws);
 
-    while (true) {
-        printDraftTable(draft);
+    let layout = detectRubricLayout(rows);
+    if (!layout) {
+        const alt = await tui.ask(
+            'Max-points column header not found (tried: possible, points, pts, max). Enter exact header text or leave blank to skip'
+        );
+        if (!alt) return null;
+        const altRe = new RegExp(`^${alt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+        layout = detectRubricLayout(rows, altRe);
+        if (!layout) { tui.print(`  Could not find "${alt}". Skipping mappings.`); return null; }
+    }
 
-        const accept = await askBoolean(rl, 'Accept all mappings?', true);
-        if (accept) break;
+    tui.print(`  Detected columns in Grade sheet (header row ${layout.headerRow + 1}):`);
+    tui.print(`    Max points : ${colLetter(layout.possibleCol)}`);
+    tui.print(`    Score      : ${colLetter(layout.scoreCol)}`);
+    tui.print(`    Comments   : ${colLetter(layout.commentCol)}`);
+    if (layout.fullCol >= 0) {
+        tui.print(`    Stock (100%/<100%/0%): ${colLetter(layout.fullCol)}/${colLetter(layout.partialCol)}/${colLetter(layout.zeroCol)}`);
+    }
 
-        const input = await ask(rl, 'Row number(s) to edit (comma-separated, or "all"): ');
-        let indices;
-        if (input.toLowerCase() === 'all') {
-            indices = draft.map((_, i) => i);
+    const ok = await tui.askBoolean('Are these columns correct?', true);
+    if (!ok) {
+        const p = await tui.ask('Max-points column letter', colLetter(layout.possibleCol));
+        const s = await tui.ask('Score/grade column letter', colLetter(layout.scoreCol));
+        const c = await tui.ask('Comments column letter', colLetter(layout.commentCol));
+        if (p) layout.possibleCol = colLetterToIndex(p);
+        if (s) layout.scoreCol    = colLetterToIndex(s);
+        if (c) layout.commentCol  = colLetterToIndex(c);
+    }
+
+    return readRubricRows(rubricPath, layout);
+}
+
+async function promptRubricCriteriaTUI(tui, rubricPath) {
+    tui.print('\n--- Rubric Criteria Sheet ---');
+    const criteria = readRubricCriteria(rubricPath);
+    if (criteria.length === 0) {
+        tui.print('  No "Rubric" sheet or no Criteria column found — skipping criteria descriptions.');
+    } else {
+        tui.print(`  Found ${criteria.length} criteria descriptions (used as AI context).`);
+    }
+    return criteria;
+}
+
+// ── Copy rubric (TUI version) ─────────────────────────────────────────────
+
+async function copyRubricTUI(tui, labName) {
+    tui.print('\n--- Rubric Spreadsheet ---');
+    tui.print('  Provide a path to the .xlsx or .xlsm rubric file.');
+
+    let rubricPath;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const raw = await tui.ask('Path to rubric file');
+        const candidate = raw.replace(/^["']|["']$/g, '').trim();
+        if (!candidate) continue;
+        if (!fs.existsSync(candidate)) { tui.print(`  File not found: ${candidate}`); continue; }
+        if (!fs.statSync(candidate).isFile()) { tui.print('  That is a directory — provide the full file path.'); continue; }
+        rubricPath = candidate;
+        break;
+    }
+    if (!rubricPath) { tui.print('  No rubric provided after 3 attempts. Aborting.'); tui.exit(1); }
+
+    const ext = path.extname(rubricPath).toLowerCase();
+    const suggestedName = `CS233JS_${labName}_Rubric${ext}`;
+    const nameInput = await tui.ask('Rubric filename', suggestedName);
+    const rubricName = path.basename(nameInput || suggestedName);
+
+    return { rubricPath, rubricName, ext };
+}
+
+// ── Mapping entry builder (TUI version of promptFields / buildMappingEntry) ──
+
+async function promptFieldsTUI(tui, fields, currentValues = {}) {
+    const result = {};
+    for (const f of fields) {
+        const cur = currentValues[f.key];
+        if (f.type === 'int') {
+            const def = cur ?? f.default ?? 0;
+            // Strip existing [n] placeholder from the prompt text
+            const label = f.prompt.replace(/\s*\[.*?\]/, '').replace(/:\s*$/, '').trim();
+            result[f.key] = await tui.askInt(label, def);
+        } else if (f.type === 'options') {
+            const defIdx = cur !== undefined
+                ? Math.max(0, f.options.findIndex(o => o.value === cur))
+                : 0;
+            const label = f.prompt.replace(/:\s*$/, '').trim();
+            result[f.key] = await tui.askOptions(label, f.options, defIdx);
         } else {
-            indices = input.split(',')
-                .map(s => parseInt(s.trim(), 10) - 1)
-                .filter(i => i >= 0 && i < draft.length);
-        }
-        if (!indices.length) { console.log('  No valid row numbers.'); continue; }
-
-        const SKIP = { label: '— skip (no mapping, graded by hand) —', value: '__skip__' };
-        const typeChoices = [...MAPPING_TYPES, SKIP];
-
-        for (const idx of indices) {
-            const rr      = scoringRows[idx];
-            const current = draft[idx];
-            console.log(`\n  Row ${idx + 1}: "${current._label || rr.label}"  [${current.cell}]`);
-
-            const guessedIdx = current._skip
-                ? typeChoices.length - 1
-                : Math.max(0, MAPPING_TYPES.findIndex(t => t.value === current.type));
-            const newType = await askOptions(rl, '  Mapping type:', typeChoices, guessedIdx);
-            if (newType === '__skip__') {
-                draft[idx] = { _label: rr.label, cell: rr.scoreCell, _skip: true };
-                continue;
+            const def = cur ?? f.default ?? '';
+            const label = f.prompt.replace(/:\s*$/, '').trim();
+            const raw = await tui.ask(label, def);
+            if (f.required && !raw && !def) {
+                tui.print('  Required field empty — skipping this entry.');
+                return null;
             }
-            const newEntry = await buildMappingEntry(rl, newType, rr, current);
-            if (newEntry) {
-                const entry = { ...newEntry, _label: rr.label };
-                if (rr.stockComments) entry.stockComments = rr.stockComments;
-                draft[idx] = entry;
-            }
+            if (f.optional && !raw && !def) continue;
+            result[f.key] = raw || def;
         }
     }
+    return result;
+}
+
+async function buildMappingEntryTUI(tui, type, rubricRow, currentValues = {}) {
+    const schema = MAPPING_TYPE_SCHEMA[type] ?? GENERIC_MAPPING_SCHEMA;
+    const fields = await promptFieldsTUI(tui, schema.fields, currentValues);
+    if (fields === null) return null;
+    const m = { type, cell: rubricRow.scoreCell, ...(schema.fixed ?? {}), ...fields };
+    if (rubricRow.commentCell) m.commentCell = rubricRow.commentCell;
+    return m;
+}
+
+// ── Edit a single row in the review table ────────────────────────────────
+
+async function editRowTUI(idx, draft, scoringRows, tui) {
+    const rr      = scoringRows[idx];
+    const current = draft[idx];
+    tui.print(`\n  Row ${idx + 1}: "${current._label || rr?.label || ''}"  [${current.cell || rr?.scoreCell || ''}]`);
+
+    const SKIP    = { label: '— skip (graded by hand, no automation) —', value: '__skip__', desc: 'Exclude this row from automated grading' };
+    const choices = [...MAPPING_TYPES, SKIP];
+
+    const defIdx = current._skip
+        ? choices.length - 1
+        : Math.max(0, MAPPING_TYPES.findIndex(t => t.value === current.type));
+
+    const newType = await tui.askOptions('Mapping type', choices, defIdx);
+
+    if (newType === '__skip__') {
+        draft[idx] = { _label: rr.label, cell: rr.scoreCell, _skip: true };
+        return true;
+    }
+
+    const newEntry = await buildMappingEntryTUI(tui, newType, rr, current);
+    if (newEntry) {
+        draft[idx] = { ...newEntry, _label: rr.label };
+        if (rr.stockComments) draft[idx].stockComments = rr.stockComments;
+        return true;
+    }
+    return false;
+}
+
+// ── Review + edit loop ────────────────────────────────────────────────────
+
+async function reviewDraft(tui, draft, rubricRows) {
+    const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
+
+    const makeItems = () => {
+        const maxLabel = Math.min(28, Math.max(5, ...draft.map(e => (e._label || '').length)));
+        const maxType  = Math.max(6, ...draft.map(e => (e._skip ? '(skip)' : (e.type || '')).length));
+        return draft.map((e, i) => {
+            const num  = String(i + 1).padStart(3);
+            const lbl  = (e._label || '').slice(0, maxLabel).padEnd(maxLabel);
+            const cell = (e.cell || '').padEnd(5);
+            const type = (e._skip ? '(skip)' : (e.type || '')).padEnd(maxType);
+            const max  = String(e._skip ? '' : (e.maxScore ?? 0)).padStart(3);
+            const note = e._skip ? 'manual' : summaryNotes(e);
+            return ` ${num} │ ${lbl} │ ${cell} │ ${type} │ ${max} │ ${note}`;
+        });
+    };
+
+    await tui.reviewTable(makeItems, idx => editRowTUI(idx, draft, scoringRows, tui));
 
     return draft;
 }
@@ -311,30 +439,26 @@ async function reviewDraft(rl, draft, rubricRows) {
 
 async function main() {
     if (process.argv.includes('--help') || process.argv.includes('-h')) {
-        console.log('Usage: node bin/configure_lab.js [AssignmentName]');
-        console.log('LLM-assisted rubric → config wizard.');
-        console.log('Reads the rubric spreadsheet, generates a draft mapping table with AI,');
-        console.log('presents it for review, and writes the config JSON.');
+        process.stdout.write('Usage: node bin/configure_lab.js [AssignmentName]\n');
+        process.stdout.write('LLM-assisted rubric → config wizard.\n');
         process.exit(0);
     }
 
-    console.log('\n=== Configure Lab Grading (AI-assisted) ===\n');
-
-    const rl      = createRL();
-    const helpers = makeHelpers(rl);
-
+    let summary = null;
+    const tui = new TUI('Configure Lab Grading (AI-assisted)');
     try {
+        tui.print('\nWelcome! This wizard reads a rubric spreadsheet, uses AI to draft a');
+        tui.print('mapping configuration, then lets you review and edit before saving.\n');
+
         // 1. LLM setup
         let llm = loadLLMClient(LOCAL_CONFIG_PATH);
         if (llm) {
-            console.log(`  LLM: ${llm.provider}  model: ${llm.model || '(auto)'}\n`);
+            tui.print(`  LLM: ${llm.provider}  model: ${llm.model || '(auto)'}\n`);
         } else {
-            console.log('  No LLM configured yet.');
-            const setup = await askBoolean(rl, '  Set one up now?', true);
-            if (setup) {
-                llm = await setupLLMInteractive(LOCAL_CONFIG_PATH, helpers);
-            }
-            if (!llm) console.log('  Proceeding with heuristic mapping (no AI).\n');
+            tui.print('  No LLM configured yet.');
+            const setup = await tui.askBoolean('Set one up now?', true);
+            if (setup) llm = await setupLLMInteractive(LOCAL_CONFIG_PATH, makeHelpers(tui));
+            if (!llm) tui.print('  Proceeding with heuristic mapping (no AI).\n');
         }
 
         // 2. Assignment name
@@ -343,92 +467,139 @@ async function main() {
         if (rawArg) {
             labName = normalizeAssignmentName(rawArg);
             if (!labName) {
-                console.error(`Invalid assignment name: ${rawArg}. Use a number (07), a lab name (Lab07), or a slug (TermProject).`);
-                process.exit(1);
+                tui.print(`Invalid assignment name: ${rawArg}. Use a number (07), a lab name (Lab07), or a slug (TermProject).`);
+                tui.exit(1);
             }
-        }
-        if (!labName) {
-            while (true) {
-                const raw = await ask(rl, 'Assignment name (e.g. TermProject, 07): ');
-                labName = normalizeAssignmentName(raw);
-                if (labName) break;
-                console.log('  Invalid — use letters, numbers, underscores, or hyphens.');
+            tui.print(`\n--- Assignment Name ---`);
+            tui.print(`  Assignment: ${labName}`);
+        } else {
+            const existing = getExistingAssignments();
+            const options = [
+                ...existing.map(a => ({
+                    label: a.name,
+                    value: a.name,
+                    desc: a.hasConfig ? 'has config' : 'no config yet',
+                })),
+                { label: 'Add new assignment', value: '__new__', desc: 'Create a brand-new assignment configuration' },
+            ];
+            const choice = await tui.askOptions('Select an assignment to configure', options, 0);
+            if (choice === '__new__') {
+                while (true) {
+                    const raw = await tui.ask('Assignment name (e.g. TermProject, 07)');
+                    labName = normalizeAssignmentName(raw);
+                    if (labName) break;
+                    tui.print('  Invalid — use letters, numbers, underscores, or hyphens.');
+                }
+            } else {
+                labName = choice;
             }
         }
 
         const labDir = path.join(CONFIGS_DIR, labName);
         if (!fs.existsSync(labDir)) {
             fs.mkdirSync(labDir, { recursive: true });
-            console.log(`  Created: ${labDir}`);
+            tui.print(`  Created: ${labDir}`);
         }
 
         // 3. Find rubric
+        tui.print('\n--- Rubric ---');
         const found = findSpreadsheets(labDir);
         let rubricName;
+
         if (found.length === 0) {
-            console.log('\n  No spreadsheet found. Please provide one to copy in.');
-            const r = await copyRubric(rl, labName);
-            rubricName = r.rubricName;
+            // Also search <codeRoot>/<labName>/
+            let codeRootCandidates = [];
+            try {
+                const localCfg = JSON.parse(fs.readFileSync(LOCAL_CONFIG_PATH, 'utf8'));
+                if (localCfg.codeRoot) {
+                    const codeLabDir = path.join(localCfg.codeRoot, labName);
+                    codeRootCandidates = findSpreadsheets(codeLabDir)
+                        .map(rel => path.join(localCfg.codeRoot, labName, rel));
+                }
+            } catch (_) {}
+
+            let sourceRubricPath = null;
+            if (codeRootCandidates.length === 1) {
+                const use = await tui.askBoolean(
+                    `Found ${path.basename(codeRootCandidates[0])} in ${labName}/ — use it?`, true);
+                if (use) sourceRubricPath = codeRootCandidates[0];
+            } else if (codeRootCandidates.length > 1) {
+                tui.print('\n  Spreadsheets found in codeRoot:');
+                const opts = [
+                    ...codeRootCandidates.map(p => ({ label: path.basename(p), value: p })),
+                    { label: 'None of these — enter path manually', value: null },
+                ];
+                sourceRubricPath = await tui.askOptions('Which to use?', opts);
+            }
+
+            if (sourceRubricPath) {
+                const rubricExt = path.extname(sourceRubricPath).toLowerCase();
+                rubricName = `CS233JS_${labName}_Rubric${rubricExt}`;
+            } else {
+                const r = await copyRubricTUI(tui, labName);
+                rubricName       = r.rubricName;
+                sourceRubricPath = r.rubricPath;
+            }
+
             const dest = path.join(labDir, rubricName);
-            fs.mkdirSync(path.dirname(dest), { recursive: true });
-            fs.copyFileSync(r.rubricPath, dest);
-            console.log(`  Copied to: ${dest}`);
+            fs.copyFileSync(sourceRubricPath, dest);
+            tui.print(`  Copied to: ${dest}`);
         } else if (found.length === 1) {
             rubricName = found[0];
-            console.log(`  Rubric: ${rubricName}`);
+            tui.print(`  Rubric: ${rubricName}`);
         } else {
-            rubricName = await askOptions(rl, '  Multiple spreadsheets — which to configure?',
-                found.map(f => ({ label: f, value: f })));
+            rubricName = await tui.askOptions(
+                'Multiple spreadsheets found — which to configure?',
+                found.map(f => ({ label: f, value: f }))
+            );
         }
         const rubricPath = path.join(labDir, rubricName);
 
-        // Load any existing config now — used for defaults, feature-id guard, and preservation.
+        // Load existing config (for defaults, feature-id guard, and preservation)
         let existingConfig = null;
         const configPath = path.join(labDir, `${labName.toLowerCase()}_config.json`);
-        try { existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (e) {}
+        try { existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
         const knownFeatureIds = new Set(
             (existingConfig?.analysis?.features || []).map(f => f.id).filter(Boolean)
         );
 
         // 4. Read rubric with column confirmation
-        console.log('\n--- Reading Rubric ---');
-        const rubricRows = await promptRubricRows(rl, rubricPath);
-        if (!rubricRows) { console.error('Could not read rubric. Exiting.'); process.exit(1); }
+        tui.print('\n--- Reading Rubric ---');
+        const rubricRows = await promptRubricRowsTUI(tui, rubricPath);
+        if (!rubricRows) { tui.print('Could not read rubric. Exiting.'); tui.exit(1); }
         const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
-        console.log(`  ${scoringRows.length} scoring rows, ${rubricRows.length - scoringRows.length} section headers.`);
+        tui.print(`  ${scoringRows.length} scoring rows, ${rubricRows.length - scoringRows.length} section headers.`);
 
-        // Read Criteria descriptions from the Rubric sheet (reference context for the LLM).
-        const criteria = readRubricCriteria(rubricPath);
-        if (criteria.length) console.log(`  Found ${criteria.length} criteria descriptions on the Rubric sheet.`);
+        // 5. Criteria for LLM context
+        const criteria = await promptRubricCriteriaTUI(tui, rubricPath);
 
-        // 5. Generate draft
-        console.log('\n--- Generating Draft ---');
-        let draft = await generateDraft(llm, labName, rubricRows, criteria, knownFeatureIds);
+        // 6. Generate draft
+        tui.print('\n--- Generating Draft ---');
+        let draft = await generateDraft(tui, llm, labName, rubricRows, criteria, knownFeatureIds);
 
-        // 6. Review + edit
-        console.log('\n--- Review Draft ---');
-        draft = await reviewDraft(rl, draft, rubricRows);
+        // 7. Review + edit (curses table)
+        tui.print('\n--- Review Draft (use arrow keys to navigate, Enter to edit, a to accept) ---');
+        draft = await reviewDraft(tui, draft, rubricRows);
 
-        // 7. Global config questions (defaults pre-filled from any existing config)
-        console.log('\n--- Assignment Settings ---');
-        const ex = existingConfig || {};
-        const titleText    = await ask(rl, defPrompt('Assignment title', ex.titleText)) || ex.titleText || '';
+        // 8. Global config questions
+        tui.print('\n--- Assignment Settings ---');
+        const ex           = existingConfig || {};
+        const titleText    = await tui.ask('Assignment title', ex.titleText || '');
         const runtimeOpts  = [
-            { label: 'browser', value: 'browser', desc: 'Puppeteer' },
+            { label: 'browser', value: 'browser', desc: 'Puppeteer headless browser' },
             { label: 'build',   value: 'build',   desc: 'npm install + npm run build' },
             { label: 'both',    value: 'both',     desc: 'Browser + build' },
         ];
-        const rtIdx = Math.max(0, runtimeOpts.findIndex(o => o.value === ex.runtimeCheck));
-        const runtimeCheck = await askOptions(rl, 'Runtime check mode:', runtimeOpts, rtIdx);
-        const summaryCell = await ask(rl, defPrompt('Summary cell (e.g. A2)', ex.summaryCell)) || ex.summaryCell || '';
-        const graderCell  = await ask(rl, defPrompt('Grader cell (e.g. E1)',  ex.graderCell))  || ex.graderCell  || '';
-        const titleCell   = await ask(rl, defPrompt('Title cell (e.g. A1)',   ex.titleCell))   || ex.titleCell   || '';
+        const rtIdx       = Math.max(0, runtimeOpts.findIndex(o => o.value === ex.runtimeCheck));
+        const runtimeCheck = await tui.askOptions('Runtime check mode', runtimeOpts, rtIdx);
+        const summaryCell  = await tui.ask('Summary cell (e.g. A2, or blank)', ex.summaryCell || '');
+        const graderCell   = await tui.ask('Grader cell (e.g. E1, or blank)',  ex.graderCell  || '');
+        const titleCell    = await tui.ask('Title cell (e.g. A1, or blank)',   ex.titleCell   || '');
 
-        // 8. Build and write
-        // Drop skipped rows and the _label display field before saving.
+        // 9. Build and write
         const mappings = draft
             .filter(e => !e._skip)
-            .map(({ _label, _skip, ...rest }) => rest);
+            .map(({ _label, _skip, ...rest }) => rest);  // eslint-disable-line no-unused-vars
 
         const config = buildConfig(labName, {
             rubricName,
@@ -450,17 +621,23 @@ async function main() {
             },
         });
 
-        console.log('\n--- Writing Config ---');
+        tui.print('\n--- Writing Config ---');
         writeLab(labDir, config, null, null);
 
-        console.log('\n=== Done! ===');
-        console.log(`  ${mappings.length} mappings configured.`);
-        console.log(`  To verify: node bin/rubric_to_md.js ${JSON.stringify(rubricPath)}`);
-        console.log();
+        // Collect the summary so it can be printed to the normal terminal after destroy()
+        summary = [
+            `\n=== Done! ===`,
+            `  ${mappings.length} mappings configured.`,
+            `  Config: ${configPath}`,
+            `  To verify: node bin/rubric_to_md.js ${JSON.stringify(rubricPath)}`,
+        ];
 
     } finally {
-        rl.close();
+        tui.destroy();
     }
+
+    // Print to normal terminal after the alt-screen is gone
+    if (summary) summary.forEach(line => process.stdout.write(line + '\n'));
 }
 
 module.exports = {
@@ -471,7 +648,7 @@ module.exports = {
 
 if (require.main === module) {
     main().catch(err => {
-        console.error('Fatal error:', err);
+        process.stderr.write(`Fatal error: ${err.stack || err.message}\n`);
         process.exit(1);
     });
 }

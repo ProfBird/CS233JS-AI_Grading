@@ -161,17 +161,33 @@ registerHandler('deploy_check', async (map, student) => {
             const response = await fetch(url, { signal: controller.signal });
             clearTimeout(timeout);
             if (!response.ok) {
-                return { score: 0, comment: `URL unreachable (HTTP ${response.status})` };
+                // HTTP error response (wrong path, or a transient 5xx). Could be student-side
+                // or temporary — surface the real status and flag for manual verification
+                // rather than masking it behind the stock "zero" comment.
+                return {
+                    score: 0,
+                    comment: `NEEDS MANUAL CHECK: server returned HTTP ${response.status} — verify deployment manually`,
+                    keepComment: true,
+                };
             }
             html = await response.text();
             break;
         } catch (err) {
-            lastReason = err.name === 'AbortError' ? 'timeout' : err.message;
+            lastReason = err.name === 'AbortError' ? 'timeout' : (err.code || err.message);
             if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
         }
     }
     if (html === undefined) {
-        return { score: 0, comment: `URL unreachable after 3 attempts (${lastReason})` };
+        // A thrown fetch (DNS / connection / TLS / timeout) means the grader could not reach
+        // the URL — this is NOT proof the student failed to deploy. A transient grader-side
+        // network blip produces the identical result, so a confident 0 + stock "No" here would
+        // silently zero a student whose app is actually live. Flag for manual review and keep
+        // the real reason visible.
+        return {
+            score: 0,
+            comment: `NEEDS MANUAL CHECK: could not connect after 3 attempts (${lastReason}) — verify deployment manually`,
+            keepComment: true,
+        };
     }
 
     // 2. Check <script> tags for bundling indicators
@@ -271,9 +287,9 @@ registerHandler('name_check', (map, student) => {
     if (errors === 0) {
         return { score: map.maxScore, comment: 'All file/folder names are valid' };
     } else if (errors <= tolerance) {
-        return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${errors} invalid name${errors !== 1 ? 's' : ''}: ${offenders}` };
+        return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${errors} invalid name${errors !== 1 ? 's' : ''}: ${offenders}`, keepComment: true };
     }
-    return { score: 0, comment: `${errors} invalid names: ${offenders}` };
+    return { score: 0, comment: `${errors} invalid names: ${offenders}`, keepComment: true };
 });
 
 registerHandler('build_check', (map, student) => {
@@ -338,6 +354,34 @@ registerHandler('browser_check', (map, student) => {
     // "browser" mode fallback (no separate build step).
     if (rt.success) {
         return { score: map.maxScore, comment: 'No console errors' };
+    }
+    const errors = rt.errors || [];
+    return { score: 0, comment: errors.length ? errors.join('; ') : 'Check failed' };
+});
+
+// build_and_browser_check: both Vite build and Puppeteer console errors checked together.
+// Full score if both pass; half (rounded down) if exactly one fails; 0 if both fail.
+registerHandler('build_and_browser_check', (map, student) => {
+    const rt = student.runtimeCheck || {};
+    const half = Math.floor(map.maxScore / 2);
+
+    // "both" runtime mode — separate sub-results available.
+    if (rt.buildSuccess !== undefined && rt.browserSuccess !== undefined) {
+        const buildOk   = rt.buildSuccess;
+        const browserOk = rt.browserSuccess;
+        if (buildOk && browserOk) {
+            return { score: map.maxScore, comment: 'Build successful; no console errors' };
+        }
+        const buildMsg   = buildOk   ? null : ((rt.buildErrors || []).join('; ') || 'Build failed');
+        const browserMsg = browserOk ? null : ((rt.browserErrors || []).join('; ') || 'Console errors detected');
+        const parts = [buildMsg, browserMsg].filter(Boolean);
+        const bothFailed = !buildOk && !browserOk;
+        return { score: bothFailed ? 0 : half, comment: parts.join(' | ') };
+    }
+
+    // Fallback for "build" or "browser" single-mode runtime — treat as one unified check.
+    if (rt.success) {
+        return { score: map.maxScore, comment: 'No errors' };
     }
     const errors = rt.errors || [];
     return { score: 0, comment: errors.length ? errors.join('; ') : 'Check failed' };
@@ -441,6 +485,7 @@ function mappingDescription(map) {
     switch (map.type) {
         case 'build_check': return 'App builds without errors';
         case 'browser_check': return 'No run-time console errors';
+        case 'build_and_browser_check': return 'No build or console errors';
         case 'lint': return 'Style and best practices';
         case 'html_validate': return 'HTML is valid';
         case 'css_validate': return 'CSS is valid';
@@ -519,12 +564,13 @@ async function computeResults(student, config) {
 
     for (const map of config.mappings) {
         const handler = getHandler(map.type);
-        let score, comment;
+        let score, comment, keepComment = false;
 
         if (handler) {
             const result = await handler(map, student);
             score = result.score;
             comment = result.comment;
+            keepComment = result.keepComment === true;
         } else {
             score = 0;
             comment = `ERROR: Unknown mapping type "${map.type}"`;
@@ -532,9 +578,11 @@ async function computeResults(student, config) {
 
         // Grader-authored stock comments override the generic message at the matching
         // score tier. Manual rows are exempt — they keep their "needs manual grading"
-        // flag so a human still grades them.
+        // flag so a human still grades them. A handler may also set keepComment to protect
+        // a diagnostic (e.g. deploy_check's "could not connect — verify manually") that must
+        // not be masked by the stock tier text.
         const stock = stockCommentFor(map, num(score));
-        if (stock !== null) comment = stock;
+        if (stock !== null && !keepComment) comment = stock;
 
         results.push({
             desc: mappingDescription(map),

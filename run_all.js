@@ -544,9 +544,10 @@ async function main() {
         const alreadyDone = [];
         toGrade = students.filter(s => {
             if (!s.gradeDir) return true;
+            const dirName  = path.basename(s.gradeDir);
             const gradePath = path.join(s.gradeDir, textReport
-                ? `${s.name}_Grade.txt`
-                : `${s.name}_Grade${outputExt}`);
+                ? `${dirName}_Grade.txt`
+                : `${dirName}_Grade${outputExt}`);
             if (fs.existsSync(gradePath)) { alreadyDone.push(s.name); return false; }
             return true;
         });

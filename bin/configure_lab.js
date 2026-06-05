@@ -5,22 +5,25 @@
 
 const fs   = require('fs');
 const path = require('path');
-const XLSX = require('xlsx');
 
 const {
-    normalizeAssignmentName, colLetter, colLetterToIndex,
-    findSpreadsheets, sheetRows, readRubricRows, readRubricCriteria, detectRubricLayout,
-    buildConfig, writeLab, getExistingAssignments,
+    normalizeAssignmentName, colLetter,
+    findSpreadsheets, readRubricCriteria,
+    getExistingAssignments,
+    buildConfig, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
-} = require('./create_lab.js');
+} = require('../lib/lab_config.js');
 
-const { loadLLMClient, setupLLMInteractive } = require('../lib/llm_client.js');
+const { promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry } =
+    require('../lib/config_prompts.js');
+
+const { selectModel } = require('../lib/llm_client.js');
 const { TUI } = require('../lib/tui.js');
 
 const CONFIGS_DIR       = path.join(__dirname, '..', 'configs');
 const LOCAL_CONFIG_PATH = path.join(CONFIGS_DIR, 'local-config.json');
 
-// ── Helpers passed to setupLLMInteractive ────────────────────────────────
+// ── Helpers passed to selectModel ────────────────────────────────────────
 
 function makeHelpers(tui) {
     return {
@@ -87,7 +90,7 @@ Type selection rules:
   "lint" is ONLY for ESLint static analysis (code style/syntax) — never for build or runtime errors.
   "build_check" for Vite/webpack/npm-run-build failures or build errors only.
   "browser_check" for Puppeteer browser console errors or runtime errors only.
-  "build_and_browser_check" when criteria mention BOTH build errors AND console/browser errors (e.g. "No Vite build errors or browser console errors") — half credit if only one check fails.
+  "build_and_browser_check" when criteria mention BOTH build errors AND console/browser errors — half credit if only one check fails.
   "developer_comments" for developer name, date, or code comments present in files.
 
 Type-specific extra fields:
@@ -259,128 +262,6 @@ function printDraftTable(draft) {
     console.log();
 }
 
-// ── TUI-specific rubric reading ───────────────────────────────────────────
-
-async function promptRubricRowsTUI(tui, rubricPath) {
-    let wb;
-    try { wb = XLSX.readFile(rubricPath); } catch (e) {
-        tui.print(`  Could not read rubric file: ${e.message}`);
-        return null;
-    }
-    const ws = wb?.Sheets['Grade'];
-    if (!ws) { tui.print('  No "Grade" sheet found in the rubric.'); return null; }
-    const rows = sheetRows(ws);
-
-    let layout = detectRubricLayout(rows);
-    if (!layout) {
-        const alt = await tui.ask(
-            'Max-points column header not found (tried: possible, points, pts, max). Enter exact header text or leave blank to skip'
-        );
-        if (!alt) return null;
-        const altRe = new RegExp(`^${alt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
-        layout = detectRubricLayout(rows, altRe);
-        if (!layout) { tui.print(`  Could not find "${alt}". Skipping mappings.`); return null; }
-    }
-
-    tui.print(`  Detected columns in Grade sheet (header row ${layout.headerRow + 1}):`);
-    tui.print(`    Max points : ${colLetter(layout.possibleCol)}`);
-    tui.print(`    Score      : ${colLetter(layout.scoreCol)}`);
-    tui.print(`    Comments   : ${colLetter(layout.commentCol)}`);
-    if (layout.fullCol >= 0) {
-        tui.print(`    Stock (100%/<100%/0%): ${colLetter(layout.fullCol)}/${colLetter(layout.partialCol)}/${colLetter(layout.zeroCol)}`);
-    }
-
-    const ok = await tui.askBoolean('Are these columns correct?', true);
-    if (!ok) {
-        const p = await tui.ask('Max-points column letter', colLetter(layout.possibleCol));
-        const s = await tui.ask('Score/grade column letter', colLetter(layout.scoreCol));
-        const c = await tui.ask('Comments column letter', colLetter(layout.commentCol));
-        if (p) layout.possibleCol = colLetterToIndex(p);
-        if (s) layout.scoreCol    = colLetterToIndex(s);
-        if (c) layout.commentCol  = colLetterToIndex(c);
-    }
-
-    return readRubricRows(rubricPath, layout);
-}
-
-async function promptRubricCriteriaTUI(tui, rubricPath) {
-    tui.print('\n--- Rubric Criteria Sheet ---');
-    const criteria = readRubricCriteria(rubricPath);
-    if (criteria.length === 0) {
-        tui.print('  No "Rubric" sheet or no Criteria column found — skipping criteria descriptions.');
-    } else {
-        tui.print(`  Found ${criteria.length} criteria descriptions (used as AI context).`);
-    }
-    return criteria;
-}
-
-// ── Copy rubric (TUI version) ─────────────────────────────────────────────
-
-async function copyRubricTUI(tui, labName) {
-    tui.print('\n--- Rubric Spreadsheet ---');
-    tui.print('  Provide a path to the .xlsx or .xlsm rubric file.');
-
-    let rubricPath;
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const raw = await tui.ask('Path to rubric file');
-        const candidate = raw.replace(/^["']|["']$/g, '').trim();
-        if (!candidate) continue;
-        if (!fs.existsSync(candidate)) { tui.print(`  File not found: ${candidate}`); continue; }
-        if (!fs.statSync(candidate).isFile()) { tui.print('  That is a directory — provide the full file path.'); continue; }
-        rubricPath = candidate;
-        break;
-    }
-    if (!rubricPath) { tui.print('  No rubric provided after 3 attempts. Aborting.'); tui.exit(1); }
-
-    const ext = path.extname(rubricPath).toLowerCase();
-    const suggestedName = `CS233JS_${labName}_Rubric${ext}`;
-    const nameInput = await tui.ask('Rubric filename', suggestedName);
-    const rubricName = path.basename(nameInput || suggestedName);
-
-    return { rubricPath, rubricName, ext };
-}
-
-// ── Mapping entry builder (TUI version of promptFields / buildMappingEntry) ──
-
-async function promptFieldsTUI(tui, fields, currentValues = {}) {
-    const result = {};
-    for (const f of fields) {
-        const cur = currentValues[f.key];
-        if (f.type === 'int') {
-            const def = cur ?? f.default ?? 0;
-            // Strip existing [n] placeholder from the prompt text
-            const label = f.prompt.replace(/\s*\[.*?\]/, '').replace(/:\s*$/, '').trim();
-            result[f.key] = await tui.askInt(label, def);
-        } else if (f.type === 'options') {
-            const defIdx = cur !== undefined
-                ? Math.max(0, f.options.findIndex(o => o.value === cur))
-                : 0;
-            const label = f.prompt.replace(/:\s*$/, '').trim();
-            result[f.key] = await tui.askOptions(label, f.options, defIdx);
-        } else {
-            const def = cur ?? f.default ?? '';
-            const label = f.prompt.replace(/:\s*$/, '').trim();
-            const raw = await tui.ask(label, def);
-            if (f.required && !raw && !def) {
-                tui.print('  Required field empty — skipping this entry.');
-                return null;
-            }
-            if (f.optional && !raw && !def) continue;
-            result[f.key] = raw || def;
-        }
-    }
-    return result;
-}
-
-async function buildMappingEntryTUI(tui, type, rubricRow, currentValues = {}) {
-    const schema = MAPPING_TYPE_SCHEMA[type] ?? GENERIC_MAPPING_SCHEMA;
-    const fields = await promptFieldsTUI(tui, schema.fields, currentValues);
-    if (fields === null) return null;
-    const m = { type, cell: rubricRow.scoreCell, ...(schema.fixed ?? {}), ...fields };
-    if (rubricRow.commentCell) m.commentCell = rubricRow.commentCell;
-    return m;
-}
-
 // ── Edit a single row in the review table ────────────────────────────────
 
 async function editRowTUI(idx, draft, scoringRows, tui) {
@@ -402,7 +283,7 @@ async function editRowTUI(idx, draft, scoringRows, tui) {
         return true;
     }
 
-    const newEntry = await buildMappingEntryTUI(tui, newType, rr, current);
+    const newEntry = await buildMappingEntry(tui, newType, rr, current);
     if (newEntry) {
         draft[idx] = { ...newEntry, _label: rr.label };
         if (rr.stockComments) draft[idx].stockComments = rr.stockComments;
@@ -450,18 +331,11 @@ async function main() {
         tui.print('\nWelcome! This wizard reads a rubric spreadsheet, uses AI to draft a');
         tui.print('mapping configuration, then lets you review and edit before saving.\n');
 
-        // 1. LLM setup
-        let llm = loadLLMClient(LOCAL_CONFIG_PATH);
-        if (llm) {
-            tui.print(`  LLM: ${llm.provider}  model: ${llm.model || '(auto)'}\n`);
-        } else {
-            tui.print('  No LLM configured yet.');
-            const setup = await tui.askBoolean('Set one up now?', true);
-            if (setup) llm = await setupLLMInteractive(LOCAL_CONFIG_PATH, makeHelpers(tui));
-            if (!llm) tui.print('  Proceeding with heuristic mapping (no AI).\n');
-        }
+        // 1. LLM model selection — always shown, pre-selects current model
+        const llm = await selectModel(LOCAL_CONFIG_PATH, makeHelpers(tui));
+        if (!llm) tui.print('  Proceeding with heuristic mapping (no AI).\n');
 
-        // 2. Assignment name
+        // 2. Assignment name — selection menu or CLI arg
         let labName = '';
         const rawArg = process.argv[2];
         if (rawArg) {
@@ -470,17 +344,17 @@ async function main() {
                 tui.print(`Invalid assignment name: ${rawArg}. Use a number (07), a lab name (Lab07), or a slug (TermProject).`);
                 tui.exit(1);
             }
-            tui.print(`\n--- Assignment Name ---`);
-            tui.print(`  Assignment: ${labName}`);
+            tui.print(`\n--- Assignment: ${labName} ---`);
         } else {
             const existing = getExistingAssignments();
             const options = [
                 ...existing.map(a => ({
-                    label: a.name,
-                    value: a.name,
-                    desc: a.hasConfig ? 'has config' : 'no config yet',
+                    label:  a.name,
+                    value:  a.name,
+                    status: a.hasConfig ? 'has config' : 'no config yet',
                 })),
-                { label: 'Add new assignment', value: '__new__', desc: 'Create a brand-new assignment configuration' },
+                { label: 'Add new assignment', value: '__new__',
+                  color: 'green', desc: 'Create a brand-new assignment configuration' },
             ];
             const choice = await tui.askOptions('Select an assignment to configure', options, 0);
             if (choice === '__new__') {
@@ -507,7 +381,6 @@ async function main() {
         let rubricName;
 
         if (found.length === 0) {
-            // Also search <codeRoot>/<labName>/
             let codeRootCandidates = [];
             try {
                 const localCfg = JSON.parse(fs.readFileSync(LOCAL_CONFIG_PATH, 'utf8'));
@@ -536,7 +409,7 @@ async function main() {
                 const rubricExt = path.extname(sourceRubricPath).toLowerCase();
                 rubricName = `CS233JS_${labName}_Rubric${rubricExt}`;
             } else {
-                const r = await copyRubricTUI(tui, labName);
+                const r = await copyRubric(tui, labName);
                 rubricName       = r.rubricName;
                 sourceRubricPath = r.rubricPath;
             }
@@ -565,32 +438,33 @@ async function main() {
 
         // 4. Read rubric with column confirmation
         tui.print('\n--- Reading Rubric ---');
-        const rubricRows = await promptRubricRowsTUI(tui, rubricPath);
+        const rubricRows = await promptRubricRows(tui, rubricPath);
         if (!rubricRows) { tui.print('Could not read rubric. Exiting.'); tui.exit(1); }
         const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
         tui.print(`  ${scoringRows.length} scoring rows, ${rubricRows.length - scoringRows.length} section headers.`);
 
         // 5. Criteria for LLM context
-        const criteria = await promptRubricCriteriaTUI(tui, rubricPath);
+        tui.print('\n--- Rubric Criteria Sheet ---');
+        const criteria = await promptRubricCriteria(tui, rubricPath);
 
         // 6. Generate draft
         tui.print('\n--- Generating Draft ---');
         let draft = await generateDraft(tui, llm, labName, rubricRows, criteria, knownFeatureIds);
 
-        // 7. Review + edit (curses table)
+        // 7. Review + edit
         tui.print('\n--- Review Draft (use arrow keys to navigate, Enter to edit, a to accept) ---');
         draft = await reviewDraft(tui, draft, rubricRows);
 
         // 8. Global config questions
         tui.print('\n--- Assignment Settings ---');
         const ex           = existingConfig || {};
-        const titleText    = await tui.ask('Assignment title', ex.titleText || '');
+        const titleText    = await tui.ask('Assignment title', ex.titleText || labName);
         const runtimeOpts  = [
             { label: 'browser', value: 'browser', desc: 'Puppeteer headless browser' },
             { label: 'build',   value: 'build',   desc: 'npm install + npm run build' },
             { label: 'both',    value: 'both',     desc: 'Browser + build' },
         ];
-        const rtIdx       = Math.max(0, runtimeOpts.findIndex(o => o.value === ex.runtimeCheck));
+        const rtIdx        = Math.max(0, runtimeOpts.findIndex(o => o.value === ex.runtimeCheck));
         const runtimeCheck = await tui.askOptions('Runtime check mode', runtimeOpts, rtIdx);
         const summaryCell  = await tui.ask('Summary cell (e.g. A2, or blank)', ex.summaryCell || '');
         const graderCell   = await tui.ask('Grader cell (e.g. E1, or blank)',  ex.graderCell  || '');
@@ -614,17 +488,16 @@ async function main() {
                 titleCell,
                 summaryCell,
                 graderCell,
-                codeReview:   existingConfig?.codeReview          || null,
-                lintExclude:  existingConfig?.lint?.exclude        || null,
-                packageCheck: existingConfig?.packageCheck         || null,
-                repoHygiene:  existingConfig?.repoHygiene          || null,
+                codeReview:   existingConfig?.codeReview         || null,
+                lintExclude:  existingConfig?.lint?.exclude       || null,
+                packageCheck: existingConfig?.packageCheck        || null,
+                repoHygiene:  existingConfig?.repoHygiene         || null,
             },
         });
 
         tui.print('\n--- Writing Config ---');
         writeLab(labDir, config, null, null);
 
-        // Collect the summary so it can be printed to the normal terminal after destroy()
         summary = [
             `\n=== Done! ===`,
             `  ${mappings.length} mappings configured.`,
@@ -636,7 +509,6 @@ async function main() {
         tui.destroy();
     }
 
-    // Print to normal terminal after the alt-screen is gone
     if (summary) summary.forEach(line => process.stdout.write(line + '\n'));
 }
 

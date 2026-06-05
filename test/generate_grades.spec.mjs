@@ -135,14 +135,14 @@ describe('computeResults — stock comment override', () => {
         expect(r.comment).toContain('CHECK ME');  // not 'Good'/'Missing'
     });
 
-    it('fires the partial-tier stock comment for an html_validate row', async () => {
+    it('keeps the real html_validate error detail instead of partial stock comment', async () => {
         const cfg = { mappings: [
             { type: 'html_validate', cell: 'D7', commentCell: 'F7', maxScore: 6, tolerance: 3, stockComments: sc },
         ] };
         const student = { htmlValidation: { htmlFiles: 1, errors: 2, messages: ['x: 2'] } };
         const [r] = await computeResults(student, cfg);
-        expect(r.score).toBe(3);                   // half of 6
-        expect(r.comment).toBe('Errors');          // partial-tier stock comment
+        expect(r.score).toBe(3);                            // half of 6
+        expect(r.comment).toBe('2 HTML errors (x: 2)');    // keepComment: true — stock not applied
     });
 
     it('keeps the real name_check failure description instead of stock comment', async () => {
@@ -798,6 +798,73 @@ function makeXlsx(dir, filename, cellRef, value) {
     XLSX.writeFile(wb, p);
     return p;
 }
+
+describe('scripts_check handler', () => {
+    const handler = getHandler('scripts_check');
+    const map = { maxScore: 3, scripts: 'dev,build,test' };
+
+    it('returns maxScore when all scripts pass', () => {
+        const student = { scriptsCheck: { scripts: {
+            dev:   { defined: true, ran: false, passed: true, error: null },
+            build: { defined: true, ran: true,  passed: true, error: null },
+            test:  { defined: true, ran: true,  passed: true, error: null },
+        }}};
+        expect(handler(map, student)).toEqual({ score: 3, comment: 'All pass: dev, build, test' });
+    });
+
+    it('scores proportionally when some scripts fail', () => {
+        const student = { scriptsCheck: { scripts: {
+            dev:   { defined: true,  ran: false, passed: true,  error: null },
+            build: { defined: true,  ran: true,  passed: true,  error: null },
+            test:  { defined: true,  ran: true,  passed: false, error: 'AssertionError: expected 1 to equal 2' },
+        }}};
+        const result = handler(map, student);
+        expect(result.score).toBe(2);
+        expect(result.comment).toContain('pass: dev, build');
+        expect(result.comment).toContain('fail: test');
+        expect(result.keepComment).toBe(true);
+    });
+
+    it('marks script as not defined when missing from package.json', () => {
+        const student = { scriptsCheck: { scripts: {
+            dev:   { defined: false, ran: false, passed: false, error: '"dev" not in package.json scripts' },
+            build: { defined: true,  ran: true,  passed: true,  error: null },
+            test:  { defined: true,  ran: true,  passed: true,  error: null },
+        }}};
+        const result = handler(map, student);
+        expect(result.score).toBe(2);
+        expect(result.comment).toContain('dev (not defined)');
+        expect(result.keepComment).toBe(true);
+    });
+
+    it('scores 0 and sets keepComment when scriptsCheck has a top-level error', () => {
+        const student = { scriptsCheck: { error: 'No package.json found' } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'No package.json found', keepComment: true });
+    });
+
+    it('scores 0 and sets keepComment when scriptsCheck is absent', () => {
+        const student = {};
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'NEEDS MANUAL CHECK (no scripts check data)', keepComment: true });
+    });
+
+    it('defaults to dev,build,test when map.scripts is not specified', () => {
+        const student = { scriptsCheck: { scripts: {
+            dev:   { defined: true, ran: false, passed: true, error: null },
+            build: { defined: true, ran: true,  passed: true, error: null },
+            test:  { defined: true, ran: true,  passed: true, error: null },
+        }}};
+        expect(handler({ maxScore: 3 }, student)).toEqual({ score: 3, comment: 'All pass: dev, build, test' });
+    });
+
+    it('accepts array form for map.scripts', () => {
+        const student = { scriptsCheck: { scripts: {
+            build: { defined: true, ran: true, passed: true, error: null },
+            test:  { defined: true, ran: true, passed: true, error: null },
+        }}};
+        expect(handler({ maxScore: 2, scripts: ['build', 'test'] }, student))
+            .toEqual({ score: 2, comment: 'All pass: build, test' });
+    });
+});
 
 describe('resolveOutputPath', () => {
     let tmpDir;

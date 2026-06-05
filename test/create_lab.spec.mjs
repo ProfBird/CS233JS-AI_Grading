@@ -10,10 +10,13 @@ import { tmpdir } from 'os';
 
 const {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
-    readRubricRows, readRubricCriteria, buildConfig, buildMappingEntry,
+    readRubricRows, readRubricCriteria, buildConfig, writeLab,
+    findSpreadsheets, keywordsToFolderPattern, guessMappingType,
+} = await import('../lib/lab_config.js');
+
+const {
     askBoolean, askOptions, ask, askInt,
-    promptFeatures, copyRubric, writeLab, findSpreadsheets, keywordsToFolderPattern,
-    promptRubricRows, guessMappingType,
+    buildMappingEntry, promptFeatures, copyRubric, promptRubricRows,
 } = await import('../bin/create_lab.js');
 
 const {
@@ -1083,7 +1086,10 @@ describe('keywordsToFolderPattern', () => {
 describe('guessMappingType', () => {
     it('guesses manual for generic labels', () => {
         expect(guessMappingType('Professional looking')).toBe('manual');
-        expect(guessMappingType('Collaborators added')).toBe('manual');
+    });
+
+    it('guesses collaborator_check for collaborator rows', () => {
+        expect(guessMappingType('Collaborators added')).toBe('collaborator_check');
     });
 
     it('guesses lint for style/lint rows', () => {
@@ -1119,8 +1125,11 @@ describe('guessMappingType', () => {
         expect(guessMappingType('github repo link')).toBe('github_repo');
     });
 
-    it('guesses repo_hygiene for gitignore / hygiene rows', () => {
-        expect(guessMappingType('.gitignore file')).toBe('repo_hygiene');
+    it('guesses gitignore_check for .gitignore rows', () => {
+        expect(guessMappingType('.gitignore file')).toBe('gitignore_check');
+    });
+
+    it('guesses repo_hygiene for repo hygiene rows', () => {
         expect(guessMappingType('repo hygiene check')).toBe('repo_hygiene');
     });
 

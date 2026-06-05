@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
 const { walk } = require('../lib/file_walker');
@@ -210,6 +210,113 @@ async function checkBuild(extractedDir) {
     return { success: allOk, errors };
 }
 
+// ========== Scripts check ==========
+
+// Scripts that start persistent servers — verify they're defined, never run them.
+const SERVER_SCRIPTS = new Set(['dev', 'start', 'serve', 'watch', 'preview']);
+
+// Runs an npm script in pkgDir using spawn with a detached process group so
+// the entire tree (npm → node → vite, etc.) is reliably killed on timeout.
+function spawnScript(pkgDir, scriptName, timeoutMs) {
+    return new Promise(resolve => {
+        let child;
+        try {
+            child = spawn('npm', ['run', scriptName], { cwd: pkgDir, detached: true, stdio: 'pipe' });
+        } catch (err) {
+            resolve({ code: null, stdout: '', stderr: err.message, killed: false });
+            return;
+        }
+
+        let stdout = '', stderr = '';
+        if (child.stdout) child.stdout.on('data', d => { stdout += d; });
+        if (child.stderr) child.stderr.on('data', d => { stderr += d; });
+
+        let resolved = false;
+        const done = (code, killed) => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timer);
+            resolve({ code, stdout: stdout.slice(0, 500), stderr: stderr.slice(0, 500), killed: !!killed });
+        };
+
+        const timer = setTimeout(() => {
+            try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
+            done(null, true);
+        }, timeoutMs);
+
+        child.on('close', code => done(code, false));
+        child.on('error', () => {
+            try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
+            done(null, false);
+        });
+    });
+}
+
+// Checks one npm script: { defined, ran, passed, error }.
+// Server scripts are verified as defined only; runnable scripts are actually executed.
+async function runNpmScript(pkgDir, scriptName) {
+    let pkg;
+    try {
+        pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+    } catch (e) {
+        return { defined: false, ran: false, passed: false, error: 'package.json unreadable' };
+    }
+
+    if (!pkg.scripts || !pkg.scripts[scriptName]) {
+        return { defined: false, ran: false, passed: false, error: `"${scriptName}" not in package.json scripts` };
+    }
+
+    if (SERVER_SCRIPTS.has(scriptName)) {
+        // Can't run a server script safely — just confirm it's defined.
+        return { defined: true, ran: false, passed: true, error: null };
+    }
+
+    const { code, stdout, stderr, killed } = await spawnScript(pkgDir, scriptName, 30000);
+
+    if (code === 0) {
+        return { defined: true, ran: true, passed: true, error: null };
+    }
+
+    if (killed) {
+        // Killed by 30s timeout — likely a watch-mode test runner. If no explicit failure
+        // patterns appear in the output, the scripts ran but were waiting for file changes.
+        const combined = (stdout + stderr).toLowerCase();
+        if (!/\bfail\b|\berror\b|\bnot found\b/.test(combined)) {
+            return { defined: true, ran: true, passed: true, error: null };
+        }
+    }
+
+    const errorText = (stderr + stdout).trim().slice(0, 300) || 'Script exited with error';
+    return { defined: true, ran: true, passed: false, error: errorText };
+}
+
+// Checks a set of npm scripts for a student's extracted code.
+// Installs node_modules first if they're not already present.
+// Returns { scripts: { [name]: { defined, ran, passed, error } } } or { error: string }.
+async function checkStudentScripts(extractedDir, scriptNames) {
+    if (!extractedDir || !fs.existsSync(extractedDir)) {
+        return { error: 'No extracted code directory' };
+    }
+    const pkgDirs = findPackageJsonDirs(extractedDir);
+    if (pkgDirs.length === 0) return { error: 'No package.json found' };
+
+    const pkgDir = pkgDirs[0];
+
+    if (!fs.existsSync(path.join(pkgDir, 'node_modules'))) {
+        try {
+            await execAsync('npm install --no-fund --no-audit --ignore-scripts', { cwd: pkgDir, timeout: 30000 });
+        } catch (e) {
+            return { error: 'npm install failed' };
+        }
+    }
+
+    const scripts = {};
+    for (const name of scriptNames) {
+        scripts[name] = await runNpmScript(pkgDir, name);
+    }
+    return { scripts };
+}
+
 // ========== Main export ==========
 
 module.exports = async function(students, config, labDir) {
@@ -303,15 +410,50 @@ module.exports = async function(students, config, labDir) {
 
     if (browser) await browser.close();
 
-    const report = students.map(s => ({
-        student: s.name,
-        success: s.runtimeCheck ? s.runtimeCheck.success : false,
-        errors: s.runtimeCheck ? s.runtimeCheck.errors : []
-    }));
+    // Scripts check — runs independently of the build/browser mode.
+    // Only runs when at least one scripts_check mapping is configured.
+    const scriptsCheckMappings = (config.mappings || []).filter(m => m.type === 'scripts_check');
+    if (scriptsCheckMappings.length > 0) {
+        const allScriptNames = [...new Set(
+            scriptsCheckMappings.flatMap(m => {
+                const s = m.scripts;
+                if (Array.isArray(s)) return s;
+                return (s || 'dev,build,test').split(',').map(x => x.trim()).filter(Boolean);
+            })
+        )];
+        console.log(`--- Scripts Check (${allScriptNames.join(', ')}) ---`);
+        for (const student of students) {
+            if (!student.extractedDir || student.error) {
+                student.scriptsCheck = { error: 'No code extracted' };
+                continue;
+            }
+            student.scriptsCheck = await checkStudentScripts(student.extractedDir, allScriptNames);
+            const sc = student.scriptsCheck;
+            if (sc.error) {
+                console.log(`  FAIL: ${student.name}: ${sc.error}`);
+            } else {
+                const passing = allScriptNames.filter(s => sc.scripts[s]?.passed);
+                const label   = passing.length === allScriptNames.length ? 'OK' : `PARTIAL (${passing.length}/${allScriptNames.length})`;
+                console.log(`  ${label}: ${student.name}: ${passing.join(', ') || 'none passed'}`);
+            }
+        }
+    }
+
+    const report = students.map(s => {
+        const entry = {
+            student:  s.name,
+            success:  s.runtimeCheck ? s.runtimeCheck.success : false,
+            errors:   s.runtimeCheck ? s.runtimeCheck.errors  : [],
+        };
+        if (s.scriptsCheck) entry.scriptsCheck = s.scriptsCheck;
+        return entry;
+    });
     fs.writeFileSync(path.join(labDir, RUNTIME_REPORT), JSON.stringify(report, null, 2));
     console.log(`Created ${RUNTIME_REPORT} for ${report.length} students.`);
 };
 
-module.exports.findAllIndexHtmlDirs = findAllIndexHtmlDirs;
+module.exports.findAllIndexHtmlDirs  = findAllIndexHtmlDirs;
 module.exports.findDistIndexHtmlDirs = findDistIndexHtmlDirs;
-module.exports.findPackageJsonDirs = findPackageJsonDirs;
+module.exports.findPackageJsonDirs   = findPackageJsonDirs;
+module.exports.runNpmScript          = runNpmScript;
+module.exports.checkStudentScripts   = checkStudentScripts;

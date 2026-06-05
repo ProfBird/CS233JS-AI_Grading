@@ -5,9 +5,22 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const XLSX = require('xlsx');
+
+const {
+    colLetter, excelCell, colLetterToIndex,
+    normalizeAssignmentName, sheetRows, isBlankRow, cellText,
+    POSSIBLE_HEADER_RE, detectRubricLayout,
+    readRubricRows, readRubricCriteria,
+    findSpreadsheets, getExistingAssignments, keywordsToFolderPattern,
+    MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA,
+    guessMappingType, buildConfig, writeLab,
+} = require('../lib/lab_config.js');
+
+const configPrompts = require('../lib/config_prompts.js');
 
 const CONFIGS_DIR = path.join(__dirname, '..', 'configs');
+
+// ── Readline driver ───────────────────────────────────────────────────────
 
 function createRL() {
     const rl = readline.createInterface({
@@ -20,37 +33,29 @@ function createRL() {
     let eof = false;
 
     rl.on('line', (line) => {
-        if (resolveWait) {
-            resolveWait(line);
-            resolveWait = null;
-        } else {
-            pending.push(line);
-        }
+        if (resolveWait) { resolveWait(line); resolveWait = null; }
+        else pending.push(line);
     });
 
     rl.on('close', () => {
         eof = true;
-        if (resolveWait) {
-            resolveWait(null);
-            resolveWait = null;
-        }
+        if (resolveWait) { resolveWait(null); resolveWait = null; }
     });
 
     rl._getLine = function (prompt) {
         return new Promise(resolve => {
             if (eof) { resolve(null); return; }
             process.stdout.write(prompt);
-            if (pending.length > 0) {
-                resolve(pending.shift());
-            } else {
-                resolveWait = resolve;
-            }
+            if (pending.length > 0) resolve(pending.shift());
+            else resolveWait = resolve;
         });
     };
 
     rl._close = () => rl.close();
     return rl;
 }
+
+// Standalone readline primitives (kept for direct wizard use and tests).
 
 async function ask(rl, question) {
     const raw = await rl._getLine(question);
@@ -94,454 +99,43 @@ async function askInt(rl, prompt, defaultVal = 0) {
     }
 }
 
-function colLetter(idx) {
-    let result = '';
-    let n = idx + 1;
-    while (n > 0) {
-        const rem = (n - 1) % 26;
-        result = String.fromCharCode(65 + rem) + result;
-        n = Math.floor((n - 1) / 26);
-    }
-    return result;
+// Wraps an rl instance into the driver interface expected by lib/config_prompts.js.
+function makeRLDriver(rl) {
+    return {
+        ask: async (prompt, def = '') => {
+            const formatted = def ? `${prompt} [${def}]: ` : `${prompt}: `;
+            const raw = await rl._getLine(formatted);
+            if (raw === null) throw new Error('Input stream ended unexpectedly');
+            return raw.trim() || def;
+        },
+        askBoolean: (question, def = false) => askBoolean(rl, question, def),
+        askInt: (prompt, def = 0) => askInt(rl, `${prompt} [${def}]: `, def),
+        askOptions: (prompt, opts, defIdx = 0) => askOptions(rl, prompt, opts, defIdx),
+        print: (line) => console.log(line),
+        exit: (code = 0) => process.exit(code),
+    };
 }
 
-function excelCell(col, row) {
-    return colLetter(col) + row;
-}
+// ── Flow function thin-wrappers ───────────────────────────────────────────
+// These preserve the (rl, ...) signature that wizard code and tests rely on.
 
-function normalizeAssignmentName(input) {
-    const trimmed = input.trim();
-    // All-digits shorthand: "7" or "07" → "Lab07"
-    if (/^\d+$/.test(trimmed)) {
-        return `Lab${String(parseInt(trimmed, 10)).padStart(2, '0')}`;
-    }
-    // "Lab7", "lab07", "LAB7" → "Lab07"
-    const m = trimmed.match(/^[Ll][Aa][Bb](\d+)$/);
-    if (m) {
-        return `Lab${String(parseInt(m[1], 10)).padStart(2, '0')}`;
-    }
-    // Arbitrary name: "TermProject", "FinalExam" → returned as-is
-    if (/^[A-Za-z][A-Za-z0-9_-]*$/.test(trimmed)) return trimmed;
-    return null;  // invalid (empty, spaces, special chars)
-}
-
-// --- Rubric Reading for cell-by-cell mode ---
-
-function sheetRows(ws) {
-    return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-}
-
-function isBlankRow(row) {
-    return row.every(c => c === '' || c === null || c === undefined);
-}
-
-function cellText(row, i) {
-    return (row[i] ?? '').toString().trim();
-}
-
-// Default header synonyms for the "max points" column.
-const POSSIBLE_HEADER_RE = /^(possible|points?|pts|max)$/i;
-
-// Converts a column letter (A, B, C, … AA, AB …) to a 0-based index.
-function colLetterToIndex(letter) {
-    const upper = letter.toUpperCase().trim();
-    let idx = 0;
-    for (const ch of upper) idx = idx * 26 + (ch.charCodeAt(0) - 64);
-    return idx - 1;
-}
-
-// Detects the rubric column layout from an already-read rows array.
-// Returns { headerRow, possibleCol, scoreCol, commentCol } or null if header not found.
-function detectRubricLayout(rows, searchRe = POSSIBLE_HEADER_RE) {
-    let headerRow = -1;
-    for (let i = 0; i < rows.length; i++) {
-        if (rows[i].some(c => searchRe.test((c ?? '').toString().trim()))) {
-            headerRow = i;
-            break;
-        }
-    }
-    if (headerRow < 0) return null;
-
-    const hrow = rows[headerRow];
-    let possibleCol = -1, scoreCol = -1, commentCol = -1;
-    for (let c = 0; c < hrow.length; c++) {
-        const h = (hrow[c] ?? '').toString().trim();
-        if (searchRe.test(h))                        possibleCol = c;
-        else if (/^(score|grade|actual)$/i.test(h))  scoreCol    = c;
-        else if (/^comments?$/i.test(h))              commentCol  = c;
-    }
-    if (possibleCol < 0) possibleCol = 1;
-    if (scoreCol    < 0) scoreCol    = possibleCol + 1;
-    if (commentCol  < 0) commentCol  = scoreCol + 2;
-
-    // Optional stock-comment columns: a "Stock comments" banner sits on the header
-    // row or the row just above it; the three tiers (100% / <100% / 0%) occupy that
-    // column and the next two, left-to-right.
-    let fullCol = -1, partialCol = -1, zeroCol = -1;
-    for (let r = Math.max(0, headerRow - 1); r <= headerRow; r++) {
-        const scanRow = rows[r] ?? [];
-        for (let c = 0; c < scanRow.length; c++) {
-            if (/stock\s*comments?/i.test((scanRow[c] ?? '').toString().trim())) {
-                fullCol = c; partialCol = c + 1; zeroCol = c + 2;
-                break;
-            }
-        }
-        if (fullCol >= 0) break;
-    }
-
-    return { headerRow, possibleCol, scoreCol, commentCol, fullCol, partialCol, zeroCol };
-}
-
-// Reads rubric rows using a pre-confirmed layout object or an optional custom headerLabel.
-function readRubricRows(rubricPath, layoutOrLabel = null) {
-    let wb;
-    try { wb = XLSX.readFile(rubricPath); } catch (e) {
-        console.error(`  Could not read rubric file: ${e.message}`);
-        return null;
-    }
-    const ws = wb.Sheets['Grade'];
-    if (!ws) {
-        console.error('  No "Grade" sheet found in the rubric.');
-        return null;
-    }
-    const rows = sheetRows(ws);
-
-    // Accept either a pre-built layout object or a string header label (or null = auto).
-    let layout;
-    if (layoutOrLabel && typeof layoutOrLabel === 'object') {
-        layout = layoutOrLabel;
-    } else {
-        const searchRe = layoutOrLabel
-            ? new RegExp(`^${layoutOrLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
-            : POSSIBLE_HEADER_RE;
-        layout = detectRubricLayout(rows, searchRe);
-        if (!layout) {
-            const searched = layoutOrLabel ?? 'possible / points / pts / max';
-            console.error(`  Could not find header row (containing "${searched}") in Grade sheet.`);
-            return null;
-        }
-    }
-
-    const { headerRow, possibleCol, scoreCol, commentCol } = layout;
-    const { fullCol = -1, partialCol = -1, zeroCol = -1 } = layout;
-
-    let tableEnd = rows.length;
-    for (let i = headerRow + 1; i < rows.length; i++) {
-        if (/^comments$/i.test(cellText(rows[i], 0))) {
-            tableEnd = i;
-            break;
-        }
-    }
-
-    const rubricRows = [];
-    for (let i = headerRow + 1; i < tableEnd; i++) {
-        const row = rows[i];
-        if (isBlankRow(row)) continue;
-        // Label: col 0 for section headers, col 1 for indented items.
-        const label = cellText(row, 0) || cellText(row, 1);
-        if (!label) continue;
-
-        const lower = label.toLowerCase();
-        if (lower.startsWith('total') || lower.startsWith('sub-total')) continue;
-
-        const possible = cellText(row, possibleCol);
-        const isSectionHeader = possible === ''
-            && cellText(row, scoreCol)   === ''
-            && cellText(row, commentCol) === '';
-
-        const entry = {
-            excelRow: i + 1,
-            label,
-            possible,
-            scoreCell:   excelCell(scoreCol,   i + 1),
-            commentCell: excelCell(commentCol, i + 1),
-            isSectionHeader
-        };
-
-        // Capture grader-authored stock comments (100% / <100% / 0%) when present.
-        if (fullCol >= 0 && !isSectionHeader) {
-            const full    = cellText(row, fullCol);
-            const partial = cellText(row, partialCol);
-            const zero    = cellText(row, zeroCol);
-            if (full || partial || zero) {
-                const sc = {};
-                if (full)    sc.full    = full;
-                if (partial) sc.partial = partial;
-                if (zero)    sc.zero    = zero;
-                entry.stockComments = sc;
-            }
-        }
-
-        rubricRows.push(entry);
-    }
-    return rubricRows;
-}
-
-// Reads the optional "Rubric" sheet and returns item descriptions from its "Criteria"
-// column (position varies between rubrics). Used as holistic reference context for the
-// LLM — NOT joined per-row, since the Rubric and Grade sheets order/word items differently.
-// Returns [{ label, points, criteria }] or [] when no Rubric sheet / no Criteria column.
-function readRubricCriteria(rubricPath) {
-    let wb;
-    try { wb = XLSX.readFile(rubricPath); } catch (e) { return []; }
-    const ws = wb.Sheets['Rubric'];
-    if (!ws) return [];
-    const rows = sheetRows(ws);
-
-    // Find the header row that contains a "Criteria" column.
-    let headerRow = -1, criteriaCol = -1, pointsCol = -1;
-    for (let i = 0; i < rows.length; i++) {
-        const hrow = rows[i];
-        const cc = hrow.findIndex(c => /^criteria$/i.test((c ?? '').toString().trim()));
-        if (cc >= 0) {
-            headerRow = i;
-            criteriaCol = cc;
-            pointsCol = hrow.findIndex(c => /^(possible|points?|pts|max)$/i.test((c ?? '').toString().trim()));
-            break;
-        }
-    }
-    if (headerRow < 0) return [];
-
-    const out = [];
-    for (let i = headerRow + 1; i < rows.length; i++) {
-        const row = rows[i];
-        if (isBlankRow(row)) continue;
-        const label = cellText(row, 0) || cellText(row, 1);
-        if (!label) continue;
-        const lower = label.toLowerCase();
-        if (lower.startsWith('total') || lower.startsWith('sub-total')) continue;
-        const criteria = cellText(row, criteriaCol);
-        if (!criteria) continue;
-        out.push({
-            label,
-            points: pointsCol >= 0 ? cellText(row, pointsCol) : '',
-            criteria,
-        });
-    }
-    return out;
-}
-
-// Interactive version of readRubricCriteria: shows detected columns, lets user confirm/correct.
-async function promptRubricCriteria(rl, rubricPath) {
-    let wb;
-    try { wb = XLSX.readFile(rubricPath); } catch (e) { return []; }
-    const ws = wb.Sheets['Rubric'];
-    if (!ws) {
-        console.log('  No "Rubric" sheet found — skipping criteria descriptions.');
-        return [];
-    }
-    const rows = sheetRows(ws);
-
-    // Auto-detect header row by looking for a "Criteria" column.
-    let headerRow = -1, criteriaCol = -1, labelCol = 0, pointsCol = -1;
-    for (let i = 0; i < rows.length; i++) {
-        const hrow = rows[i];
-        const cc = hrow.findIndex(c => /^criteria$/i.test((c ?? '').toString().trim()));
-        if (cc >= 0) {
-            headerRow = i;
-            criteriaCol = cc;
-            pointsCol = hrow.findIndex(c => /^(possible|points?|pts|max)$/i.test((c ?? '').toString().trim()));
-            // Label is usually col A or B; pick first non-empty non-criteria non-points col.
-            labelCol = hrow.findIndex((c, idx) =>
-                idx !== criteriaCol && idx !== pointsCol &&
-                (c ?? '').toString().trim() !== ''
-            );
-            if (labelCol < 0) labelCol = 0;
-            break;
-        }
-    }
-
-    if (headerRow < 0) {
-        console.log('  No "Criteria" column found on the Rubric sheet.');
-        const alt = await ask(rl, '  What is the exact header text for the criteria column? (blank to skip): ');
-        if (!alt) return [];
-        const altRe = new RegExp(`^${alt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
-        for (let i = 0; i < rows.length; i++) {
-            const cc = rows[i].findIndex(c => altRe.test((c ?? '').toString().trim()));
-            if (cc >= 0) { headerRow = i; criteriaCol = cc; break; }
-        }
-        if (headerRow < 0) {
-            console.log(`  Still could not find "${alt}" on the Rubric sheet. Skipping criteria.`);
-            return [];
-        }
-    }
-
-    console.log(`  Detected columns in Rubric sheet (row ${headerRow + 1}):`);
-    console.log(`    Item label  : ${colLetter(labelCol)}`);
-    console.log(`    Criteria    : ${colLetter(criteriaCol)}`);
-    if (pointsCol >= 0) console.log(`    Points      : ${colLetter(pointsCol)}`);
-
-    const ok = await askBoolean(rl, '  Are these columns correct?', true);
-    if (!ok) {
-        const l = await ask(rl, `  Item-label column letter [${colLetter(labelCol)}]: `);
-        const c = await ask(rl, `  Criteria column letter [${colLetter(criteriaCol)}]: `);
-        const p = await ask(rl, `  Points column letter (blank to skip) [${pointsCol >= 0 ? colLetter(pointsCol) : 'none'}]: `);
-        if (l) labelCol    = colLetterToIndex(l);
-        if (c) criteriaCol = colLetterToIndex(c);
-        if (p) pointsCol   = colLetterToIndex(p);
-        else if (!p && pointsCol >= 0) pointsCol = -1;
-    }
-
-    const out = [];
-    for (let i = headerRow + 1; i < rows.length; i++) {
-        const row = rows[i];
-        if (isBlankRow(row)) continue;
-        const label = cellText(row, labelCol) || cellText(row, labelCol === 0 ? 1 : 0);
-        if (!label) continue;
-        const lower = label.toLowerCase();
-        if (lower.startsWith('total') || lower.startsWith('sub-total')) continue;
-        const criteria = cellText(row, criteriaCol);
-        if (!criteria) continue;
-        out.push({
-            label,
-            points: pointsCol >= 0 ? cellText(row, pointsCol) : '',
-            criteria,
-        });
-    }
-    console.log(`  Found ${out.length} criteria descriptions.`);
-    return out;
-}
-
-// Converts space-separated keywords into a case-insensitive OR regex for folder matching.
-// e.g. "dev env" → "dev|env"  (any keyword present in the folder name is a match)
-function keywordsToFolderPattern(keywords) {
-    const words = keywords.trim().split(/\s+/).filter(Boolean);
-    if (!words.length) return '';
-    return words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-}
-
-// Returns all assignment directories in CONFIGS_DIR, with a flag for whether a config JSON exists.
-function getExistingAssignments() {
-    const results = [];
-    let entries;
-    try { entries = fs.readdirSync(CONFIGS_DIR); } catch (e) { return results; }
-    for (const entry of entries) {
-        const full = path.join(CONFIGS_DIR, entry);
-        let stat;
-        try { stat = fs.statSync(full); } catch (e) { continue; }
-        if (!stat.isDirectory()) continue;
-        const configFile = path.join(full, `${entry.toLowerCase()}_config.json`);
-        results.push({ name: entry, hasConfig: fs.existsSync(configFile) });
-    }
-    return results.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-// Returns spreadsheet paths (relative to dir) found in dir and its immediate sub-folders.
-function findSpreadsheets(dir) {
-    const results = [];
-    let entries;
-    try { entries = fs.readdirSync(dir); } catch (e) { return results; }
-    for (const entry of entries) {
-        const full = path.join(dir, entry);
-        let stat;
-        try { stat = fs.statSync(full); } catch (e) { continue; }
-        if (stat.isFile() && /\.(xlsx|xlsm)$/i.test(entry)) {
-            results.push(entry);
-        } else if (stat.isDirectory()) {
-            let subEntries;
-            try { subEntries = fs.readdirSync(full); } catch (e) { continue; }
-            for (const sub of subEntries) {
-                if (/\.(xlsx|xlsm)$/i.test(sub)) {
-                    results.push(path.join(entry, sub));
-                }
-            }
-        }
-    }
-    return results;
-}
-
-// Interactive rubric reader: auto-detects column layout, shows it, and lets the grader
-// confirm or correct columns before the mapping wizard runs.
 async function promptRubricRows(rl, rubricPath) {
-    // Step 1: read the raw sheet rows (needed for both detection and final parse).
-    let wb;
-    try { wb = XLSX.readFile(rubricPath); } catch (e) {
-        console.error(`  Could not read rubric file: ${e.message}`);
-        return null;
-    }
-    const ws = wb && wb.Sheets['Grade'];
-    if (!ws) { console.error('  No "Grade" sheet found in the rubric.'); return null; }
-    const rows = sheetRows(ws);
-
-    // Step 2: auto-detect layout; ask for the header label if not found.
-    let layout = detectRubricLayout(rows);
-    if (!layout) {
-        console.error('  Could not find the max-points column header (tried: possible, points, pts, max).');
-        const alt = await ask(rl,
-            '  What is the exact header text for the max-points column? (blank to skip mappings): ');
-        if (!alt) return null;
-        const altRe = new RegExp(`^${alt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
-        layout = detectRubricLayout(rows, altRe);
-        if (!layout) {
-            console.error(`  Still could not find "${alt}" in Grade sheet. Skipping mappings.`);
-            return null;
-        }
-    }
-
-    // Step 3: show detected columns and let the grader confirm or correct them.
-    console.log(`  Detected columns in Grade sheet (row ${layout.headerRow + 1}):`);
-    console.log(`    Max points : ${colLetter(layout.possibleCol)}`);
-    console.log(`    Score      : ${colLetter(layout.scoreCol)}`);
-    console.log(`    Comments   : ${colLetter(layout.commentCol)}`);
-    if (layout.fullCol >= 0) {
-        console.log(`    Stock comments (100%/<100%/0%): ${colLetter(layout.fullCol)}/${colLetter(layout.partialCol)}/${colLetter(layout.zeroCol)}`);
-    }
-
-    const ok = await askBoolean(rl, '  Are these columns correct?', true);
-    if (!ok) {
-        const p = await ask(rl, `  Max-points column letter [${colLetter(layout.possibleCol)}]: `);
-        const s = await ask(rl, `  Score/grade column letter [${colLetter(layout.scoreCol)}]: `);
-        const c = await ask(rl, `  Comments column letter [${colLetter(layout.commentCol)}]: `);
-        if (p) layout.possibleCol = colLetterToIndex(p);
-        if (s) layout.scoreCol    = colLetterToIndex(s);
-        if (c) layout.commentCol  = colLetterToIndex(c);
-    }
-
-    // Step 4: parse and return rows using the confirmed layout.
-    return readRubricRows(rubricPath, layout);
+    return configPrompts.promptRubricRows(makeRLDriver(rl), rubricPath);
 }
-
-// --- Rubric copy ---
 
 async function copyRubric(rl, labName) {
-    console.log('\n--- Rubric Spreadsheet ---');
-    console.log('  The rubric spreadsheet (.xlsx or .xlsm) is required.');
-    console.log('  It should have a "Grade" sheet with the grading rubric table.\n');
-
-    let rubricPath;
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const raw = await ask(rl, 'Path to rubric file: ');
-        const candidate = raw.replace(/^["']|["']$/g, '');
-        if (!fs.existsSync(candidate)) {
-            console.log(`  File not found: ${candidate}`);
-            continue;
-        }
-        if (!fs.statSync(candidate).isFile()) {
-            console.log(`  That's a directory, not a file. Please provide the full path to the .xlsx or .xlsm file.`);
-            continue;
-        }
-        rubricPath = candidate;
-        break;
-    }
-    if (!rubricPath) {
-        console.log('  No rubric provided after 3 attempts. Aborting.');
-        process.exit(1);
-    }
-
-    const ext = path.extname(rubricPath).toLowerCase();
-    if (ext !== '.xlsx' && ext !== '.xlsm') {
-        console.log('  Warning: rubric should be .xlsx or .xlsm. Copying anyway.');
-    }
-
-    const suggestedName = `CS233JS_${labName}_Rubric${ext}`;
-    console.log(`  Suggested name: ${suggestedName}`);
-    const nameInput = await ask(rl, '  Use this name? Press Enter to accept, or type a new name: ');
-    const rubricName = path.basename(nameInput || suggestedName);
-
-    return { rubricPath, rubricName, ext };
+    return configPrompts.copyRubric(makeRLDriver(rl), labName);
 }
 
-// --- Feature prompts ---
+async function promptFields(rl, fields, currentValues = {}) {
+    return configPrompts.promptFields(makeRLDriver(rl), fields, currentValues);
+}
+
+async function buildMappingEntry(rl, type, rubricRow, currentValues = {}) {
+    return configPrompts.buildMappingEntry(makeRLDriver(rl), type, rubricRow, currentValues);
+}
+
+// ── Feature prompts ───────────────────────────────────────────────────────
 
 async function promptFeatures(rl) {
     console.log('\n--- Features (regex-based code analysis) ---');
@@ -554,10 +148,7 @@ async function promptFeatures(rl) {
         if (!addMore) break;
 
         const id = await ask(rl, '  Feature ID (e.g. fetch_api): ');
-        if (!id) {
-            console.log('  Feature ID is required. Skipping.');
-            continue;
-        }
+        if (!id) { console.log('  Feature ID is required. Skipping.'); continue; }
 
         let regex = '';
         while (true) {
@@ -576,54 +167,7 @@ async function promptFeatures(rl) {
     return features;
 }
 
-// --- Mapping types ---
-
-const MAPPING_TYPES = [
-    { label: 'feature', value: 'feature', desc: 'Regex feature count → score' },
-    { label: 'manual', value: 'manual', desc: 'Manual review item (uses code review form scores)' },
-    { label: 'lint', value: 'lint', desc: 'ESLint errors or warnings' },
-    { label: 'html_validate', value: 'html_validate', desc: 'HTML validity (html-validate) — counts errors' },
-    { label: 'css_validate', value: 'css_validate', desc: 'CSS validity (csstree) — counts errors' },
-    { label: 'name_check', value: 'name_check', desc: 'File/folder names are Linux-safe (POSIX chars, no spaces)' },
-    { label: 'code_review', value: 'code_review', desc: 'Code review form submitted + production completed' },
-    { label: 'deploy_check', value: 'deploy_check', desc: 'Check citstudent deployment (bundled + reachable)' },
-    { label: 'build_check', value: 'build_check', desc: 'Vite/webpack/npm run build — scores 0 if build fails (build errors)' },
-    { label: 'browser_check', value: 'browser_check', desc: 'Puppeteer headless browser runtime — scores 0 if browser console errors detected' },
-    { label: 'build_and_browser_check', value: 'build_and_browser_check', desc: 'Both build (Vite) and browser (Puppeteer) checks — half credit if only one fails' },
-    { label: 'package_check', value: 'package_check', desc: 'Verify package.json dependencies' },
-    { label: 'github_repo', value: 'github_repo', desc: 'GitHub repo link check' },
-    { label: 'repo_hygiene', value: 'repo_hygiene', desc: 'Check excluded folders not in git' },
-    { label: 'developer_comments', value: 'developer_comments', desc: 'Developer name, date, and/or comments present in code files' },
-    { label: 'url_check', value: 'url_check', desc: 'URL reachability check' },
-    { label: 'part_completed', value: 'part_completed', desc: 'Multi-part: subdir completion check' },
-    { label: 'part1_completed', value: 'part1_completed', desc: 'Single-part: part 1 completion check' },
-    { label: 'apps_in_repo', value: 'apps_in_repo', desc: 'All expected apps present in repo' },
-    { label: 'npm_package', value: 'npm_package', desc: 'npm package used check (Lab05 canvas)' },
-];
-
-// Guesses the most likely mapping type for a rubric row based on its label text.
-function guessMappingType(label) {
-    const l = label.toLowerCase();
-    if (/github.*repo|private\s*repo/.test(l))                  return 'github_repo';
-    if (/\.gitignore|repo.hygiene|node.?modules.*repo/.test(l)) return 'repo_hygiene';
-    if (/deploy|live\s*site|citstudent/.test(l))                return 'deploy_check';
-    const hasBuild   = /build.{0,10}error|vite|webpack|bundle|npm\s*run/.test(l);
-    const hasBrowser = /console.{0,10}error|browser.{0,10}error|runtime.{0,10}error/.test(l);
-    if (hasBuild && hasBrowser) return 'build_and_browser_check';
-    if (hasBuild)   return 'build_check';
-    if (hasBrowser) return 'browser_check';
-    if (/package\.json|npm\s*package|dependency/.test(l))       return 'package_check';
-    if (/lint|eslint|code\s*style/.test(l))                     return 'lint';
-    if (/\bhtml\b|index\.html/.test(l))                         return 'html_validate';
-    if (/\bcss\b|stylesheet|style\s*sheet/.test(l))             return 'css_validate';
-    if (/file\s*nam|folder\s*(structure|nam)|directory\s*(structure|nam)|naming\s*conventi/.test(l)) return 'name_check';
-    if (/code\s*review|peer\s*review/.test(l))                  return 'code_review';
-    if (/developer\s*(comment|name|date)|dev\s*name|name.*date.*file|jsdoc|documentation/.test(l)) return 'developer_comments';
-    if (/\burl\b|live\s*link/.test(l))                          return 'url_check';
-    if (/browser\s*check|runs?\s*in\s*browser/.test(l))         return 'browser_check';
-    if (/all\s*app|apps?\s*in\s*repo/.test(l))                  return 'apps_in_repo';
-    return 'manual';
-}
+// ── Mapping wizards ───────────────────────────────────────────────────────
 
 async function promptMappingCellByCell(rl, rubricRows) {
     console.log('\n--- Rubric Mappings (cell-by-cell) ---');
@@ -686,114 +230,7 @@ async function promptMappingsChecklist(rl) {
     return mappings;
 }
 
-// Schema describing per-type fields beyond cell/commentCell.
-// Each entry: fields[] — prompt descriptors; fixed{} — hardcoded key/value additions.
-// Field types: 'int' (re-prompts on bad input), 'options' (askOptions), default = string.
-// Field flags: required (null answer aborts entry), optional (empty answer skips key).
-const MAPPING_TYPE_SCHEMA = {
-    feature: {
-        fields: [
-            { key: 'featureId',  prompt: '  Feature ID: ',                            required: true },
-            { key: 'maxScore',   prompt: '  Max score [0]: ',     type: 'int',        default: 0 },
-            { key: 'minCount',   prompt: '  Min count [1]: ',     type: 'int',        default: 1 },
-            { key: 'successMsg', prompt: '  Success message [Yes]: ',                 default: 'Yes' },
-            { key: 'failMsg',    prompt: '  Fail message [Missing]: ',                default: 'Missing' },
-        ]
-    },
-    manual: {
-        fields: [
-            { key: 'maxScore', prompt: '  Max score [0]: ',  type: 'int', default: 0 },
-            { key: 'msg',      prompt: '  Comment message [NEEDS MANUAL CHECK]: ',   default: 'NEEDS MANUAL CHECK' },
-        ]
-    },
-    lint: {
-        fields: [
-            { key: 'maxScore',  prompt: '  Max score [0]: ', type: 'int', default: 0 },
-            { key: 'severity',  prompt: '  Severity:', type: 'options', options: [
-                { label: 'errors',   value: 'errors',   desc: 'Only syntax/error-level issues' },
-                { label: 'warnings', value: 'warnings', desc: 'Only style/warning-level issues' },
-            ]},
-        ]
-    },
-    html_validate: {
-        fields: [
-            { key: 'maxScore',  prompt: '  Max score [0]: ',                 type: 'int', default: 0 },
-            { key: 'tolerance', prompt: '  Errors allowed for half credit [3]: ', type: 'int', default: 3 },
-        ]
-    },
-    css_validate: {
-        fields: [
-            { key: 'maxScore',  prompt: '  Max score [0]: ',                 type: 'int', default: 0 },
-            { key: 'tolerance', prompt: '  Errors allowed for half credit [3]: ', type: 'int', default: 3 },
-        ]
-    },
-    name_check: {
-        fields: [
-            { key: 'maxScore',  prompt: '  Max score [0]: ',                 type: 'int', default: 0 },
-            { key: 'tolerance', prompt: '  Bad names allowed for half credit [2]: ', type: 'int', default: 2 },
-        ]
-    },
-    deploy_check: {
-        fixed:  { urlType: 'citstudent' },
-        fields: [{ key: 'maxScore', prompt: '  Max score [0]: ', type: 'int', default: 0 }]
-    },
-    url_check: {
-        fixed:  { urlType: 'citstudent' },
-        fields: [{ key: 'maxScore', prompt: '  Max score [0]: ', type: 'int', default: 0 }]
-    },
-    github_repo: {
-        fixed:  { linkUrlType: 'github' },
-        fields: [
-            { key: 'maxScore',  prompt: '  Max score [0]: ',             type: 'int', default: 0 },
-            { key: 'linkCell',  prompt: '  Link cell (e.g. F20, or blank): ',        optional: true },
-        ]
-    },
-};
-const GENERIC_MAPPING_SCHEMA = {
-    fields: [{ key: 'maxScore', prompt: '  Max score [0]: ', type: 'int', default: 0 }]
-};
-
-// Prompts the type-specific fields for a mapping entry and returns a plain object.
-// Returns null if a required field is empty (signals the caller to abort this entry).
-async function promptFields(rl, fields, currentValues = {}) {
-    const result = {};
-    for (const f of fields) {
-        const cur = currentValues[f.key];
-        if (f.type === 'int') {
-            const def = cur ?? f.default ?? 0;
-            const promptText = /\[/.test(f.prompt)
-                ? f.prompt.replace(/\[.*?\]/, `[${def}]`)
-                : f.prompt.replace(/:\s*$/, ` [${def}]:`);
-            result[f.key] = await askInt(rl, promptText, def);
-        } else if (f.type === 'options') {
-            const defIdx = cur !== undefined
-                ? Math.max(0, f.options.findIndex(o => o.value === cur))
-                : 0;
-            result[f.key] = await askOptions(rl, f.prompt, f.options, defIdx);
-        } else {
-            const def = cur ?? f.default ?? '';
-            const promptText = def ? f.prompt.replace(/:\s*$/, ` [${def}]: `) : f.prompt;
-            const raw = await ask(rl, promptText);
-            if (f.required && !raw && !def) return null;
-            if (f.optional && !raw && !def) continue;
-            result[f.key] = raw || def;
-        }
-    }
-    return result;
-}
-
-async function buildMappingEntry(rl, type, rubricRow, currentValues = {}) {
-    const cell = rubricRow.scoreCell;
-    const commentCell = rubricRow.commentCell;
-    const schema = MAPPING_TYPE_SCHEMA[type] ?? GENERIC_MAPPING_SCHEMA;
-    const fields = await promptFields(rl, schema.fields, currentValues);
-    if (fields === null) return null;
-    const m = { type, cell, ...(schema.fixed ?? {}), ...fields };
-    if (commentCell) m.commentCell = commentCell;
-    return m;
-}
-
-// --- Parts (multi-part lab) ---
+// ── Parts (multi-part lab) ────────────────────────────────────────────────
 
 async function promptParts(rl, labDir = null) {
     console.log('\n--- Multi-Part Lab ---');
@@ -805,9 +242,8 @@ async function promptParts(rl, labDir = null) {
         const addPrompt = parts.length === 0 ? 'Add a part?' : 'Add another part?';
         if (!await askBoolean(rl, addPrompt, false)) break;
         console.log(`\n  Part ${parts.length + 1}:`);
-        const partId = await ask(rl, '  Part ID (e.g. DevEnvAndStaticSite): ') || `part${i + 1}`;
+        const partId = await ask(rl, '  Part ID (e.g. DevEnvAndStaticSite): ') || `part${parts.length + 1}`;
 
-        // Auto-detect rubric from labDir/partId/ if the folder exists
         let rubricName = '';
         if (labDir) {
             const partSubDir = path.join(labDir, partId);
@@ -828,8 +264,6 @@ async function promptParts(rl, labDir = null) {
             rubricName = await ask(rl, '  Rubric filename for this part (e.g. DevEnvAndStaticSite/Rubric.xlsm, or blank): ');
         }
 
-        // folderPattern: only needed when students submit one repo with sub-folders per part.
-        // Converted from plain keywords to a regex stored in the config.
         const keywords = await ask(rl,
             '  Keywords to find this part\'s sub-folder in the student\'s repo (e.g. "dev env", blank if not applicable): ');
         const folderPattern = keywordsToFolderPattern(keywords);
@@ -865,8 +299,8 @@ async function promptParts(rl, labDir = null) {
         }
 
         const part = { id: partId };
-        if (rubricName) part.rubricName = rubricName;
-        if (folderPattern) part.folderPattern = folderPattern;
+        if (rubricName)            part.rubricName    = rubricName;
+        if (folderPattern)         part.folderPattern = folderPattern;
         if (variations && Object.keys(variations).length > 0) part.variations = variations;
         if (featureCounts.length > 0) part.featureCounts = featureCounts;
         parts.push(part);
@@ -874,7 +308,7 @@ async function promptParts(rl, labDir = null) {
     return parts.length > 0 ? parts : null;
 }
 
-// --- Variations ---
+// ── Variations ────────────────────────────────────────────────────────────
 
 async function promptVariations(rl) {
     console.log('\n--- Lab Variations (A/B/C groups) ---');
@@ -889,37 +323,36 @@ async function promptVariations(rl) {
     return Object.keys(variations).length > 0 ? variations : null;
 }
 
-// --- Custom analyzer ---
+// ── Custom analyzer ───────────────────────────────────────────────────────
 
 async function promptAnalyzer(rl, labName) {
     console.log('\n--- Custom Analyzer ---');
     const want = await askBoolean(rl, 'Create a custom analyzer (labXX_analyzer.js)?', false);
     if (!want) return null;
 
-    const content = `module.exports = function analyze(jsFiles, analysis, config, student) {
+    return `module.exports = function analyze(jsFiles, analysis, config, student) {
     // Custom analysis logic here
     // Use student.codeReview?.group for A/B/C variation logic
     // Modify analysis.features or return { reportSections: [...] }
     return {};
 };
 `;
-    return content;
 }
 
-// --- Optional fields ---
+// ── Optional fields ───────────────────────────────────────────────────────
 
 async function promptOptionalFields(rl) {
     console.log('\n--- Optional Fields ---');
 
     const summaryCell = await ask(rl, 'Summary cell (for AI/manual summary, e.g. A2, or blank): ');
-    const graderCell = await ask(rl, 'Grader cell (e.g. E1, or blank): ');
-    const titleCell = await ask(rl, 'Title cell (e.g. A1, or blank): ');
+    const graderCell  = await ask(rl, 'Grader cell (e.g. E1, or blank): ');
+    const titleCell   = await ask(rl, 'Title cell (e.g. A1, or blank): ');
 
     const hasCodeReview = await askBoolean(rl, 'Does this lab have a code review form?', false);
     let codeReview = null;
     if (hasCodeReview) {
         const studentNameCell = await ask(rl, '  Student name cell [B1]: ') || 'B1';
-        const groupCell = await ask(rl, '  Group letter cell [C1]: ') || 'C1';
+        const groupCell       = await ask(rl, '  Group letter cell [C1]: ')  || 'C1';
         codeReview = { studentNameCell, groupCell };
     }
 
@@ -933,12 +366,12 @@ async function promptOptionalFields(rl) {
     const hasPackageCheck = await askBoolean(rl, 'Add package.json dependency check?', false);
     let packageCheck = null;
     if (hasPackageCheck) {
-        const depsRaw = await ask(rl, '  Required dependencies (comma-separated, e.g. lit-html,bootstrap): ');
+        const depsRaw    = await ask(rl, '  Required dependencies (comma-separated, e.g. lit-html,bootstrap): ');
         const devDepsRaw = await ask(rl, '  Required devDependencies (comma-separated, e.g. vite): ');
         packageCheck = {};
-        const deps = depsRaw.split(',').map(s => s.trim()).filter(Boolean);
+        const deps    = depsRaw.split(',').map(s => s.trim()).filter(Boolean);
         const devDeps = devDepsRaw.split(',').map(s => s.trim()).filter(Boolean);
-        if (deps.length > 0) packageCheck.dependencies = deps;
+        if (deps.length > 0)    packageCheck.dependencies    = deps;
         if (devDeps.length > 0) packageCheck.devDependencies = devDeps;
     }
 
@@ -953,61 +386,12 @@ async function promptOptionalFields(rl) {
     return { summaryCell, graderCell, titleCell, codeReview, lintExclude, packageCheck, repoHygiene };
 }
 
-// --- Assemble and write ---
+// ── Part-focused sub-wizard ───────────────────────────────────────────────
 
-function buildConfig(labName, responses) {
-    const {
-        rubricName, titleText, runtimeCheck, features, mappings, parts,
-        variations, analyzerName, optional
-    } = responses;
-
-    const config = { rubricName };
-
-    if (optional.titleCell) config.titleCell = optional.titleCell;
-    if (titleText) config.titleText = titleText;
-    if (optional.summaryCell) config.summaryCell = optional.summaryCell;
-    if (optional.graderCell) config.graderCell = optional.graderCell;
-    if (optional.codeReview) config.codeReview = optional.codeReview;
-
-    config.runtimeCheck = runtimeCheck;
-
-    if (variations) config.variations = variations;
-    if (optional.packageCheck) config.packageCheck = optional.packageCheck;
-    if (optional.repoHygiene) config.repoHygiene = optional.repoHygiene;
-
-    const lint = {};
-    if (optional.lintExclude) lint.exclude = optional.lintExclude;
-    if (Object.keys(lint).length > 0) config.lint = lint;
-
-    const analysis = {};
-    if (features.length > 0) analysis.features = features;
-    if (analyzerName) analysis.customAnalyzer = analyzerName;
-    if (parts) analysis.parts = parts;
-    if (Object.keys(analysis).length > 0) config.analysis = analysis;
-
-    config.mappings = mappings;
-
-    return config;
-}
-
-function writeLab(labDir, config, analyzerContent, analyzerName) {
-    const configPath = path.join(labDir, `${path.basename(labDir).toLowerCase()}_config.json`);
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
-    console.log(`  Written: ${configPath}`);
-
-    if (analyzerContent && analyzerName) {
-        const analyzerPath = path.join(labDir, analyzerName);
-        fs.writeFileSync(analyzerPath, analyzerContent, 'utf8');
-        console.log(`  Written: ${analyzerPath}`);
-    }
-}
-
-// Focused wizard: configure one part (rubric + mappings) and merge into existing config.
 async function runPartSetup(rl, labDir, labName, existingConfig) {
     const existingParts = existingConfig?.analysis?.parts || [];
 
-    // Which part to configure?
-    let partIdx = -1; // -1 = new
+    let partIdx = -1;
     if (existingParts.length > 0) {
         console.log('\nExisting parts:');
         existingParts.forEach((p, i) =>
@@ -1020,7 +404,6 @@ async function runPartSetup(rl, labDir, labName, existingConfig) {
     }
     const existingPart = partIdx >= 0 ? existingParts[partIdx] : null;
 
-    // Part ID
     let partId;
     if (existingPart) {
         const ovr = await ask(rl, `\n  Part ID [${existingPart.id}]: `);
@@ -1030,7 +413,6 @@ async function runPartSetup(rl, labDir, labName, existingConfig) {
         if (!partId) { console.log('  Part ID is required. Aborting.'); return; }
     }
 
-    // Rubric: auto-detect from labDir/partId/, then fall back to prompt
     let rubricName = existingPart?.rubricName || '';
     const partSubDir = path.join(labDir, partId);
     const xlFiles = fs.existsSync(partSubDir) && fs.statSync(partSubDir).isDirectory()
@@ -1055,21 +437,18 @@ async function runPartSetup(rl, labDir, labName, existingConfig) {
         rubricName = await ask(rl, '  Rubric filename (e.g. DevEnvAndStaticSite/Rubric.xlsm, or blank): ');
     }
 
-    // Keywords for folder matching
     const keywords = await ask(rl,
         '  Keywords to find this part\'s folder in student repos (blank if not applicable): ');
     const folderPattern = keywords
         ? keywordsToFolderPattern(keywords)
         : (existingPart?.folderPattern || '');
 
-    // Build updated part entry (preserve existing featureCounts / variations)
     const updatedPart = { id: partId };
-    if (rubricName) updatedPart.rubricName = rubricName;
-    if (folderPattern) updatedPart.folderPattern = folderPattern;
-    if (existingPart?.variations) updatedPart.variations = existingPart.variations;
+    if (rubricName)               updatedPart.rubricName    = rubricName;
+    if (folderPattern)            updatedPart.folderPattern = folderPattern;
+    if (existingPart?.variations) updatedPart.variations    = existingPart.variations;
     if (existingPart?.featureCounts) updatedPart.featureCounts = existingPart.featureCounts;
 
-    // Mappings: cell-by-cell from this part's rubric
     const rubricPath = rubricName ? path.join(labDir, rubricName) : null;
     const rubricRows = rubricPath ? await promptRubricRows(rl, rubricPath) : null;
     let mappings = existingConfig?.mappings || [];
@@ -1081,7 +460,6 @@ async function runPartSetup(rl, labDir, labName, existingConfig) {
         console.log('  No rubric specified — keeping existing mappings.');
     }
 
-    // Merge into config
     const cfg = existingConfig
         ? JSON.parse(JSON.stringify(existingConfig))
         : { rubricName: '', runtimeCheck: 'browser', mappings: [] };
@@ -1107,7 +485,7 @@ async function runPartSetup(rl, labDir, labName, existingConfig) {
     console.log();
 }
 
-// --- Main ---
+// ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
     let labName = process.argv[2] || '';
@@ -1129,7 +507,6 @@ async function main() {
             const configFile = path.join(CONFIGS_DIR, labName, `${labName.toLowerCase()}_config.json`);
             isEditingExisting = fs.existsSync(configFile);
         } else {
-            // Show existing assignments as a selection menu
             const existing = getExistingAssignments();
             const options = [
                 ...existing.map(a => ({
@@ -1161,7 +538,6 @@ async function main() {
         let useExisting = false;
         if (fs.existsSync(labDir)) {
             if (isEditingExisting) {
-                // User explicitly selected an existing assignment — default to keeping files
                 console.log(`\n  Editing existing assignment: ${labName}`);
                 const choice = await askOptions(rl, '  How do you want to proceed?', [
                     { label: 'Keep existing files',  value: 'keep',      desc: 'Preserves rubric and other files; rewrites config only' },
@@ -1188,7 +564,6 @@ async function main() {
         // 2. Rubric + mode selection
         let rubricName, rubricDest;
         if (useExisting) {
-            // Read existing config (needed for part list and for the part-focused wizard)
             const configPath = path.join(labDir, `${labName.toLowerCase()}_config.json`);
             let existingConfig = null;
             try {
@@ -1196,8 +571,8 @@ async function main() {
             } catch (e) { /* ignore */ }
 
             const mode = await askOptions(rl, 'What would you like to do?', [
-                { label: 'Set up one part',   value: 'part', desc: 'Configure rubric and mappings for a specific part' },
-                { label: 'Full wizard',       value: 'full', desc: 'Rebuild the entire config from scratch' },
+                { label: 'Set up one part', value: 'part', desc: 'Configure rubric and mappings for a specific part' },
+                { label: 'Full wizard',     value: 'full', desc: 'Rebuild the entire config from scratch' },
             ]);
 
             if (mode === 'part') {
@@ -1205,7 +580,6 @@ async function main() {
                 return;
             }
 
-            // Full wizard: detect top-level rubric
             const found = findSpreadsheets(labDir);
             if (found.length === 1) {
                 rubricName = found[0];
@@ -1222,7 +596,6 @@ async function main() {
             }
             rubricDest = path.join(labDir, rubricName);
         } else {
-            // 2a. Optional sub-folders for lab parts
             let rubricSubDir = '';
             const wantSubFolders = await askBoolean(rl, 'Create sub-folders for lab parts?', false);
             if (wantSubFolders) {
@@ -1249,7 +622,6 @@ async function main() {
                 }
             }
 
-            // 2b. Copy rubric into chosen location
             const r = await copyRubric(rl, labName);
             const destDir = rubricSubDir ? path.join(labDir, rubricSubDir) : labDir;
             rubricName = rubricSubDir ? path.join(rubricSubDir, r.rubricName) : r.rubricName;
@@ -1264,8 +636,8 @@ async function main() {
         // 4. Runtime mode
         const runtimeCheck = await askOptions(rl, 'Runtime check mode:', [
             { label: 'browser', value: 'browser', desc: 'Puppeteer browser only' },
-            { label: 'build', value: 'build', desc: 'npm install && npm run build only' },
-            { label: 'both', value: 'both', desc: 'Browser + build' }
+            { label: 'build',   value: 'build',   desc: 'npm install && npm run build only' },
+            { label: 'both',    value: 'both',     desc: 'Browser + build' },
         ]);
 
         // 5. Parts
@@ -1277,10 +649,10 @@ async function main() {
         // 7. Features
         const features = await promptFeatures(rl);
 
-        // 8. Mappings — always cell-by-cell from rubric; checklist only as fallback
-        let mappings;
+        // 8. Mappings
         console.log('\n--- Rubric Mappings ---');
         const rubricRows = await promptRubricRows(rl, rubricDest);
+        let mappings;
         if (rubricRows) {
             mappings = await promptMappingCellByCell(rl, rubricRows);
         } else {
@@ -1302,7 +674,7 @@ async function main() {
         // 11. Assemble and write
         const config = buildConfig(labName, {
             rubricName, titleText, runtimeCheck, features, mappings,
-            parts, variations, analyzerName, optional
+            parts, variations, analyzerName, optional,
         });
 
         console.log('\n--- Writing Files ---');
@@ -1315,9 +687,7 @@ async function main() {
         } else {
             console.log(`  Rubric copied to: ${rubricDest}`);
         }
-        if (analyzerName) {
-            console.log(`  Analyzer created at: ${path.join(labDir, analyzerName)}`);
-        }
+        if (analyzerName) console.log(`  Analyzer created at: ${path.join(labDir, analyzerName)}`);
         console.log('\n  You can now edit the config file to adjust cell references or add more mappings.');
         console.log('  To verify, run: node bin/rubric_to_md.js ' + JSON.stringify(rubricDest) + '\n');
 
@@ -1326,15 +696,20 @@ async function main() {
     }
 }
 
-// Export testable functions for unit tests
 module.exports = {
-    colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
-    sheetRows, readRubricRows, readRubricCriteria, promptRubricCriteria, buildConfig, buildMappingEntry, promptFields,
-    promptFeatures, copyRubric, writeLab, findSpreadsheets, keywordsToFolderPattern,
-    promptRubricRows, detectRubricLayout, colLetterToIndex, guessMappingType, POSSIBLE_HEADER_RE,
-    askBoolean, askOptions, ask, askInt, createRL,
+    // Readline driver primitives (tested directly)
+    createRL, ask, askBoolean, askInt, askOptions, makeRLDriver,
+    // Flow thin-wrappers (preserve rl-first signature for tests and wizard callers)
+    promptRubricRows, copyRubric, promptFields, buildMappingEntry,
+    // Wizard-only functions
+    promptFeatures,
+    // Re-exported from lib for test backward compat
+    colLetter, excelCell, colLetterToIndex, normalizeAssignmentName,
+    cellText, isBlankRow, sheetRows, POSSIBLE_HEADER_RE, detectRubricLayout,
+    readRubricRows, readRubricCriteria,
+    findSpreadsheets, getExistingAssignments, keywordsToFolderPattern,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA,
-    getExistingAssignments,
+    guessMappingType, buildConfig, writeLab,
 };
 
 if (require.main === module) {

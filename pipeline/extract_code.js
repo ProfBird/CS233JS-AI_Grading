@@ -13,6 +13,9 @@ const { execFileSync } = require('child_process');
 const CODE_DIR = 'extracted_code';
 const REPO_DIR = 'repo';
 
+// Replace spaces and filesystem-unfriendly characters with hyphens for directory/file names.
+const toSafeName = name => name.replace(/[\s/\\:*?"<>|]+/g, '-');
+
 // Read a file with a timeout — protects against Google Drive blocking reads on unsynced files
 async function readFileWithTimeout(filePath, timeoutMs = 10000) {
     let timeoutHandle;
@@ -114,9 +117,24 @@ async function extractStudentCode(student, labDir, repoClonePath) {
     // Determine where to put the code: repoClonePath (SubmissionsAndAssessment) or fallback to filesDir
     let codeDir;
     if (repoClonePath) {
-        const studentDir = path.join(repoClonePath, student.name);
-        codeDir = path.join(studentDir, codeDirName);
+        const safeName   = toSafeName(student.name);
+        const studentDir = path.join(repoClonePath, safeName);
+        codeDir          = path.join(studentDir, codeDirName);
         student.gradeDir = studentDir;
+
+        // Backward compatibility: if already-extracted code lives at the old path with spaces,
+        // reuse it rather than forcing a re-clone into the new hyphenated path.
+        if (safeName !== student.name) {
+            const legacyDir  = path.join(repoClonePath, student.name);
+            const legacyCode = path.join(legacyDir, codeDirName);
+            if (!fs.existsSync(codeDir) && fs.existsSync(legacyCode)) {
+                const contents = fs.readdirSync(legacyCode).filter(f => !f.startsWith('.'));
+                if (contents.length > 0) {
+                    codeDir          = legacyCode;
+                    student.gradeDir = legacyDir;
+                }
+            }
+        }
     } else {
         codeDir = path.join(student.filesDir || labDir, codeDirName);
         student.gradeDir = student.filesDir || null;

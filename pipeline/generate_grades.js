@@ -11,6 +11,9 @@
 const fs = require('fs');
 const path = require('path');
 
+// Replace spaces and filesystem-unfriendly characters with hyphens for directory/file names.
+const toSafeName = name => name.replace(/[\s/\\:*?"<>|]+/g, '-');
+
 const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('../lib/ollama_comments');
 const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } = require('../lib/rubric_writer');
 
@@ -263,9 +266,10 @@ function scoreValidation(map, data, fileKey, label) {
     if (errors === 0) {
         return { score: map.maxScore, comment: `Valid ${label} — no errors` };
     } else if (errors <= tolerance) {
-        return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${errors} ${label} error${errors !== 1 ? 's' : ''} (${topIssues})` };
+        // keepComment: true so the error detail isn't overwritten by a stock comment like "Missing"
+        return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${errors} ${label} error${errors !== 1 ? 's' : ''} (${topIssues})`, keepComment: true };
     }
-    return { score: 0, comment: `${errors} ${label} errors (${topIssues})` };
+    return { score: 0, comment: `${errors} ${label} errors (${topIssues})`, keepComment: true };
 }
 
 registerHandler('html_validate', (map, student) => {
@@ -468,6 +472,51 @@ registerHandler('github_repo', (map, student) => {
     return { score: 0, comment: `GitHub URL provided but repo could not be cloned: ${url}` };
 });
 
+registerHandler('collaborator_check', (map, student) => {
+    const url = student.urls && student.urls.github;
+    if (!url) return { score: 0, comment: 'No GitHub repo — collaborator check not applicable' };
+    if (student.extractedDir) return { score: map.maxScore, comment: 'yes, instructor' };
+    return { score: 0, comment: `GitHub repo provided but could not be cloned: ${url}` };
+});
+
+registerHandler('gitignore_check', (map, student) => {
+    if (!student.extractedDir) return { score: 0, comment: 'No repo extracted' };
+    if (fs.existsSync(path.join(student.extractedDir, '.gitignore'))) {
+        return { score: map.maxScore, comment: 'yes, exists' };
+    }
+    return { score: 0, comment: 'not found' };
+});
+
+registerHandler('scripts_check', (map, student) => {
+    const sc = student.scriptsCheck;
+    const scriptList = Array.isArray(map.scripts)
+        ? map.scripts
+        : (map.scripts || 'dev,build,test').split(',').map(s => s.trim()).filter(Boolean);
+
+    if (!sc) return { score: 0, comment: 'NEEDS MANUAL CHECK (no scripts check data)', keepComment: true };
+    if (sc.error) return { score: 0, comment: sc.error, keepComment: true };
+
+    const results = sc.scripts || {};
+    const passing = scriptList.filter(s => results[s]?.passed);
+    const failing = scriptList.filter(s => results[s] && !results[s].passed);
+    const missing = scriptList.filter(s => !results[s]);
+
+    if (passing.length === scriptList.length) {
+        return { score: map.maxScore, comment: `All pass: ${scriptList.join(', ')}` };
+    }
+
+    const parts = [];
+    if (passing.length) parts.push(`pass: ${passing.join(', ')}`);
+    if (failing.length) {
+        const details = failing.map(s => (results[s]?.defined ? s : `${s} (not defined)`));
+        parts.push(`fail: ${details.join(', ')}`);
+    }
+    if (missing.length) parts.push(`not checked: ${missing.join(', ')}`);
+
+    const score = Math.round(map.maxScore * passing.length / scriptList.length);
+    return { score, comment: parts.join(' | '), keepComment: true };
+});
+
 // --- Mapping types that can produce a score even when code extraction failed ---
 
 // Types that report an extraction error rather than 'N/A' when code could not be obtained.
@@ -502,6 +551,7 @@ function mappingDescription(map) {
         case 'part_feature': return map.featureId || 'Part feature';
         case 'part_completed': return map.partId || 'Part completed';
         case 'part1_completed': return 'Part 1 completed';
+        case 'scripts_check': return `npm scripts: ${(map.scripts || 'dev,build,test')}`;
         default: return map.type;
     }
 }
@@ -734,7 +784,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
                 const results = await computeResults(student, config);
                 const report = formatTextReport(student, config, results, labTitle);
 
-                const outputPath = path.join(gradeDir, `${student.name}_Grade.txt`);
+                const outputPath = path.join(gradeDir, `${path.basename(gradeDir)}_Grade.txt`);
                 fs.writeFileSync(outputPath, report, 'utf8');
                 console.log(`  OK: ${student.name} -> ${path.basename(outputPath)}`);
                 summary.successful.push(student.name);
@@ -845,7 +895,7 @@ module.exports = async function(students, config, labDir, opts = {}) {
             }
 
             const outputExt = isXlsm ? '.xlsm' : '.xlsx';
-            const basePath = path.join(gradeDir, `${student.name}_Grade${outputExt}`);
+            const basePath = path.join(gradeDir, `${path.basename(gradeDir)}_Grade${outputExt}`);
             const outputPath = resolveOutputPath(basePath, config.graderCell);
             const isNewVersion = !fs.existsSync(outputPath);
 

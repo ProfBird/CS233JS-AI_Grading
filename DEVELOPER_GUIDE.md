@@ -21,19 +21,26 @@ graph TD
     subgraph "Pipeline Modules"
         extract[extract_code.js]
         runtime[runtime_check.js]
+        code_review[read_code_review.js]
         analyze[analyze_code.js]
         lint[lint_code.js]
+        val_html[validate_html.js]
+        val_css[validate_css.js]
+        check_names[check_names.js]
         grades[generate_grades.js]
     end
 
     subgraph "Supporting Modules"
         ollama[ollama_comments.js]
+        file_walker[file_walker.js]
     end
 
     subgraph "External Dependencies"
         puppeteer
         xlsx_npm[xlsx npm package]
         eslint
+        html_validate[html-validate]
+        csstree[csstree-validator]
     end
 
     subgraph "Configuration"
@@ -45,8 +52,12 @@ graph TD
     %% Entry → Pipeline
     run_all --> extract
     run_all --> runtime
+    run_all --> code_review
     run_all --> analyze
     run_all --> lint
+    run_all --> val_html
+    run_all --> val_css
+    run_all --> check_names
     run_all --> grades
 
     %% Config loading
@@ -55,26 +66,40 @@ graph TD
 
     %% Module internal deps
     grades --> ollama
+    val_html --> file_walker
+    val_css --> file_walker
+    check_names --> file_walker
+    lint --> file_walker
+    analyze --> file_walker
 
     %% External deps
     runtime --> puppeteer
     grades --> xlsx_npm
     lint --> eslint
     lint -.-> eslint_config
+    val_html --> html_validate
+    val_css --> csstree
 
     %% Data flow direction (for readability)
     extract --> analyze
     analyze --> grades
     runtime --> grades
     lint --> grades
+    val_html --> grades
+    val_css --> grades
+    check_names --> grades
 
     style run_all fill:#4a90d9,color:#fff
     style rubric_to_md fill:#4a90d9,color:#fff
     style create_lab fill:#4a90d9,color:#fff
     style extract fill:#50b86c,color:#fff
     style runtime fill:#50b86c,color:#fff
+    style code_review fill:#50b86c,color:#fff
     style analyze fill:#50b86c,color:#fff
     style lint fill:#50b86c,color:#fff
+    style val_html fill:#50b86c,color:#fff
+    style val_css fill:#50b86c,color:#fff
+    style check_names fill:#50b86c,color:#fff
     style grades fill:#50b86c,color:#fff
 ```
 
@@ -108,13 +133,17 @@ sequenceDiagram
     run_all->>config: read lab config
     run_all->>run_all: repoClonePath = codeRoot/labName
 
+    alt labDir has no direct Moodle submissions
+        run_all->>User: prompt to pick submission group (e.g. Beta/Production)
+    end
+
     alt --reclone flag
         run_all->>run_all: delete all extracted_code/ and repo/ dirs
         run_all->>run_all: delete repoClonePath (codeRoot/labName) tree
     end
 ```
 
-## Pipeline Phases 1-2: Code Acquisition & Runtime Check
+## Pipeline Phases 1–2: Code Acquisition & Runtime Check
 
 ```mermaid
 sequenceDiagram
@@ -123,20 +152,62 @@ sequenceDiagram
     participant runtime as runtime_check.js
 
     Note over run_all: === Phase 1: Code Acquisition ===
-    run_all->>extract: extractCode(labDir, repoClonePath)
+    run_all->>extract: extractCode(labDir, submissionsDir)
     extract->>extract: getStudents() — scan Moodle submission dirs
     par for each student
         extract->>extract: extractUrls() — read onlinetext.html
         alt has .zip file
-            extract->>extract: unzip to codeRoot/labName/Student/extracted_code/
+            extract->>extract: unzip to submissionsDir/Student/extracted_code/
         else has GitHub URL
-            extract->>extract: git clone --depth 1 to codeRoot/labName/Student/repo/
+            extract->>extract: git clone --depth 1 to submissionsDir/Student/repo/
         end
     end
     extract-->>run_all: return students[] array
 
-    Note over run_all: === Phase 2: Analysis ===
-    run_all->>analyze: analyzeCode(students, config, labDir)
+    Note over run_all: === Phase 2: Runtime Check ===
+    run_all->>runtime: runtimeCheck(students, config, artifactsDir)
+    alt config.runtimeCheck == "build"
+        runtime->>runtime: find package.json dirs
+        runtime->>runtime: delete node_modules/ (ensures clean install)
+        runtime->>runtime: npm install && npm run build (20s timeout each)
+    else "browser"
+        runtime->>runtime: launch headless Chrome (Puppeteer)
+        runtime->>runtime: find index.html dirs
+        runtime->>runtime: serve + check for console errors
+    else "both"
+        runtime->>runtime: run build phase first
+        runtime->>runtime: then run browser phase
+        runtime->>runtime: store buildSuccess + browserSuccess separately
+    end
+    alt scripts_check mappings present
+        runtime->>runtime: run npm run dev/build/preview for each student
+        runtime-->>run_all: attaches student.scriptsCheck
+    end
+    runtime-->>run_all: (attaches to student.runtimeCheck)
+```
+
+## Pipeline Phases 3–6: Analysis, Validation & Grading
+
+```mermaid
+sequenceDiagram
+    participant run_all as run_all.js
+    participant code_review as read_code_review.js
+    participant analyze as analyze_code.js
+    participant lint as lint_code.js
+    participant val_html as validate_html.js
+    participant val_css as validate_css.js
+    participant check_names as check_names.js
+    participant grades as generate_grades.js
+
+    Note over run_all: === Phase 3: Code Review Reading ===
+    run_all->>code_review: readCodeReview(students, config)
+    code_review->>code_review: find .docx review forms in student dirs
+    code_review->>code_review: mammoth → HTML table parse
+    code_review->>code_review: extract betaScore, prodScore per item, group letter
+    code_review-->>run_all: (attaches student.codeReview)
+
+    Note over run_all: === Phase 4: Analysis ===
+    run_all->>analyze: analyzeCode(students, config, artifactsDir, labConfigDir)
     analyze->>analyze: getAllFiles() — recursive directory walk
     analyze->>analyze: countFeatures() — regex matching per feature
     alt config has parts[]
@@ -148,28 +219,35 @@ sequenceDiagram
     analyze->>analyze: write analysis_report.json
     analyze-->>run_all: (attaches to student.analysis)
 
-    Note over run_all: === Phase 3: Runtime Check ===
-    run_all->>runtime: runtimeCheck(students, config, labDir)
-    alt config.runtimeCheck == "build"
-        runtime->>runtime: find package.json dirs
-        runtime->>runtime: delete node_modules/ (ensures clean install)
-        runtime->>runtime: npm install && npm run build (20s timeout each)
-    else "browser"
-        runtime->>runtime: launch headless Chrome (Puppeteer)
-        runtime->>runtime: find index.html dirs
-        runtime->>runtime: serve + check for console errors
-    end
-    runtime-->>run_all: (attaches to student.runtimeCheck)
-
-    Note over run_all: === Phase 4: Linting ===
-    run_all->>lint: lintCode(students, config, labDir)
+    Note over run_all: === Phase 5: Linting ===
+    run_all->>lint: lintCode(students, config, artifactsDir)
     lint->>lint: getAllJsFiles() — recursive .js file collection
     lint->>lint: ESLint.lintFiles() against ~/.eslint/eslint.config.mjs
     lint->>lint: write lint_report.json
     lint-->>run_all: (attaches to student.lint)
 
-    Note over run_all: === Phase 5: Grade Generation ===
-    run_all->>grades: generateGrades(students, config, labDir, opts)
+    Note over run_all: === Phase 5b: HTML Validation ===
+    run_all->>val_html: validateHtml(students, config, artifactsDir)
+    val_html->>val_html: getAllFilesByExt(..., ['.html', '.htm'], exclusions)
+    val_html->>val_html: html-validate per file (offline, pure JS)
+    val_html->>val_html: write html_validation_report.json
+    val_html-->>run_all: (attaches student.htmlValidation)
+
+    Note over run_all: === Phase 5c: CSS Validation ===
+    run_all->>val_css: validateCss(students, config, artifactsDir)
+    val_css->>val_css: getAllFilesByExt(..., '.css', exclusions)
+    val_css->>val_css: csstree-validator per file (offline, pure JS)
+    val_css->>val_css: write css_validation_report.json
+    val_css-->>run_all: (attaches student.cssValidation)
+
+    Note over run_all: === Phase 5d: File/Folder Name Check ===
+    run_all->>check_names: checkNames(students, config, artifactsDir)
+    check_names->>check_names: walk submission dir, test each name against [A-Za-z0-9._-]
+    check_names->>check_names: write name_check_report.json
+    check_names-->>run_all: (attaches student.nameCheck)
+
+    Note over run_all: === Phase 6: Grade Generation ===
+    run_all->>grades: generateGrades(students, config, artifactsDir, opts)
     grades->>xlsx: read rubric spreadsheet
     par for each student
         grades->>grades: compute scores per mapping type
@@ -187,7 +265,7 @@ sequenceDiagram
     grades-->>run_all: return { successful, errors }
 
     Note over run_all: === Log ===
-    run_all->>run_all: write grading_log.txt to labDir
+    run_all->>run_all: write grading_log.txt to artifactsDir
     run_all-->>User: All Done!
 ```
 
@@ -197,17 +275,19 @@ sequenceDiagram
 
 ### `run_all.js` — Master Orchestrator
 
-The entry point. Handles CLI argument parsing, interactive menus, env configuration, and orchestrates the five pipeline phases.
+The entry point. Handles CLI argument parsing, interactive menus, env configuration, and orchestrates all pipeline phases.
 
 **Key behaviors:**
-- Reads `labRoot` and `codeRoot` from `AI_Grading/configs/local-config.json` (prompts & saves if missing; migrates from old `env.json` automatically)
+- Reads `labRoot` and `codeRoot` from `AI_Grading/configs/local-config.json` (prompts & saves if missing; tries `default-config.json` as fallback for new machines; migrates from old `env.json` automatically)
 - Scans `configs/` for subdirectories containing a matching `{assignmentname}_config.json` to build the assignment menu
-- Computes `repoClonePath = <codeRoot>/<labName>` so different labs' extracted code stays in separate subdirectories
+- Computes `submissionsDir = <codeRoot>/<labName>/SubmissionsAndAssessment` and `artifactsDir = <codeRoot>/<labName>/ArtifactsAndRubrics`
 - `--reclone` wipes both old-style dirs (inside submission folders) and the `<codeRoot>/<labName>` tree
+- `--regrade` without `--reclone` runs `git pull` on each student's existing repo before re-grading
+- When `labDir` has no direct Moodle submissions but contains subdirs that do (e.g. separate Beta/Production groups), prompts the user to pick which group to grade
 - Validates config on startup — checks required keys, known mapping types, cell reference format, part structure, feature definitions
-- In **normal mode**, filters out students whose grade spreadsheet (`StudentName_Grade.xlsm/.xlsx`) already exists before passing the array to any pipeline phase — only new students are processed
+- In **normal mode**, filters out students whose grade output already exists before passing the array to any pipeline phase — only new students are processed
 - Each phase attaches data directly to the shared `students` array; `generate_grades` reads from the student objects
-- Writes `grading_log.txt` to `labDir` on completion
+- Writes `grading_log.txt` to `artifactsDir` on completion
 
 ### `extract_code.js` — Code Acquisition
 
@@ -223,10 +303,8 @@ Handles extracting student code from submissions.
 | `extractStudentCode()` | Unzip or git clone per student; sets `student.extractedDir` |
 
 **Directory naming:**
-- GitHub clones → `<codeRoot>/<labName>/StudentName/repo/`
-- ZIP extractions → `<codeRoot>/<labName>/StudentName/extracted_code/`
-
-If `codeRoot` is not configured (first run), falls back to placing code inside the student's submission directory on Google Drive.
+- GitHub clones → `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/repo/`
+- ZIP extractions → `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/extracted_code/`
 
 **Git clone safety:**
 - 60-second timeout with SIGKILL to prevent hangs
@@ -234,7 +312,7 @@ If `codeRoot` is not configured (first run), falls back to placing code inside t
 
 ### `runtime_check.js` — Runtime Error Detection
 
-Two modes, controlled by `config.runtimeCheck`:
+Three modes, controlled by `config.runtimeCheck`:
 
 **`"build"` mode:**
 - Recursively finds `package.json` files (skipping `node_modules`, hidden, and `dist` dirs)
@@ -248,6 +326,25 @@ Two modes, controlled by `config.runtimeCheck`:
 - Tracks JS runtime exceptions and failed script/stylesheet loads
 - Waits for `networkidle0` plus 2s for delayed execution
 
+**`"both"` mode:**
+- Runs the full build phase first, storing results as `buildSuccess` / `buildErrors`
+- Then runs the browser phase on the built output, storing results as `browserSuccess` / `browserErrors`
+- Use `build_check`, `browser_check`, or `build_and_browser_check` mapping types to score each sub-result
+
+**Scripts check sub-phase:**
+- Automatically runs when any `scripts_check` mapping is present in the config
+- Verifies that the specified npm scripts (e.g. `dev`, `build`, `preview`) are defined and exit 0
+- Results stored in `student.scriptsCheck`
+
+### `read_code_review.js` — Code Review Reader
+
+Runs **before** `analyze_code.js` so the group letter is available during analysis.
+
+- Finds `.docx` code review forms in each student's submission folder
+- Uses `mammoth` to convert the docx to HTML, then parses the table
+- Extracts per-item beta and production scores, `productionCompleted` flag, and group letter (`A`/`B`/`C`)
+- Attaches `student.codeReview` with `{ found, items[{betaScore, prodScore}], productionCompleted, group }`
+
 ### `analyze_code.js` — Feature Detection
 
 Regex-based analysis of student JavaScript files.
@@ -258,16 +355,49 @@ Regex-based analysis of student JavaScript files.
 - `findPartDir()` — multi-pass search for part subdirectories (game name matching, folder pattern fallback)
 - Checks for developer comments (name/date markers in files) and code review documents
 - `detectPartsPresent()` — scans extracted directory for part subdirectories; auto-detects `part1`, `part2`, etc. even without explicit `parts` config. Results stored in `analysis.partPresence`
-- **Custom analyzer hook** — `config.analysis.customAnalyzer` specifies a JS module (relative to `configs/{AssignmentName}/`) that receives `(jsFiles, analysis, config, student)` and can mutate `analysis` directly. Enables lab-specific checks beyond regex (e.g., Lab02's `modules` feature requires both `import` AND `export`, implemented in `configs/Lab02/lab02_analyzer.js`)
+- **Custom analyzer hook** — `config.analysis.customAnalyzer` specifies a JS module (relative to `configs/{AssignmentName}/`) that receives `(jsFiles, analysis, config, student)` and can mutate `analysis` directly. Enables lab-specific checks beyond regex (e.g., Lab02's `modules` feature requires both `import` AND `export`)
 
 ### `lint_code.js` — ESLint Runner
 
 Runs ESLint v9+ with flat config.
 
 - Uses `~/.eslint/eslint.config.mjs` — the same config VS Code uses, so lint results are consistent between the grader and the editor. `globals.browser` and `globals.node` are included via the `globals` npm package installed in `~/.eslint/`.
-- `getAllJsFiles()` collects `.js` files recursively, respecting per-lab exclusions (e.g., `node_modules`, `dist`, `part1`)
+- Collects `.js` files recursively, respecting per-lab exclusions (e.g., `node_modules`, `dist`, `part1`)
 - Outputs human-readable rule descriptions (42 rules mapped)
 - Writes `lint_report.json`
+- Attaches `student.lint` with `{ jsFiles, errors, warnings, errorMessages, warningMessages, messages }`
+
+### `validate_html.js` — HTML Validator
+
+Validates HTML files using `html-validate` (pure JS, fully offline — no network calls).
+
+- Collects `.html` and `.htm` files via `getAllFilesByExt`, respecting `config.validate.exclude`
+- Runs `html-validate` with `html-validate:recommended` preset by default; `no-trailing-whitespace` is disabled (cosmetic, not a validity issue)
+- Ruleset can be overridden per-lab via `config.validate.htmlExtends` (preset list) and `config.validate.htmlRules` (per-rule overrides)
+- Aggregates results: error count, warning count, per-rule counts, top-N issue list
+- Attaches `student.htmlValidation` with `{ htmlFiles, errors, warnings, messages, ruleCounts }`
+- Writes `html_validation_report.json`
+
+### `validate_css.js` — CSS Validator
+
+Validates CSS files using `csstree-validator` (pure JS, fully offline).
+
+- Collects `.css` files via `getAllFilesByExt`, respecting `config.validate.exclude`
+- Reports parse/syntax errors only — no warning tier (csstree doesn't have one)
+- Error names (e.g. `SyntaxReferenceError`, `SyntaxMatchError`) used as rule IDs in aggregation
+- Attaches `student.cssValidation` with `{ cssFiles, errors, warnings: 0, messages, ruleCounts }`
+- Writes `css_validation_report.json`
+
+### `check_names.js` — File/Folder Name Checker
+
+Checks every file and folder name in each student's submission for Linux/web portability.
+
+- **Rule:** name is invalid if it contains any character outside `[A-Za-z0-9._-]`, starts with `-`, or exceeds 255 bytes. Spaces are called out distinctly. Uppercase is allowed; dotfiles (`.gitignore`) pass.
+- Walks the submission tree with `walk()`, skipping `DEFAULT_SKIP_DIRS` and dot-directories
+- `config.nameCheck.extraAllowed` adds extra allowed characters (e.g. `+` for certain frameworks)
+- `config.validate.exclude` exclusion list also applies here
+- Attaches `student.nameCheck` with `{ entriesChecked, errors, messages, badNames }`
+- Writes `name_check_report.json`
 
 ### `generate_grades.js` — Rubric Spreadsheet Filler
 
@@ -284,21 +414,45 @@ Reads the rubric template and writes per-student graded spreadsheets.
 | `part_completed` | Yes | Generic version — checks `analysis.partPresence[partId]` |
 | `apps_in_repo` | Yes | Score if all parts found in GitHub repo |
 | `developer_comments` | Yes | Score if name/date markers found |
-| `code_review` | Yes | Score if review document found |
+| `code_review` | Yes | Full/half/zero based on review found + production column complete |
 | `url_check` | Partial | Writes URL for manual verification; score left blank |
-| `lint` | Yes | Score based on ESLint issue count. Optional `severity: "errors"` reports only errors (binary pass/fail); `severity: "warnings"` reports only warnings (graduated). Default uses combined total. |
-| `build_check` | Yes | Score based on build/run success |
-| `manual` | No | Writes "NEEDS MANUAL CHECK" — instructor fills in |
+| `deploy_check` | Partial | Fetches citstudent URL; scores reachability + bundling; flags transient failures for manual review |
+| `lint` | Yes | Score based on ESLint issue count. Optional `severity: "errors"` (binary pass/fail) or `"warnings"` (graduated). Default uses combined total. |
+| `html_validate` | Yes | Score based on HTML error count; `tolerance` (default 3) sets half-point tier |
+| `css_validate` | Yes | Score based on CSS error count; `tolerance` (default 3) sets half-point tier |
+| `name_check` | Yes | Score based on invalid name count; `tolerance` (default 2) sets half-point tier |
+| `build_check` | Yes | Score based on build success (from `"build"` or `"both"` mode) |
+| `browser_check` | Yes | Score based on browser console errors (from `"browser"` or `"both"` mode) |
+| `build_and_browser_check` | Yes | Full/half/zero based on both build and browser results combined |
+| `scripts_check` | Yes | Proportional score: how many of the specified npm scripts pass |
+| `manual` | No | Reads production/beta score from code review form; falls back to "NEEDS MANUAL CHECK" |
 | `part_feature` | Yes | Per-part feature check — reads `analysis.partFeatures[partId][featureId]` |
-| `repo_hygiene` | Yes | Score if no excluded folders (e.g. `node_modules`, `dist`) are committed to the repo; checked via `git ls-files` |
+| `repo_hygiene` | Yes | Score if no excluded folders (e.g. `node_modules`, `dist`) are committed to the repo |
 | `github_repo` | Yes | Score if a GitHub URL was provided and the repo was successfully cloned |
+| `collaborator_check` | Yes | Score if GitHub repo was cloned (proxy for instructor being added as collaborator) |
+| `gitignore_check` | Yes | Score if `.gitignore` file exists in the repo root |
+| `npm_package` | Yes | Score if any qualifying npm packages are imported (uses `analysis.npmPackages`) |
 | `package_check` | Yes | Score if `package.json` contains the expected `dependencies` and `devDependencies` |
+
+**`stockComments`:** Any mapping may include `stockComments: { full, partial, zero }` — short strings written into the comment cell instead of the verbose auto-generated comment. Handlers that set `keepComment: true` (e.g. `deploy_check` manual-review flags, validation errors) are **not** overridden by `stockComments.zero`, so diagnostics are never silently erased.
 
 **Per-part feature pipeline:** `featureCounts` entries in `config.parts[].featureCounts` are converted to `part_feature`-type virtual mappings and processed through the same handler pipeline. This means per-part and top-level scoring share the same logic; no separate code path is needed.
 
-**Macro/button preservation (`.xlsm` only):** SheetJS strips drawing objects and VBA data when re-writing. After SheetJS writes the output file, `adm-zip` is used to: (1) copy drawing XML, VML, and control-property ZIP entries from the template; (2) patch the Grade sheet XML to re-inject `<drawing>` / `<legacyDrawing>` / `<controls>` elements and any missing namespace declarations; (3) re-add all non-Grade sheets as `state="veryHidden"` — required because the VBA binary references every original sheet module by code name, and Excel refuses to load the VBA project if any referenced sheet is missing. The hidden sheets contain no cell data (just a `codeName` attribute) to avoid shared-string index mismatches. When `.xlsx`, only the `Grade` sheet is kept and no post-processing is needed.
+**Macro/button preservation (`.xlsm` only):** SheetJS strips drawing objects and VBA data when re-writing. After SheetJS writes the output file, `adm-zip` is used to: (1) copy drawing XML, VML, and control-property ZIP entries from the template; (2) patch the Grade sheet XML to re-inject `<drawing>` / `<legacyDrawing>` / `<controls>` elements and any missing namespace declarations; (3) re-add all non-Grade sheets as `state="veryHidden"` — required because the VBA binary references every original sheet module by code name, and Excel refuses to load the VBA project if any referenced sheet is missing. When `.xlsx`, only the `Grade` sheet is kept and no post-processing is needed.
 
 **AI summaries:** With `--ai-comments`, calls `ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`.
+
+### `lib/file_walker.js` — Shared Directory Traversal
+
+Used by analyze_code, lint_code, validate_html, validate_css, and check_names. Replaces several near-identical hand-rolled walkers.
+
+**Exports:**
+
+| Export | Purpose |
+|---|---|
+| `walk(dir, opts)` | Core pre-order DFS traversal. Callbacks: `visit`, `onFile`, `onDir`, `shouldSkip`, `shouldDescend`. Options: `followSymlinks` (default false), `maxDepth` (default Infinity). Unreadable dirs are silently skipped. |
+| `getAllFilesByExt(dir, ext, exclusions)` | Collect all files with a given extension (or array of extensions). Skips `DEFAULT_SKIP_DIRS`, dot-directories, and any path matching an exclusion substring. |
+| `DEFAULT_SKIP_DIRS` | `Set(['node_modules', 'dist', 'build', '.git', '__MACOSX'])` — dirs never scanned. |
 
 ### `ollama_comments.js` — AI Summary Generator
 
@@ -314,7 +468,7 @@ Hits a local Ollama instance (`http://localhost:11434`) to generate one-sentence
 
 Dumps a rubric spreadsheet's Grade sheet as Markdown. Not part of the grading pipeline.
 
-Usage: `node rubric_to_md.js path/to/Rubric.xlsm [output.md]`
+Usage: `node bin/rubric_to_md.js path/to/Rubric.xlsm [output.md]`
 
 ### `create_lab.js` — Assignment Configuration Wizard
 
@@ -349,14 +503,12 @@ Tests live in `test/create_lab.spec.mjs`.
 }
 ```
 
-Machine-specific. Gitignored. Created on first run. Both paths are prompted for interactively if missing:
+Machine-specific. Gitignored. Created on first run. Both paths are prompted for interactively if missing. On startup, `local-config.json` is tried first; `default-config.json` (shipped with the repo) is tried second; the old `env.json` is tried last as a migration path.
 
 | Field | Description |
 |---|---|
 | `labRoot` | The Google Drive folder containing all lab directories (e.g., `StudentLabWork`) |
-| `codeRoot` | A local folder **outside** Google Drive where student code is cloned/unzipped. The grader creates a `<labName>/` subfolder inside it automatically, so different labs' code stays separate |
-
-On first run after upgrading from the old `env.json` / `_env.json` layout, `labRoot` is read from `env.json` automatically; `codeRoot` will be prompted for once and saved.
+| `codeRoot` | A local folder **outside** Google Drive where student code is cloned/unzipped. The grader creates `<labName>/SubmissionsAndAssessment/` and `<labName>/ArtifactsAndRubrics/` inside it automatically |
 
 ### `configs/{AssignmentName}/{assignmentname}_config.json` schema
 
@@ -366,17 +518,31 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
   "titleCell": "A1",
   "titleText": "Lab X: Title",
   "summaryCell": "A2",
-  "runtimeCheck": "build" | "browser",
-  "variations": {
-    "A": { "appName": "App Name For Version A" },
-    "B": { "appName": "App Name For Version B" },
-    "C": { "appName": "App Name For Version C" }
+  "graderCell": "G1",
+  "runtimeCheck": "build" | "browser" | "both",
+  "codeReview": {
+    "studentNameCell": "B1",
+    "groupCell": "C1",
+    "manualFallback": "maxScore" | "zero" | "skip"
   },
   "lint": {
     "exclude": ["node_modules", "dist"]
   },
+  "validate": {
+    "exclude": ["node_modules", "dist"],
+    "htmlExtends": ["html-validate:recommended"],
+    "htmlRules": { "no-inline-style": "error" }
+  },
+  "nameCheck": {
+    "extraAllowed": "+"
+  },
   "repoHygiene": {
     "excludedFromRepo": ["node_modules", "dist"]
+  },
+  "packageCheck": {
+    "dependencies": ["vite"],
+    "devDependencies": [],
+    "allowedExtras": ["eslint"]
   },
   "analysis": {
     "features": [
@@ -399,23 +565,49 @@ On first run after upgrading from the old `env.json` / `_env.json` layout, `labR
     }
   ],
   "mappings": [
-    { "cell": "C10", "commentCell": "E10", "type": "feature", "featureId": "modules", "maxScore": 6 }
+    {
+      "cell": "C10",
+      "commentCell": "E10",
+      "type": "feature",
+      "featureId": "modules",
+      "maxScore": 6,
+      "stockComments": { "full": "Good", "partial": "Partial", "zero": "Missing" }
+    },
+    {
+      "cell": "C12",
+      "commentCell": "E12",
+      "type": "html_validate",
+      "maxScore": 4,
+      "tolerance": 0
+    },
+    {
+      "cell": "C13",
+      "commentCell": "E13",
+      "type": "scripts_check",
+      "maxScore": 3,
+      "scripts": ["dev", "build", "preview"]
+    }
   ]
 }
 ```
 
 | Field | Required | Description |
 |---|---|---|
-| `rubricName` | Yes | Filename of the rubric spreadsheet in the lab directory |
-| `titleCell` | No | Cell to write the lab title |
-| `titleText` | No | Lab title text |
-| `summaryCell` | No | Cell for the AI-generated or manual summary comment |
-| `runtimeCheck` | Yes | `"build"` or `"browser"` |
-| `variations` | No | Lab version groups (A/B/C) and the app each group implements. Each variation object holds at least `appName`; future field-based variations (e.g., feature lists) can be added alongside `appName`. For multi-part labs where each part has its own variation, put `variations` inside each `parts[]` entry instead of at the top level. The student's group letter comes from the "Developer's lab version" field at the top of the Code Review form. |
+| `rubricName` | Yes | Filename of the rubric spreadsheet in `configs/{AssignmentName}/` |
+| `titleCell` / `titleText` | No | Cell and text for the lab title |
+| `summaryCell` | No | Cell for AI-generated or manual summary comment |
+| `graderCell` | No | Cell written with "Computer"; triggers versioned copy on regrade if changed |
+| `runtimeCheck` | Yes | `"build"`, `"browser"`, or `"both"` |
+| `codeReview` | No | Cell refs for student name and group letter in rubric |
 | `lint.exclude` | No | Path substrings to skip during linting |
-| `repoHygiene.excludedFromRepo` | No | Folder names that should not be committed to the repo (e.g. `node_modules`, `dist`). Checked via `git ls-files`; only applies to git-cloned submissions. |
+| `validate.exclude` | No | Path substrings to skip during HTML/CSS validation and name checks |
+| `validate.htmlExtends` | No | Override html-validate preset list |
+| `validate.htmlRules` | No | Per-rule overrides for html-validate |
+| `nameCheck.extraAllowed` | No | Extra characters allowed in file/folder names |
+| `repoHygiene.excludedFromRepo` | No | Folder names that should not be committed to the repo |
+| `packageCheck` | No | Expected npm package sections; `allowedExtras` whitelists student-added packages |
 | `analysis.features` | Yes | Array of features to detect via regex |
-| `analysis.customAnalyzer` | No | Path (relative to `configs/{AssignmentName}/`) to a JS module for assignment-specific analysis |
+| `analysis.customAnalyzer` | No | Path (relative to `configs/{AssignmentName}/`) to a custom analysis module |
 | `parts` | No | Multi-part lab configuration |
 | `mappings` | Yes | Array of rubric cell assignments |
 
@@ -436,16 +628,16 @@ The wizard guides you through:
 
 Choose between two mapping modes:
 - **cell-by-cell wizard** — reads the rubric Grade sheet via xlsx, displays each row with auto-derived cell references, and lets you assign mapping types row by row
-- **simplified checklist** — yes/no for each of 16 common mapping types (feature, manual, lint, code_review, etc.), prompting for cell references and scores
+- **simplified checklist** — yes/no for each of the common mapping types (feature, manual, lint, code_review, html_validate, etc.), prompting for cell references and scores
 
 ### Manual setup
 
 1. Create `configs/{AssignmentName}/` (e.g., `configs/Lab05/` or `configs/TermProject/`)
 2. Create `configs/{AssignmentName}/{assignmentname}_config.json` following the schema above
 3. Copy the rubric spreadsheet (`CS233JS_{AssignmentName}_Rubric.xlsx` or `.xlsm`) into `configs/{AssignmentName}/`
-4. ESLint config is shared across all assignments via `~/.eslint/eslint.config.mjs` — no per-assignment config needed. Edit that file if lint rules need to change globally.
-5. (Optional) Create `configs/{AssignmentName}/{assignmentname}_analyzer.js` if the assignment needs custom analysis beyond regex-based feature counting. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`
-6. Run `node run_all.js` — the new assignment will appear in the menu automatically (the menu scans `configs/` subdirectories for a matching `{assignmentname}_config.json`)
+4. ESLint config is shared across all assignments via `~/.eslint/eslint.config.mjs` — no per-assignment config needed.
+5. (Optional) Create `configs/{AssignmentName}/{assignmentname}_analyzer.js` if the assignment needs custom analysis. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`.
+6. Run `node run_all.js` — the new assignment will appear in the menu automatically.
 
 ## Data Flow
 
@@ -457,18 +649,26 @@ graph LR
     end
 
     extract -->|populates| students
-    runtime -.->|attaches| runtimeData["student.runtimeCheck"]
+    runtime -.->|attaches| runtimeData["student.runtimeCheck\nstudent.scriptsCheck"]
+    code_review -.->|attaches| crData["student.codeReview"]
     analyze -.->|attaches| analysisData["student.analysis"]
     lint -.->|attaches| lintData["student.lint"]
+    val_html -.->|attaches| htmlData["student.htmlValidation"]
+    val_css -.->|attaches| cssData["student.cssValidation"]
+    check_names -.->|attaches| nameData["student.nameCheck"]
     grades --> gradeSummary
 
     students --> runtime
+    students --> code_review
     students --> analyze
     students --> lint
+    students --> val_html
+    students --> val_css
+    students --> check_names
     students --> grades
 ```
 
-Each phase attaches its results directly to each student object. After extraction, students carry `filesDir`, `extractedDir`, `urls`. The runtime check attaches `student.runtimeCheck`, analysis attaches `student.analysis` (features, `partFeatures`, `partPresence`, code review flags, custom analyzer output), and lint attaches `student.lint`. The grade generator reads all data from the student objects — no name-based joins needed.
+Each phase attaches its results directly to each student object. After extraction, students carry `filesDir`, `extractedDir`, `urls`. Subsequent phases attach `student.runtimeCheck` / `student.scriptsCheck`, `student.codeReview`, `student.analysis`, `student.lint`, `student.htmlValidation`, `student.cssValidation`, and `student.nameCheck`. The grade generator reads all data from the student objects — no name-based joins needed.
 
 ## Google Drive Considerations
 

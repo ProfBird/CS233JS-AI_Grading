@@ -84,7 +84,7 @@ configs/{AssignmentName}/
 - Detection rule: top-level `{assignmentname}_config.json` is **absent**, but one or more subdirectories each contain a `{subdir_lower}_config.json`.
 - `rubricName` in each step config is the filename only (e.g. `"CS233JS_DevEnvAndStaticSite_Rubric.xlsm"`), resolved relative to that step's subdirectory.
 - Run: `node run_all.js TermProject DevEnvAndStaticSite` (or just `node run_all.js TermProject` for an interactive step picker).
-- The Moodle labRoot must also have matching step subdirectories: `<labRoot>/TermProject/DevEnvAndStaticSite/`.
+- If the labRoot has a matching step subdirectory (e.g. `<labRoot>/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from `<labRoot>/TermProject/` directly — the labRoot step layout is optional.
 - `create_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step to set up each step's config.
 
 **Converting a flat lab to multi-step:**

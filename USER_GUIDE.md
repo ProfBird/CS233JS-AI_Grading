@@ -104,7 +104,7 @@ AI_Grading/                   ← this tool (git repo)
 **Multi-step lab** — separate submission sets for different stages of the same project (e.g., TermProject with DevEnvAndStaticSite, ApiDoc, Beta, Production):
 - No top-level config file; each step gets its own subdirectory under `configs/{AssignmentName}/{StepName}/`
 - Each step subdir contains `{stepname_lower}_config.json` and its own rubric template
-- Moodle labRoot must have matching step subdirectories: `<labRoot>/TermProject/DevEnvAndStaticSite/`
+- If the labRoot has a matching step subdirectory (e.g. `<labRoot>/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from the lab root directly — the labRoot step layout is optional
 - Run a specific step: `node run_all.js TermProject DevEnvAndStaticSite`
 - Run interactively (step picker shown): `node run_all.js TermProject`
 - `create_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step

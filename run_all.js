@@ -422,6 +422,8 @@ async function main() {
 
         // For multi-step labs: descend into the step subdir within labRoot/labName.
         // Case-insensitively resolve the step folder name in case labRoot casing differs.
+        // If the step subdir doesn't exist in labRoot, fall back to the lab root itself —
+        // Moodle downloads don't need to mirror the configs step layout.
         if (stepName) {
             let stepDirName = stepName;
             try {
@@ -429,12 +431,11 @@ async function main() {
                 if (m) stepDirName = m;
             } catch (e) { /* use stepName as-is */ }
             const stepPath = path.join(labDir, stepDirName);
-            if (!fs.existsSync(stepPath)) {
-                console.error(`ERROR: Step directory not found at ${stepPath}`);
-                console.error(`  Make sure "${stepName}" matches a subfolder of ${labDir}`);
-                process.exit(1);
+            if (fs.existsSync(stepPath)) {
+                labDir = stepPath;
+            } else {
+                console.log(`  Note: no "${stepName}" subfolder found in labRoot — using submissions from ${labDir}\n`);
             }
-            labDir = stepPath;
         }
 
         // If labDir has no direct Moodle submissions but contains subdirectories that do

@@ -42,10 +42,11 @@ node bin/create_lab.js TermProject   # pre-specify a non-numbered assignment
 ```
 
 The wizard will:
-1. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm)
-2. Copy it into `configs/{AssignmentName}/` with the standard naming convention
-3. Guide you through configuring title, runtime mode, feature regexes, and rubric cell mappings
-4. Optionally create a custom analyzer skeleton
+1. Ask whether the lab has **multiple sets of submissions** (e.g., Proposal, Beta, Production). If yes, it prompts for the first step name and creates a step-level config (`configs/{AssignmentName}/{StepName}/`). Run the wizard again to add more steps.
+2. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm)
+3. Copy it into `configs/{AssignmentName}/` (or the step subdirectory) with the standard naming convention
+4. Guide you through configuring title, runtime mode, feature regexes, and rubric cell mappings
+5. Optionally create a custom analyzer skeleton
 
 ### File layout
 
@@ -55,8 +56,11 @@ AI_Grading/                   ← this tool (git repo)
   └── configs/
       ├── local-config.json   ← machine-specific paths (auto-created, gitignored)
       └── {AssignmentName}/
-          ├── {assignmentname}_config.json     ← rubric configuration
-          └── CS233JS_{AssignmentName}_Rubric.xlsx  ← rubric template
+          ├── {assignmentname}_config.json     ← rubric config (flat lab)
+          ├── CS233JS_{AssignmentName}_Rubric.xlsx  ← rubric template
+          └── {StepName}/                      ← multi-step: one subdir per step
+              ├── {stepname}_config.json       ← e.g. apidoc_config.json
+              └── CS233JS_{StepName}_Rubric.xlsx
 
 <labRoot>/                    ← your assignment data (on Google Drive)
   └── {AssignmentName}/
@@ -65,21 +69,55 @@ AI_Grading/                   ← this tool (git repo)
       └── StudentName_12345_assignsubmission_onlinetext/
           └── onlinetext.html
 
+  # Multi-step labs: Moodle downloads live in step subdirectories
+  └── {AssignmentName}/
+      └── {StepName}/
+          ├── StudentName_12345_assignsubmission_file/
+          └── StudentName_12345_assignsubmission_onlinetext/
+
 <codeRoot>/                   ← local folder outside Google Drive
-  └── {AssignmentName}/       ← created automatically per assignment
+  └── {AssignmentName}/       ← created automatically per assignment (flat lab)
       ├── ArtifactsAndRubrics/
-      │   ├── analysis_report.json
-      │   ├── lint_report.json
-      │   ├── runtime_report.json
-      │   ├── html_validation_report.json
-      │   ├── css_validation_report.json
-      │   ├── name_check_report.json
-      │   └── grading_log.txt
+      │   └── ...
       └── SubmissionsAndAssessment/
           └── StudentName/
               ├── repo/  (or extracted_code/)
               └── StudentName_Grade.xlsx
+
+  # Multi-step labs: each step gets its own output tree
+  └── {AssignmentName}/
+      └── {StepName}/
+          ├── ArtifactsAndRubrics/
+          └── SubmissionsAndAssessment/
+              └── StudentName/
+                  └── StudentName_Grade.xlsx
 ```
+
+### Flat labs vs. multi-step labs
+
+**Flat lab** — a single submission set graded as one unit (Lab03, Lab06, etc.):
+- One config file at `configs/{AssignmentName}/{assignmentname}_config.json`
+- Rubric template lives alongside the config
+- Run: `node run_all.js Lab06`
+- `create_lab.js` creates this layout by default (answer "No" when asked about multiple submission sets)
+
+**Multi-step lab** — separate submission sets for different stages of the same project (e.g., TermProject with DevEnvAndStaticSite, ApiDoc, Beta, Production):
+- No top-level config file; each step gets its own subdirectory under `configs/{AssignmentName}/{StepName}/`
+- Each step subdir contains `{stepname_lower}_config.json` and its own rubric template
+- Moodle labRoot must have matching step subdirectories: `<labRoot>/TermProject/DevEnvAndStaticSite/`
+- Run a specific step: `node run_all.js TermProject DevEnvAndStaticSite`
+- Run interactively (step picker shown): `node run_all.js TermProject`
+- `create_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step
+
+**Converting a flat lab to multi-step** (e.g., you want to add a Beta step to a lab that currently only has a Production config):
+```bash
+mkdir configs/LabName/StepName
+mv configs/LabName/labname_config.json configs/LabName/StepName/stepname_config.json
+mv configs/LabName/*.xlsm configs/LabName/StepName/
+# Then edit rubricName in the moved config to remove any path prefix
+```
+
+---
 
 ### First-time setup
 
@@ -116,12 +154,14 @@ npm run test:watch      # re-run tests on file changes
 ### Command-line mode
 
 ```bash
-node run_all.js Lab04                   # grade Lab04 (normal mode)
-node run_all.js Lab04 --regrade         # re-grade without re-cloning
-node run_all.js Lab04 --reclone         # fresh clone + full grade
-node run_all.js Lab04 --ai-comments     # grade with AI summary comments
-node run_all.js Lab04 --ai-model=qwen3-coder   # use a specific Ollama model
-node run_all.js Lab04 --text-report     # generate .txt reports instead of spreadsheets
+node run_all.js Lab04                        # grade Lab04 (normal mode)
+node run_all.js Lab04 --regrade              # re-grade without re-cloning
+node run_all.js Lab04 --reclone              # fresh clone + full grade
+node run_all.js Lab04 --ai-comments          # grade with AI summary comments
+node run_all.js Lab04 --ai-model=qwen3-coder # use a specific Ollama model
+node run_all.js Lab04 --text-report          # generate .txt reports instead of spreadsheets
+node run_all.js TermProject ApiDoc           # grade one step of a multi-step lab
+node run_all.js TermProject                  # interactive step picker for multi-step lab
 ```
 
 ### Flags
@@ -198,4 +238,4 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 
 **Rubric not found:** If the rubric spreadsheet isn't in `configs/{AssignmentName}/`, the grader will prompt you to provide one or automatically switch to `--text-report` mode (generates `.txt` files instead).
 
-**Output files:** Each student gets a graded spreadsheet (or `.txt` report) in `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/`. A `grading_log.txt` summary is written to `<codeRoot>/<labName>/ArtifactsAndRubrics/`. JSON reports for each pipeline phase (analysis, lint, runtime, HTML validation, CSS validation, name checks) are also written there.
+**Output files:** Each student gets a graded spreadsheet (or `.txt` report) in `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/` (flat) or `<codeRoot>/<labName>/<stepName>/SubmissionsAndAssessment/StudentName/` (multi-step). A `grading_log.txt` summary is written to the corresponding `ArtifactsAndRubrics/` folder, alongside JSON reports for each pipeline phase.

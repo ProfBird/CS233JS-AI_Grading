@@ -12,6 +12,7 @@ const {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
     readRubricRows, readRubricCriteria, buildConfig, writeLab,
     findSpreadsheets, keywordsToFolderPattern, guessMappingType,
+    getExistingSteps,
 } = await import('../lib/lab_config.js');
 
 const {
@@ -518,6 +519,61 @@ describe('buildConfig', () => {
         expect(config.rubricName).toBeUndefined();
         expect(config.runtimeCheck).toBeUndefined();
         expect(config.analysis).toBeUndefined();
+    });
+});
+
+// ── getExistingSteps ────────────────────────────────────────────────────
+
+describe('getExistingSteps', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'get_existing_steps_'));
+    });
+
+    afterEach(() => {
+        rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('returns [] when the lab directory does not exist', () => {
+        expect(getExistingSteps('NoSuchLab', tmpDir)).toEqual([]);
+    });
+
+    it('returns [] for a flat lab (top-level config present)', () => {
+        mkdirSync(join(tmpDir, 'Lab03'), { recursive: true });
+        writeFileSync(join(tmpDir, 'Lab03', 'lab03_config.json'), '{}');
+        expect(getExistingSteps('Lab03', tmpDir)).toEqual([]);
+    });
+
+    it('returns [] when lab dir exists but no step subdirs have configs', () => {
+        mkdirSync(join(tmpDir, 'TermProject', 'DevEnvAndStaticSite'), { recursive: true });
+        // no config json in the subdir
+        expect(getExistingSteps('TermProject', tmpDir)).toEqual([]);
+    });
+
+    it('returns step names sorted when step subdirs each have their own config', () => {
+        const base = join(tmpDir, 'TermProject');
+        for (const step of ['Proposal', 'ApiDoc', 'Beta']) {
+            mkdirSync(join(base, step), { recursive: true });
+            writeFileSync(join(base, step, `${step.toLowerCase()}_config.json`), '{}');
+        }
+        expect(getExistingSteps('TermProject', tmpDir)).toEqual(['ApiDoc', 'Beta', 'Proposal']);
+    });
+
+    it('excludes subdirs that are present but have no matching config json', () => {
+        const base = join(tmpDir, 'TermProject');
+        mkdirSync(join(base, 'ApiDoc'), { recursive: true });
+        writeFileSync(join(base, 'ApiDoc', 'apidoc_config.json'), '{}');
+        mkdirSync(join(base, 'assets'), { recursive: true }); // no config
+        expect(getExistingSteps('TermProject', tmpDir)).toEqual(['ApiDoc']);
+    });
+
+    it('ignores subdirs whose config file does not follow the {subdir_lower}_config.json convention', () => {
+        const base = join(tmpDir, 'TermProject');
+        mkdirSync(join(base, 'ApiDoc'), { recursive: true });
+        // wrong name — 'config.json' instead of 'apidoc_config.json'
+        writeFileSync(join(base, 'ApiDoc', 'config.json'), '{}');
+        expect(getExistingSteps('TermProject', tmpDir)).toEqual([]);
     });
 });
 

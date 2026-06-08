@@ -11,7 +11,7 @@ const {
     normalizeAssignmentName, sheetRows, isBlankRow, cellText,
     POSSIBLE_HEADER_RE, detectRubricLayout,
     readRubricRows, readRubricCriteria,
-    findSpreadsheets, getExistingAssignments, keywordsToFolderPattern,
+    findSpreadsheets, getExistingAssignments, getExistingSteps, keywordsToFolderPattern,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA,
     guessMappingType, buildConfig, writeLab,
 } = require('../lib/lab_config.js');
@@ -534,11 +534,61 @@ async function main() {
             }
         }
 
-        const labDir = path.join(CONFIGS_DIR, labName);
+        // 1b. Multi-step detection — must happen before labDir is set
+        const labTopDir = path.join(CONFIGS_DIR, labName);
+        const existingSteps = getExistingSteps(labName);
+        let stepName = null;
+
+        if (existingSteps.length > 0) {
+            // Already a multi-step lab — prompt for which step to create/edit
+            const stepOptions = [
+                ...existingSteps.map(s => ({ label: s, value: s, desc: 'Edit existing step' })),
+                { label: 'Add new step', value: '__new__', desc: 'Create a new submission step for this lab' },
+            ];
+            const stepChoice = await askOptions(rl, `${labName} has multiple submission steps. Which step?`, stepOptions);
+            if (stepChoice === '__new__') {
+                while (true) {
+                    const raw = (await ask(rl, 'New step name (e.g. TermProjectProposal): ')).trim();
+                    if (!raw) { console.log('  Step name is required.'); continue; }
+                    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw)) {
+                        console.log('  Invalid name. Use letters, numbers, underscores, or hyphens.'); continue;
+                    }
+                    stepName = raw;
+                    break;
+                }
+            } else {
+                stepName = stepChoice;
+            }
+        } else if (!fs.existsSync(labTopDir)) {
+            // Brand-new lab — ask upfront before anything else
+            const multi = await askBoolean(rl, 'Will there be multiple sets of submissions for this lab?', false);
+            if (multi) {
+                while (true) {
+                    const raw = (await ask(rl, 'Step name (e.g. TermProjectProposal): ')).trim();
+                    if (!raw) { console.log('  Step name is required.'); continue; }
+                    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw)) {
+                        console.log('  Invalid name. Use letters, numbers, underscores, or hyphens.'); continue;
+                    }
+                    stepName = raw;
+                    break;
+                }
+            }
+        }
+        // If labTopDir exists with a flat config, stepName stays null (existing flat lab).
+
+        // configBaseName is the folder/file stem used for {name}_config.json and {name}_analyzer.js
+        const configBaseName = stepName || labName;
+        const labDir = stepName ? path.join(labTopDir, stepName) : labTopDir;
+
+        // For a multi-step lab: re-derive isEditingExisting based on the step config, not the top-level config
+        if (stepName) {
+            isEditingExisting = fs.existsSync(path.join(labDir, `${stepName.toLowerCase()}_config.json`));
+        }
+
         let useExisting = false;
         if (fs.existsSync(labDir)) {
             if (isEditingExisting) {
-                console.log(`\n  Editing existing assignment: ${labName}`);
+                console.log(`\n  Editing existing assignment: ${labName}${stepName ? ' / ' + stepName : ''}`);
                 const choice = await askOptions(rl, '  How do you want to proceed?', [
                     { label: 'Keep existing files',  value: 'keep',      desc: 'Preserves rubric and other files; rewrites config only' },
                     { label: 'Overwrite everything', value: 'overwrite', desc: 'Full wizard, existing files may be replaced' },
@@ -572,15 +622,16 @@ async function main() {
             console.log('\n--- Writing Files ---');
             writeLab(labDir, config, null, null);
             console.log('\n=== Done! ===');
-            console.log(`  Extract-only config: ${path.join(labDir, labName.toLowerCase() + '_config.json')}`);
-            console.log('  Run:  node run_all.js ' + labName + '\n');
+            console.log(`  Extract-only config: ${path.join(labDir, configBaseName.toLowerCase() + '_config.json')}`);
+            const runCmd = stepName ? `node run_all.js ${labName} ${stepName}` : `node run_all.js ${labName}`;
+            console.log('  Run:  ' + runCmd + '\n');
             return;
         }
 
         // 2. Rubric + mode selection
         let rubricName, rubricDest;
         if (useExisting) {
-            const configPath = path.join(labDir, `${labName.toLowerCase()}_config.json`);
+            const configPath = path.join(labDir, `${configBaseName.toLowerCase()}_config.json`);
             let existingConfig = null;
             try {
                 if (fs.existsSync(configPath)) existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -605,7 +656,7 @@ async function main() {
                     found.map(f => ({ label: f, value: f })));
             } else {
                 console.log('  No spreadsheet found in existing directory. Please provide one to copy in.');
-                const r = await copyRubric(rl, labName);
+                const r = await copyRubric(rl, configBaseName);
                 rubricName = r.rubricName;
                 fs.copyFileSync(r.rubricPath, path.join(labDir, rubricName));
                 console.log(`  Copied rubric to: ${path.join(labDir, rubricName)}`);
@@ -638,7 +689,7 @@ async function main() {
                 }
             }
 
-            const r = await copyRubric(rl, labName);
+            const r = await copyRubric(rl, configBaseName);
             const destDir = rubricSubDir ? path.join(labDir, rubricSubDir) : labDir;
             rubricName = rubricSubDir ? path.join(rubricSubDir, r.rubricName) : r.rubricName;
             rubricDest = path.join(labDir, rubricName);
@@ -684,8 +735,8 @@ async function main() {
         const optional = await promptOptionalFields(rl);
 
         // 10. Custom analyzer
-        const analyzerContent = await promptAnalyzer(rl, labName);
-        const analyzerName = analyzerContent ? `${labName.toLowerCase()}_analyzer.js` : null;
+        const analyzerContent = await promptAnalyzer(rl, configBaseName);
+        const analyzerName = analyzerContent ? `${configBaseName.toLowerCase()}_analyzer.js` : null;
 
         // 11. Assemble and write
         const config = buildConfig(labName, {
@@ -697,14 +748,16 @@ async function main() {
         writeLab(labDir, config, analyzerContent, analyzerName);
 
         console.log('\n=== Done! ===');
-        console.log(`  Config written to: ${path.join(labDir, labName.toLowerCase() + '_config.json')}`);
+        console.log(`  Config written to: ${path.join(labDir, configBaseName.toLowerCase() + '_config.json')}`);
         if (useExisting) {
             console.log(`  Existing files preserved (rubric and other files were not overwritten).`);
         } else {
             console.log(`  Rubric copied to: ${rubricDest}`);
         }
         if (analyzerName) console.log(`  Analyzer created at: ${path.join(labDir, analyzerName)}`);
+        const runCmd = stepName ? `node run_all.js ${labName} ${stepName}` : `node run_all.js ${labName}`;
         console.log('\n  You can now edit the config file to adjust cell references or add more mappings.');
+        console.log('  Grade with:  ' + runCmd);
         console.log('  To verify, run: node bin/rubric_to_md.js ' + JSON.stringify(rubricDest) + '\n');
 
     } finally {

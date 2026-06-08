@@ -11,6 +11,7 @@ node run_all.js Lab03 --regrade   # re-run grading phases, keep extracted code
 node run_all.js Lab03 --reclone         # delete extracted code, re-clone, then grade
 node run_all.js Lab03 --ai-comments     # grade with Ollama-generated rubric summary sentences
 node run_all.js Lab06 --text-report     # grade without rubric spreadsheet, generates .txt reports
+node run_all.js TermProject ApiDoc      # grade one step of a multi-step lab
 npx eslint --format json path/to/files/*.js
 
 node bin/rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
@@ -56,9 +57,42 @@ npx vitest                  # watch mode
 - **lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
 - **lib/ollama_comments.js** — HTTP client for a local Ollama server; generates one-sentence AI rubric summaries.
 
-### Config files (`configs/{AssignmentName}/{assignmentname}_config.json`)
+### Config files
 
-Per-assignment JSON specifying rubric filename, runtime check mode, feature regexes, and cell mappings. The `parts` key (optional) handles multi-part labs with per-part feature counts. The rubric template (`.xlsx`/`.xlsm`) is stored alongside the config in the same `configs/{AssignmentName}/` directory.
+Two layouts are supported — flat (single submission set) and multi-step (multiple submission sets, e.g., Proposal + DevEnv + ApiDoc + Beta + Production).
+
+**Flat lab** — one config at the assignment level:
+```
+configs/{AssignmentName}/
+  {assignmentname}_config.json          # e.g. lab06_config.json
+  CS233JS_{AssignmentName}_Rubric.xlsm  # rubric template lives alongside config
+  {assignmentname}_analyzer.js          # optional custom analyzer
+```
+- `rubricName` in the config is the filename only (e.g. `"CS233JS_Lab06_Rubric.xlsm"`), resolved relative to the config's directory.
+- Run: `node run_all.js Lab06`
+
+**Multi-step lab** — one subdirectory per submission step, no top-level config:
+```
+configs/{AssignmentName}/
+  {StepName}/                                     # e.g. DevEnvAndStaticSite/
+    {stepname_lower}_config.json                  # e.g. devenvandstaticsite_config.json
+    CS233JS_{StepName}_Rubric.xlsm                # rubric lives in the step subdir
+  {AnotherStep}/
+    {anotherstep_lower}_config.json
+    CS233JS_{AnotherStep}_Rubric.xlsm
+```
+- Detection rule: top-level `{assignmentname}_config.json` is **absent**, but one or more subdirectories each contain a `{subdir_lower}_config.json`.
+- `rubricName` in each step config is the filename only (e.g. `"CS233JS_DevEnvAndStaticSite_Rubric.xlsm"`), resolved relative to that step's subdirectory.
+- Run: `node run_all.js TermProject DevEnvAndStaticSite` (or just `node run_all.js TermProject` for an interactive step picker).
+- The Moodle labRoot must also have matching step subdirectories: `<labRoot>/TermProject/DevEnvAndStaticSite/`.
+- `create_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step to set up each step's config.
+
+**Converting a flat lab to multi-step:**
+1. `mkdir configs/{Lab}/{StepName}`
+2. `mv configs/{Lab}/{lab}_config.json configs/{Lab}/{StepName}/{stepname_lower}_config.json`
+3. `mv configs/{Lab}/*.xlsm configs/{Lab}/{StepName}/` (move rubric into step subdir)
+4. Update `rubricName` in the moved config to remove any path prefix — just the filename.
+5. Organize the Moodle labRoot downloads into `<labRoot>/{Lab}/{StepName}/` subdirectories.
 
 ### Directory structure
 
@@ -85,9 +119,12 @@ AI_Grading/   ← this directory
   ├── configs/
   │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
   │   └── {AssignmentName}/
-  │       ├── {assignmentname}_config.json    # rubric config, feature regexes, cell mappings
+  │       ├── {assignmentname}_config.json    # flat-lab: rubric config, feature regexes, cell mappings
   │       ├── CS233JS_{AssignmentName}_Rubric.xlsm  # rubric template (tracked in git)
-  │       └── {assignmentname}_analyzer.js   # optional custom analyzer (if any)
+  │       ├── {assignmentname}_analyzer.js   # optional custom analyzer (if any)
+  │       └── {StepName}/                    # multi-step lab: one subdir per submission step
+  │           ├── {stepname}_config.json     # step-level config (e.g. apidoc_config.json)
+  │           └── CS233JS_{StepName}_Rubric.xlsm
   └── ...
 
 <labRoot>/    (on Google Drive — raw Moodle downloads only, nothing created here)
@@ -97,8 +134,14 @@ AI_Grading/   ← this directory
       └── StudentName_12345_assignsubmission_onlinetext/
           └── onlinetext.html
 
+  # Multi-step: Moodle downloads are in step subdirectories
+  └── {AssignmentName}/
+      └── {StepName}/
+          ├── StudentName_12345_assignsubmission_file/
+          └── StudentName_12345_assignsubmission_onlinetext/
+
 <codeRoot>/   (local, outside Google Drive)
-  └── {AssignmentName}/  ← created automatically; keeps different assignments separate
+  └── {AssignmentName}/  ← flat lab: created automatically; keeps different assignments separate
       ├── ArtifactsAndRubrics/   ← grader-produced files (reports, log)
       │   ├── analysis_report.json
       │   ├── lint_report.json
@@ -111,6 +154,14 @@ AI_Grading/   ← this directory
           └── StudentName/
               ├── repo/  (GitHub clone)  or  extracted_code/  (unzipped)
               └── StudentName_Grade.xlsx
+
+  # Multi-step: each step gets its own ArtifactsAndRubrics + SubmissionsAndAssessment tree
+  └── {AssignmentName}/
+      └── {StepName}/
+          ├── ArtifactsAndRubrics/
+          └── SubmissionsAndAssessment/
+              └── StudentName/
+                  └── StudentName_Grade.xlsx
 ```
 
 

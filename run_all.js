@@ -27,6 +27,8 @@ const runtimeCheck = require('./pipeline/runtime_check.js');
 const generateGrades = require('./pipeline/generate_grades.js');
 const readCodeReview = require('./pipeline/read_code_review.js');
 
+const { getExistingSteps } = require('./lib/lab_config.js');
+
 const { VALID_MAPPING_TYPES } = generateGrades;
 const { CODE_DIR, REPO_DIR } = extractCode;
 
@@ -41,12 +43,14 @@ function showHelp() {
 CS233JS AI Grader v1.0
 
 USAGE
-  node run_all.js [labName] [options]
+  node run_all.js [labName] [stepName] [options]
 
   If no arguments are given, an interactive menu is shown.
+  For multi-step labs, stepName selects which submission set to grade.
 
 ARGUMENTS
-  labName          Name of the lab directory (e.g. Lab03)
+  labName          Name of the lab directory (e.g. Lab03, TermProject)
+  stepName         Step within a multi-step lab (e.g. ApiDoc, TermProjectProposal)
 
 OPTIONS
   --regrade        Re-run all grading phases (runtime check, analysis, lint,
@@ -77,6 +81,7 @@ EXAMPLES
   node run_all.js Lab03 --reclone              Fresh clone + full grade
   node run_all.js Lab03 --ai-comments          Grade with AI summaries (auto model)
   node run_all.js Lab03 --ai-model=qwen3-coder Grade with a specific model
+  node run_all.js TermProject ApiDoc           Grade one step of a multi-step lab
 `);
 }
 
@@ -238,6 +243,7 @@ async function main() {
     const hasAnyFlag = hasRegradeFlag || hasRecloneFlag;
 
     let labName = positional[0];
+    let stepName = null;     // set for multi-step labs (e.g. node run_all.js TermProject ApiDoc)
     let reclone = hasRecloneFlag;
     let regrade = hasRegradeFlag || hasRecloneFlag;
     let config, labDir, labConfigDir, artifactsDir, submissionsDir;
@@ -298,7 +304,12 @@ async function main() {
                 const subdir = path.join(configsDir, f);
                 try { return fs.statSync(subdir).isDirectory(); } catch (e) { return false; }
             })
-            .filter(name => fs.existsSync(path.join(configsDir, name, `${name.toLowerCase()}_config.json`)))
+            .filter(name =>
+                // flat lab: top-level config exists
+                fs.existsSync(path.join(configsDir, name, `${name.toLowerCase()}_config.json`)) ||
+                // multi-step lab: at least one step subdir has its own config
+                getExistingSteps(name).length > 0
+            )
             .map(name => {
                 // Restore original casing from labRoot if the directory exists
                 const match = fs.existsSync(labRoot)
@@ -333,8 +344,45 @@ async function main() {
             completions = [];
         }
 
-        labConfigDir = path.join(__dirname, 'configs', labName);
-        const configPath = path.join(labConfigDir, `${labName.toLowerCase()}_config.json`);
+        // Multi-step lab: detect available steps and resolve which one to grade
+        {
+            const existingSteps = getExistingSteps(labName);
+            if (existingSteps.length > 0) {
+                const stepArg = positional[1]; // e.g. node run_all.js TermProject ApiDoc
+                if (stepArg) {
+                    const match = existingSteps.find(s => s.toLowerCase() === stepArg.toLowerCase());
+                    if (!match) {
+                        console.error(`ERROR: Step "${stepArg}" not found in ${labName}.`);
+                        console.error(`  Available steps: ${existingSteps.join(', ')}`);
+                        process.exit(1);
+                    }
+                    stepName = match;
+                } else {
+                    console.log(`\n${labName} has multiple submission steps:`);
+                    existingSteps.forEach((s, i) => console.log(`  ${i + 1}) ${s}`));
+                    console.log();
+                    completions = existingSteps;
+                    while (!stepName) {
+                        const input = await askRl('Select a step (number or name): ');
+                        const num = parseInt(input);
+                        if (!isNaN(num) && num >= 1 && num <= existingSteps.length) {
+                            stepName = existingSteps[num - 1];
+                        } else if (existingSteps.find(s => s.toLowerCase() === input.trim().toLowerCase())) {
+                            stepName = existingSteps.find(s => s.toLowerCase() === input.trim().toLowerCase());
+                        } else {
+                            console.log('  Invalid selection, try again.');
+                        }
+                    }
+                    completions = [];
+                }
+                console.log(`  Step: ${stepName}\n`);
+            }
+        }
+
+        labConfigDir = stepName
+            ? path.join(__dirname, 'configs', labName, stepName)
+            : path.join(__dirname, 'configs', labName);
+        const configPath = path.join(labConfigDir, `${path.basename(labConfigDir).toLowerCase()}_config.json`);
         if (!fs.existsSync(configPath)) {
             console.error(`ERROR: Config file not found at ${configPath}`);
             process.exit(1);
@@ -372,6 +420,23 @@ async function main() {
             }
         }
 
+        // For multi-step labs: descend into the step subdir within labRoot/labName.
+        // Case-insensitively resolve the step folder name in case labRoot casing differs.
+        if (stepName) {
+            let stepDirName = stepName;
+            try {
+                const m = fs.readdirSync(labDir).find(d => d.toLowerCase() === stepName.toLowerCase());
+                if (m) stepDirName = m;
+            } catch (e) { /* use stepName as-is */ }
+            const stepPath = path.join(labDir, stepDirName);
+            if (!fs.existsSync(stepPath)) {
+                console.error(`ERROR: Step directory not found at ${stepPath}`);
+                console.error(`  Make sure "${stepName}" matches a subfolder of ${labDir}`);
+                process.exit(1);
+            }
+            labDir = stepPath;
+        }
+
         // If labDir has no direct Moodle submissions but contains subdirectories that do
         // (e.g. Moodle exported Lab05-Beta and Lab05-Production as separate groups),
         // ask the user which group to grade.
@@ -405,9 +470,11 @@ async function main() {
             }
         }
 
-        // Per-lab paths under codeRoot
-        artifactsDir = path.join(codeRoot, labName, ARTIFACTS_DIR);
-        submissionsDir = path.join(codeRoot, labName, SUBMISSIONS_DIR);
+        // Per-lab (or per-step) paths under codeRoot.
+        // For multi-step labs the layout is codeRoot/{labName}/{stepName}/Artifacts...
+        const labSubPath = stepName ? path.join(labName, stepName) : labName;
+        artifactsDir = path.join(codeRoot, labSubPath, ARTIFACTS_DIR);
+        submissionsDir = path.join(codeRoot, labSubPath, SUBMISSIONS_DIR);
 
         // Validate codeRoot is writable before proceeding — ask for a new one if not
         let codeRootConfirmed = false;
@@ -418,7 +485,7 @@ async function main() {
                 codeRootConfirmed = true;
             } catch (e) {
                 console.error(`\nERROR: Cannot write to code storage directory:`);
-                console.error(`  ${path.join(codeRoot, labName)}`);
+                console.error(`  ${path.join(codeRoot, labSubPath)}`);
                 console.error(`  ${e.message}\n`);
                 const newRoot = await askRl(
                     'Enter a writable path for storing cloned/extracted student code\n' +
@@ -430,8 +497,8 @@ async function main() {
                 }
                 codeRoot = newRoot.trim();
                 configChanged = true;
-                artifactsDir = path.join(codeRoot, labName, ARTIFACTS_DIR);
-                submissionsDir = path.join(codeRoot, labName, SUBMISSIONS_DIR);
+                artifactsDir = path.join(codeRoot, labSubPath, ARTIFACTS_DIR);
+                submissionsDir = path.join(codeRoot, labSubPath, SUBMISSIONS_DIR);
             }
         }
         if (configChanged) {

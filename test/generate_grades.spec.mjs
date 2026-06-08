@@ -67,6 +67,23 @@ describe('html_validate handler', () => {
     it('tolerates a missing htmlValidation object', () => {
         expect(handler(map, {}).score).toBe(0);
     });
+    it('includes warning count in comment when errors=0 but warnings>0', () => {
+        const r = handler(map, { htmlValidation: { htmlFiles: 1, errors: 0, warnings: 3, messages: ['no-implicit-button-type: 3'] } });
+        expect(r.score).toBe(6);
+        expect(r.comment).toMatch(/no errors/i);
+        expect(r.comment).toMatch(/3 warnings/i);
+        expect(r.comment).toMatch(/no-implicit-button-type/i);
+    });
+    it('includes warning count alongside error count in the comment', () => {
+        const r = handler(map, { htmlValidation: { htmlFiles: 1, errors: 2, warnings: 4, messages: ['void-style: 4', 'doctype-style: 2'] } });
+        expect(r.score).toBe(3);
+        expect(r.comment).toMatch(/2 HTML errors/i);
+        expect(r.comment).toMatch(/4 warnings/i);
+    });
+    it('does not mention warnings when warnings=0', () => {
+        const r = handler(map, { htmlValidation: { htmlFiles: 1, errors: 2, warnings: 0, messages: ['x: 2'] } });
+        expect(r.comment).not.toMatch(/warning/i);
+    });
 });
 
 describe('css_validate handler', () => {

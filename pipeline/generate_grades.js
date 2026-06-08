@@ -255,21 +255,28 @@ registerHandler('lint', (map, student) => {
 // Shared tiered scorer for the markup validators: 0 errors = full, ≤ tolerance =
 // half, more = zero. Returns { score, comment }; the stock-comment tier override
 // in computeResults replaces the comment when the mapping carries stockComments.
+// Scoring is based on errors only; warnings appear in the comment but don't affect score.
 function scoreValidation(map, data, fileKey, label) {
     const fileCount = data[fileKey] || 0;
     if (fileCount === 0) return { score: 0, comment: `No ${label} files to validate` };
 
     const errors = data.errors || 0;
+    const warnings = data.warnings || 0;
     const tolerance = map.tolerance ?? 3;
     const topIssues = (data.messages || []).slice(0, 3).join(', ');
+    const warnStr = warnings > 0 ? `, ${warnings} warning${warnings !== 1 ? 's' : ''}` : '';
 
     if (errors === 0) {
-        return { score: map.maxScore, comment: `Valid ${label} — no errors` };
-    } else if (errors <= tolerance) {
-        // keepComment: true so the error detail isn't overwritten by a stock comment like "Missing"
-        return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${errors} ${label} error${errors !== 1 ? 's' : ''} (${topIssues})`, keepComment: true };
+        if (warnings === 0) return { score: map.maxScore, comment: `Valid ${label} — no errors` };
+        return { score: map.maxScore, comment: `Valid ${label} — no errors; ${warnings} warning${warnings !== 1 ? 's' : ''} (${topIssues})` };
     }
-    return { score: 0, comment: `${errors} ${label} errors (${topIssues})`, keepComment: true };
+
+    const errStr = `${errors} ${label} error${errors !== 1 ? 's' : ''}`;
+    if (errors <= tolerance) {
+        // keepComment: true so the error detail isn't overwritten by a stock comment like "Missing"
+        return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${errStr}${warnStr} (${topIssues})`, keepComment: true };
+    }
+    return { score: 0, comment: `${errStr}${warnStr} (${topIssues})`, keepComment: true };
 }
 
 registerHandler('html_validate', (map, student) => {

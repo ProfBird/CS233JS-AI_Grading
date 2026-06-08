@@ -102,6 +102,11 @@ function isValidCellRef(ref) {
 function validateConfig(config, labName) {
     const errors = [];
 
+    // Extract-only configs need no rubric, runtimeCheck, or mappings
+    if (config.extractOnly === true) {
+        return;
+    }
+
     if (!config.rubricName || typeof config.rubricName !== 'string') {
         errors.push(`Missing or invalid "rubricName" (must be a string)`);
     }
@@ -434,8 +439,8 @@ async function main() {
             console.log(`  Saved updated codeRoot to local-config.json\n`);
         }
 
-        // Validate rubric exists before starting the pipeline
-        while (!skipRubric) {
+        // Validate rubric exists before starting the pipeline (skip for extract-only)
+        while (!skipRubric && !config.extractOnly) {
             const rubricCheckPath = path.join(labConfigDir, config.rubricName);
             if (fs.existsSync(rubricCheckPath)) {
                 break;
@@ -473,10 +478,17 @@ async function main() {
         }
 
         if (!hasAnyFlag) {
-            console.log('\nGrading options:');
-            console.log('  1) Normal   — grade new submissions (skip already-extracted)');
-            console.log('  2) Regrade  — re-run grading but keep existing cloned code');
-            console.log('  3) Reclone  — delete all extracted code, re-clone/unzip, and re-grade');
+            if (config.extractOnly) {
+                console.log('\nExtract options:');
+                console.log('  1) Normal     — extract new submissions (skip already-cloned)');
+                console.log('  2) Re-extract — keep existing code, run git pull on repos');
+                console.log('  3) Reclone    — delete all extracted code, re-clone/unzip from scratch');
+            } else {
+                console.log('\nGrading options:');
+                console.log('  1) Normal   — grade new submissions (skip already-extracted)');
+                console.log('  2) Regrade  — re-run grading but keep existing cloned code');
+                console.log('  3) Reclone  — delete all extracted code, re-clone/unzip, and re-grade');
+            }
             console.log();
             const modeInput = await askRl('Select option [1]: ');
             const choice = modeInput.trim();
@@ -491,7 +503,9 @@ async function main() {
         rl.close();
     }
 
-    const modeLabel = reclone ? 'RECLONE' : (regrade ? 'REGRADE' : 'NORMAL');
+    const modeLabel = config.extractOnly
+        ? (reclone ? 'RECLONE' : (regrade ? 'REEXTRACT' : 'EXTRACT'))
+        : (reclone ? 'RECLONE' : (regrade ? 'REGRADE' : 'NORMAL'));
     const aiLabel = aiComments ? ' +AI' : '';
     const txtLabel = textReport ? ' +TXT' : '';
     console.log(`\n================================`);
@@ -536,6 +550,31 @@ async function main() {
 
     // 1. Code Acquisition
     const students = await extractCode(labDir, submissionsDir);
+
+    // In extract-only mode, skip all checking and grade-generation phases
+    if (config.extractOnly) {
+        const extracted = students.filter(s => s.extractedDir);
+        console.log(`  Extract-only mode: ${extracted.length} repo(s) extracted. No grading.\n`);
+
+        console.log("--- Creating Log Summary ---");
+        const logLines = [];
+        logLines.push(`Extraction Summary for ${labName} [${modeLabel}]`);
+        logLines.push(`Date: ${new Date().toISOString()}`);
+        logLines.push(`===================================`);
+        logLines.push(`\nExtracted (${extracted.length}):`);
+        extracted.forEach(s => logLines.push(` - ${s.name}`));
+        const extractErrors = students.filter(s => s.error);
+        logLines.push(`\nIssues Encountered (${extractErrors.length}):`);
+        if (extractErrors.length === 0) {
+            logLines.push(" None! Great job.");
+        } else {
+            extractErrors.forEach(e => logLines.push(` - ${e.name}: ${e.error}`));
+        }
+        const logPath = path.join(artifactsDir, LOG_FILE);
+        fs.writeFileSync(logPath, logLines.join('\n'), 'utf8');
+        console.log(`\nAll Done! Summary written to ${logPath}\n`);
+        return;
+    }
 
     // In normal mode, skip students whose grade output already exists
     let toGrade = students;

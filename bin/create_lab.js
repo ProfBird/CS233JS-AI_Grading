@@ -561,6 +561,22 @@ async function main() {
         }
         console.log(`  Lab directory: ${labDir}`);
 
+        // 1b. Configuration type — short-circuit for extract-only labs
+        const configType = await askOptions(rl, '\nConfiguration type:', [
+            { label: 'Full grading config', value: 'full',    desc: 'Rubric, runtime check, analysis, linting, validation, grade generation' },
+            { label: 'Extract only',        value: 'extract', desc: 'Just clone repos / unzip submissions — no checking or grading' },
+        ]);
+
+        if (configType === 'extract') {
+            const config = buildConfig(labName, { extractOnly: true });
+            console.log('\n--- Writing Files ---');
+            writeLab(labDir, config, null, null);
+            console.log('\n=== Done! ===');
+            console.log(`  Extract-only config: ${path.join(labDir, labName.toLowerCase() + '_config.json')}`);
+            console.log('  Run:  node run_all.js ' + labName + '\n');
+            return;
+        }
+
         // 2. Rubric + mode selection
         let rubricName, rubricDest;
         if (useExisting) {

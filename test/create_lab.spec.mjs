@@ -510,6 +510,15 @@ describe('buildConfig', () => {
         });
         expect(config.lint).toBeUndefined();
     });
+
+    it('builds a minimal extract-only config when extractOnly is true', () => {
+        const config = buildConfig('Lab99', { extractOnly: true });
+        expect(config.extractOnly).toBe(true);
+        expect(config.mappings).toEqual([]);
+        expect(config.rubricName).toBeUndefined();
+        expect(config.runtimeCheck).toBeUndefined();
+        expect(config.analysis).toBeUndefined();
+    });
 });
 
 // ── askBoolean ──────────────────────────────────────────────────────────

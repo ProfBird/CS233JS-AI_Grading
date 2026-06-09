@@ -33,6 +33,10 @@ graph TD
     subgraph "Supporting Modules"
         ollama[ollama_comments.js]
         file_walker[file_walker.js]
+        lab_config[lab_config.js]
+        llm_client[llm_client.js]
+        tui[tui.js]
+        config_prompts[config_prompts.js]
     end
 
     subgraph "External Dependencies"
@@ -71,6 +75,11 @@ graph TD
     check_names --> file_walker
     lint --> file_walker
     analyze --> file_walker
+    configure_lab --> tui
+    configure_lab --> lab_config
+    configure_lab --> llm_client
+    configure_lab --> config_prompts
+    config_prompts --> lab_config
 
     %% External deps
     runtime --> puppeteer
@@ -453,6 +462,28 @@ Used by analyze_code, lint_code, validate_html, validate_css, and check_names. R
 | `walk(dir, opts)` | Core pre-order DFS traversal. Callbacks: `visit`, `onFile`, `onDir`, `shouldSkip`, `shouldDescend`. Options: `followSymlinks` (default false), `maxDepth` (default Infinity). Unreadable dirs are silently skipped. |
 | `getAllFilesByExt(dir, ext, exclusions)` | Collect all files with a given extension (or array of extensions). Skips `DEFAULT_SKIP_DIRS`, dot-directories, and any path matching an exclusion substring. |
 | `DEFAULT_SKIP_DIRS` | `Set(['node_modules', 'dist', 'build', '.git', '__MACOSX'])` — dirs never scanned. |
+
+### `lib/llm_client.js` — Unified LLM Client
+
+Wraps Ollama, OpenRouter, and Anthropic behind a single `chat(systemPrompt, userPrompt)` interface.
+
+- `LLMClient` — class with `chat()`, `_chatOpenAI()`, `_chatAnthropic()`, `_request()`
+- `loadLLMClient(localConfigPath)` — reads `llm` block from `local-config.json`; resolves API key from environment first, then stored value
+- `setupLLMInteractive(localConfigPath, driver)` — full guided provider/model/key setup; saves to `local-config.json`
+- `selectModel(localConfigPath, driver)` — simplified 4-option picker used by `configure_lab.js`; shows current selection as default
+- `detectOllamaModel()` — probes `localhost:11434/api/tags` for a running model name (2s timeout)
+- On HTTP 429, automatically retries with `fallbackModel` if configured; otherwise retries up to 3 times with exponential backoff
+
+### `lib/tui.js` — Terminal UI
+
+Provides the full-screen interface for `configure_lab.js` using `neo-blessed`.
+
+- Scrollable log pane (redirects `console.log`/`console.error` while active)
+- `ask(prompt, def)` — text input bar with default; returns trimmed string
+- `askBoolean(question, def)` / `askInt(prompt, def)` — typed wrappers over `ask()`
+- `askOptions(prompt, opts, defIdx)` — centered popup list with arrow-key navigation; shows per-item description in a bottom bar
+- `reviewTable(makeItems, editRow)` — full-screen navigable table for reviewing/editing draft mappings before accepting
+- `showSpinner(msg)` / `clearSpinner()` — floating overlay for async operations
 
 ### `ollama_comments.js` — AI Summary Generator
 

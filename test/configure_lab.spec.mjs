@@ -13,7 +13,7 @@ import { tmpdir } from 'os';
 
 const {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
-    readRubricRows, readRubricCriteria, buildConfig, writeLab,
+    readRubricRows, readRubricCriteria, assembleConfig, writeLab,
     findSpreadsheets, keywordsToFolderPattern, guessMappingType,
     getExistingSteps,
 } = await import('../lib/lab_config.js');
@@ -307,216 +307,103 @@ describe('promptRubricRows', () => {
     });
 });
 
-// ── buildConfig ─────────────────────────────────────────────────────────
+// ── assembleConfig (round-trip safety) ───────────────────────────────────
 
-describe('buildConfig', () => {
-    it('builds a minimal config with rubric name and runtime', () => {
-        const config = buildConfig('Lab99', {
-            rubricName: 'CS233JS_Lab99_Rubric.xlsm',
-            titleText: 'Lab 99: Test',
+describe('assembleConfig', () => {
+    const wizardResponses = {
+        rubricName: 'CS233JS_Lab99_Rubric.xlsm',
+        titleText: 'Lab 99',
+        runtimeCheck: 'both',
+        mappings: [{ cell: 'C8', type: 'lint', maxScore: 2 }],
+        optional: { titleCell: 'A1', summaryCell: 'A2', graderCell: 'E1' },
+    };
+
+    it('preserves fields the wizard does not manage when re-run on an existing config', () => {
+        // This is the W1 regression test: customAnalyzer, validate, and nameCheck were
+        // silently dropped by the old buildConfig path. They must survive a re-run.
+        const existing = {
+            rubricName: 'old.xlsm',
             runtimeCheck: 'browser',
-            features: [],
-            mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: null,
-            optional: {}
-        });
+            codeReview: { studentNameCell: 'B1', groupCell: 'C1' },
+            variations: { A: { appName: 'Foo' } },
+            packageCheck: { dependencies: ['vite'] },
+            repoHygiene: { excludedFromRepo: ['node_modules'] },
+            lint: { exclude: ['dist'] },
+            validate: { htmlRules: { 'no-inline-style': 'error' } },
+            nameCheck: { extraAllowed: '+' },
+            analysis: {
+                customAnalyzer: 'lab99_analyzer.js',
+                features: [{ id: 'fetch_api', regex: 'fetch\\s*\\(' }],
+                parts: [{ id: 'part1' }],
+            },
+            mappings: [{ cell: 'C1', type: 'manual', maxScore: 1 }],
+        };
 
+        const config = assembleConfig(existing, wizardResponses);
+
+        // Unmanaged sections survive untouched
+        expect(config.analysis.customAnalyzer).toBe('lab99_analyzer.js');
+        expect(config.analysis.features).toEqual(existing.analysis.features);
+        expect(config.analysis.parts).toEqual(existing.analysis.parts);
+        expect(config.validate).toEqual({ htmlRules: { 'no-inline-style': 'error' } });
+        expect(config.nameCheck).toEqual({ extraAllowed: '+' });
+        expect(config.codeReview).toEqual({ studentNameCell: 'B1', groupCell: 'C1' });
+        expect(config.variations).toEqual({ A: { appName: 'Foo' } });
+        expect(config.packageCheck).toEqual({ dependencies: ['vite'] });
+        expect(config.repoHygiene).toEqual({ excludedFromRepo: ['node_modules'] });
+        expect(config.lint).toEqual({ exclude: ['dist'] });
+
+        // Wizard-owned keys are updated
         expect(config.rubricName).toBe('CS233JS_Lab99_Rubric.xlsm');
-        expect(config.titleText).toBe('Lab 99: Test');
-        expect(config.runtimeCheck).toBe('browser');
-        expect(config.mappings).toEqual([]);
-    });
-
-    it('includes optional fields when provided', () => {
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'both',
-            features: [],
-            mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: null,
-            optional: {
-                titleCell: 'A1',
-                summaryCell: 'A2',
-                graderCell: 'E1',
-                codeReview: { studentNameCell: 'B1', groupCell: 'C1' },
-                lintExclude: ['node_modules', 'dist']
-            }
-        });
-
+        expect(config.runtimeCheck).toBe('both');
+        expect(config.mappings).toEqual([{ cell: 'C8', type: 'lint', maxScore: 2 }]);
         expect(config.titleCell).toBe('A1');
         expect(config.summaryCell).toBe('A2');
         expect(config.graderCell).toBe('E1');
-        expect(config.codeReview).toEqual({ studentNameCell: 'B1', groupCell: 'C1' });
-        expect(config.lint).toEqual({ exclude: ['node_modules', 'dist'] });
     });
 
-    it('omits analysis section when no features, parts, or analyzer', () => {
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'build',
-            features: [],
-            mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: null,
-            optional: {}
-        });
-        expect(config.analysis).toBeUndefined();
-    });
-
-    it('includes analysis.features when features array has entries', () => {
-        const features = [{ id: 'fetch_api', regex: 'fetch\\s*\\(' }];
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'browser',
-            features,
-            mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: null,
-            optional: {}
-        });
-        expect(config.analysis).toBeDefined();
-        expect(config.analysis.features).toEqual(features);
-    });
-
-    it('includes analysis.customAnalyzer when set', () => {
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'browser',
-            features: [],
-            mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: 'lab99_analyzer.js',
-            optional: {}
-        });
-        expect(config.analysis.customAnalyzer).toBe('lab99_analyzer.js');
-    });
-
-    it('includes variations when provided', () => {
-        const variations = {
-            A: { appName: 'Foo Game' },
-            B: { appName: 'Bar Game' }
+    it('does not mutate the input existingConfig', () => {
+        const existing = {
+            rubricName: 'old.xlsm', runtimeCheck: 'browser',
+            mappings: [{ cell: 'C1', type: 'manual', maxScore: 1 }],
+            analysis: { customAnalyzer: 'a.js' },
         };
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'browser',
-            features: [],
-            mappings: [],
-            parts: null,
-            variations,
-            analyzerName: null,
-            optional: {}
-        });
-        expect(config.variations).toEqual(variations);
+        const snapshot = JSON.parse(JSON.stringify(existing));
+        assembleConfig(existing, wizardResponses);
+        expect(existing).toEqual(snapshot);
     });
 
-    it('includes packageCheck when provided', () => {
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'browser',
-            features: [],
+    it('clears an optional cell when the wizard passes a blank value', () => {
+        const existing = {
+            rubricName: 'old.xlsm', runtimeCheck: 'browser', summaryCell: 'A2',
             mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: null,
-            optional: {
-                packageCheck: { dependencies: ['lit-html'], devDependencies: ['vite'] }
-            }
+        };
+        const config = assembleConfig(existing, {
+            rubricName: 'r.xlsm', titleText: 'T', runtimeCheck: 'build', mappings: [],
+            optional: { summaryCell: '' },
         });
-        expect(config.packageCheck).toEqual({ dependencies: ['lit-html'], devDependencies: ['vite'] });
-    });
-
-    it('includes repoHygiene when provided', () => {
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'browser',
-            features: [],
-            mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: null,
-            optional: {
-                repoHygiene: { excludedFromRepo: ['node_modules', 'dist'] }
-            }
-        });
-        expect(config.repoHygiene).toEqual({ excludedFromRepo: ['node_modules', 'dist'] });
-    });
-
-    it('includes analysis.parts when provided', () => {
-        const parts = [{ id: 'part1', rubricName: 'Part1/CS233JS_Lab99_Part1_Rubric.xlsm' }];
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'browser',
-            features: [],
-            mappings: [],
-            parts,
-            variations: null,
-            analyzerName: null,
-            optional: {}
-        });
-        expect(config.analysis.parts).toEqual(parts);
-    });
-
-    it('omits falsy optional fields', () => {
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: '',
-            runtimeCheck: 'browser',
-            features: [],
-            mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: null,
-            optional: {
-                titleCell: '',
-                summaryCell: null,
-                graderCell: undefined,
-                codeReview: null
-            }
-        });
-        expect(config.titleText).toBeUndefined();
-        expect(config.titleCell).toBeUndefined();
         expect(config.summaryCell).toBeUndefined();
-        expect(config.graderCell).toBeUndefined();
-        expect(config.codeReview).toBeUndefined();
     });
 
-    it('does not add lint section when no excludes provided', () => {
-        const config = buildConfig('Lab99', {
-            rubricName: 'r.xlsm',
-            titleText: 'T',
-            runtimeCheck: 'browser',
-            features: [],
-            mappings: [],
-            parts: null,
-            variations: null,
-            analyzerName: null,
-            optional: { lintExclude: null }
+    it('produces a clean minimal config for a brand-new lab (null existingConfig)', () => {
+        const config = assembleConfig(null, {
+            rubricName: 'r.xlsm', titleText: '', runtimeCheck: 'build', mappings: [],
+            optional: {},
         });
-        expect(config.lint).toBeUndefined();
+        expect(config).toEqual({ rubricName: 'r.xlsm', runtimeCheck: 'build', mappings: [] });
     });
 
-    it('builds a minimal extract-only config when extractOnly is true', () => {
-        const config = buildConfig('Lab99', { extractOnly: true });
-        expect(config.extractOnly).toBe(true);
-        expect(config.mappings).toEqual([]);
-        expect(config.rubricName).toBeUndefined();
-        expect(config.runtimeCheck).toBeUndefined();
-        expect(config.analysis).toBeUndefined();
+    it('drops the extractOnly flag when reconfiguring a former extract-only lab', () => {
+        const existing = { extractOnly: true, mappings: [] };
+        const config = assembleConfig(existing, wizardResponses);
+        expect(config.extractOnly).toBeUndefined();
+        expect(config.rubricName).toBe('CS233JS_Lab99_Rubric.xlsm');
+        expect(config.mappings).toEqual([{ cell: 'C8', type: 'lint', maxScore: 2 }]);
+    });
+
+    it('returns a minimal extract-only config when responses.extractOnly is set', () => {
+        const config = assembleConfig(null, { extractOnly: true });
+        expect(config).toEqual({ extractOnly: true, mappings: [] });
     });
 });
 
@@ -1032,6 +919,50 @@ describe('guessMappingType', () => {
     it('is case-insensitive', () => {
         expect(guessMappingType('GITHUB PRIVATE REPO')).toBe('github_repo');
         expect(guessMappingType('LINT CHECK')).toBe('lint');
+    });
+
+    it('guesses apps_in_repo when "app" appears near "repo"', () => {
+        expect(guessMappingType('App in a private GitHub repository')).toBe('apps_in_repo');
+        expect(guessMappingType('Apps in private GitHub repo')).toBe('apps_in_repo');
+    });
+
+    it('still guesses github_repo when no "app" mention', () => {
+        expect(guessMappingType('GitHub private repo')).toBe('github_repo');
+        expect(guessMappingType('github repo link')).toBe('github_repo');
+    });
+
+    it('guesses manual for folder/file organization (not naming convention)', () => {
+        expect(guessMappingType('Folder and file organization and naming')).toBe('manual');
+        expect(guessMappingType('File organization')).toBe('manual');
+    });
+
+    it('still guesses name_check for naming convention rows', () => {
+        expect(guessMappingType('Directory structure and file naming')).toBe('name_check');
+        expect(guessMappingType('Folder structure and file names')).toBe('name_check');
+    });
+
+    it('guesses env_file_check for .env API key rows', () => {
+        expect(guessMappingType('API key stored in .env file')).toBe('env_file_check');
+        expect(guessMappingType('.env file exists with API key')).toBe('env_file_check');
+    });
+
+    it('guesses gitignore_check for .env excluded from repo rows', () => {
+        expect(guessMappingType('.env excluded from repo .gitignore')).toBe('gitignore_check');
+        expect(guessMappingType('.env in .gitignore')).toBe('gitignore_check');
+        // Must NOT fall into env_file_check — both mention ".env file" but intent is different
+        expect(guessMappingType('.env file excluded from repo (.gitignore)?')).toBe('gitignore_check');
+    });
+
+    it('guesses path_exists for "file exists at path" rows', () => {
+        expect(guessMappingType('File exists at functions/api/proxy.js')).toBe('path_exists');
+        expect(guessMappingType('Proxy file created at functions/')).toBe('path_exists');
+    });
+
+    it('guesses manual (not env_file_check) when label says "environment variable" but not ".env"', () => {
+        // Row 6: "Function reads API key from Cloudflare environment variable?" — no ".env" token
+        // Should fall through to manual because it requires runtime/human inspection
+        expect(guessMappingType('Function reads API key from Cloudflare environment variable?')).toBe('manual');
+        expect(guessMappingType('reads api key from environment')).toBe('manual');
     });
 });
 

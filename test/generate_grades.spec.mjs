@@ -4,7 +4,7 @@
  * Tests for the grade handler functions and the handler registry.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createRequire } from 'module';
@@ -232,6 +232,8 @@ describe('handler registry', () => {
         expect(VALID_MAPPING_TYPES.has('part1_completed')).toBe(true);
         expect(VALID_MAPPING_TYPES.has('part_completed')).toBe(true);
         expect(VALID_MAPPING_TYPES.has('part_feature')).toBe(true);
+        expect(VALID_MAPPING_TYPES.has('env_file_check')).toBe(true);
+        expect(VALID_MAPPING_TYPES.has('path_exists')).toBe(true);
     });
 
     it('returns a handler for each valid type', () => {
@@ -431,17 +433,208 @@ describe('apps_in_repo handler', () => {
         expect(result.comment).toContain('part2: No');
     });
 
-    it('handles empty partPresence with GitHub URL', () => {
+    it('awards full credit for single-app repo when no parts are configured and repo was cloned', () => {
+        const map = { maxScore: 10 };
+        const student = {
+            extractedDir: '/tmp/someRepo',
+            analysis: { partPresence: { allPresent: false }, urls: { github: 'https://github.com/user/repo' } },
+        };
+        const result = handler(map, student);
+        expect(result.score).toBe(10);
+        expect(result.comment).toMatch(/yes.*app.*github/i);
+    });
+
+    it('returns 0 when GitHub URL present but repo could not be cloned', () => {
         const map = { maxScore: 10 };
         const student = { analysis: { partPresence: { allPresent: false }, urls: { github: 'https://github.com/user/repo' } } };
         const result = handler(map, student);
         expect(result.score).toBe(0);
-        expect(result.comment).toBe('Missing app folders');
+        expect(result.comment).toMatch(/could not be cloned/i);
     });
 
     it('handles missing analysis', () => {
         const map = { maxScore: 10 };
         expect(handler(map, {})).toEqual({ score: 0, comment: 'Missing GitHub repository' });
+    });
+});
+
+// ── gitignore_check handler ───────────────────────────────────────────────
+
+describe('gitignore_check handler', () => {
+    const handler = getHandler('gitignore_check');
+    let tmpDir;
+    beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'gi-test-')); });
+    afterEach(() => { rmSync(tmpDir, { recursive: true }); });
+
+    it('returns 0 when no repo extracted', () => {
+        expect(handler({ maxScore: 2 }, {})).toEqual({ score: 0, comment: 'No repo extracted' });
+    });
+
+    it('returns 0 when .gitignore not found', () => {
+        expect(handler({ maxScore: 2 }, { extractedDir: tmpDir })).toEqual({ score: 0, comment: '.gitignore not found' });
+    });
+
+    it('gives full credit when .gitignore exists and no requiredEntry', () => {
+        writeFileSync(join(tmpDir, '.gitignore'), 'node_modules/\ndist/\n');
+        expect(handler({ maxScore: 2 }, { extractedDir: tmpDir })).toEqual({ score: 2, comment: 'yes, exists' });
+    });
+
+    it('gives full credit when requiredEntry is listed exactly', () => {
+        writeFileSync(join(tmpDir, '.gitignore'), 'node_modules/\n.env\ndist/\n');
+        expect(handler({ maxScore: 2, requiredEntry: '.env' }, { extractedDir: tmpDir })).toEqual({ score: 2, comment: 'yes — .env is listed' });
+    });
+
+    it('gives full credit when requiredEntry is listed with leading slash', () => {
+        writeFileSync(join(tmpDir, '.gitignore'), '/.env\n');
+        expect(handler({ maxScore: 2, requiredEntry: '.env' }, { extractedDir: tmpDir }).score).toBe(2);
+    });
+
+    it('returns 0 when requiredEntry is missing from .gitignore', () => {
+        writeFileSync(join(tmpDir, '.gitignore'), 'node_modules/\ndist/\n');
+        const result = handler({ maxScore: 2, requiredEntry: '.env' }, { extractedDir: tmpDir });
+        expect(result.score).toBe(0);
+        expect(result.comment).toMatch(/\.env.*not listed/i);
+    });
+
+    it('ignores comment lines when checking for requiredEntry', () => {
+        writeFileSync(join(tmpDir, '.gitignore'), '# .env\nnode_modules/\n');
+        const result = handler({ maxScore: 2, requiredEntry: '.env' }, { extractedDir: tmpDir });
+        expect(result.score).toBe(0);
+    });
+
+    it('gives full credit when requiredEntry is covered by a wildcard pattern (.env*)', () => {
+        writeFileSync(join(tmpDir, '.gitignore'), 'node_modules/\n.env*\n');
+        expect(handler({ maxScore: 2, requiredEntry: '.env' }, { extractedDir: tmpDir }).score).toBe(2);
+    });
+});
+
+// ── env_file_check handler ────────────────────────────────────────────────
+
+describe('env_file_check handler', () => {
+    const handler = getHandler('env_file_check');
+    let tmpDir;
+    beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'env-test-')); });
+    afterEach(() => { rmSync(tmpDir, { recursive: true }); });
+
+    it('gives full credit when .env.local has a KEY=VALUE entry in filesDir', () => {
+        const filesDir = mkdtempSync(join(tmpdir(), 'env-files-'));
+        try {
+            writeFileSync(join(filesDir, '.env.local'), 'MY_SECRET=hello\n');
+            const result = handler({ maxScore: 3 }, { filesDir });
+            expect(result.score).toBe(3);
+            expect(result.comment).toMatch(/key=value/i);
+            // Clean finding in filesDir should NOT have a "committed" warning
+            expect(result.comment).not.toMatch(/committed/i);
+        } finally {
+            rmSync(filesDir, { recursive: true });
+        }
+    });
+
+    it('gives full credit but notes when .env found in extractedDir (committed to repo)', () => {
+        writeFileSync(join(tmpDir, '.env'), 'VITE_API_KEY=abc123\n');
+        const result = handler({ maxScore: 3 }, { extractedDir: tmpDir });
+        expect(result.score).toBe(3);
+        expect(result.comment).toMatch(/key=value/i);
+        expect(result.comment).toMatch(/committed/i);
+        // keepComment protects the diagnostic note from stockComments.full override
+        expect(result.keepComment).toBe(true);
+    });
+
+    it('filesDir takes precedence over extractedDir when both present', () => {
+        const filesDir = mkdtempSync(join(tmpdir(), 'env-files-'));
+        try {
+            writeFileSync(join(filesDir, '.env'), 'CLEAN_KEY=goodvalue\n');
+            writeFileSync(join(tmpDir, '.env'), 'ALSO_KEY=badcommit\n');
+            const result = handler({ maxScore: 3 }, { filesDir, extractedDir: tmpDir });
+            expect(result.score).toBe(3);
+            // Should come from filesDir — no committed warning
+            expect(result.comment).not.toMatch(/committed/i);
+        } finally {
+            rmSync(filesDir, { recursive: true });
+        }
+    });
+
+    it('gives full credit for lowercase key (api_key=value)', () => {
+        writeFileSync(join(tmpDir, '.env'), 'api_key=sk-abc123\n');
+        const result = handler({ maxScore: 3 }, { extractedDir: tmpDir });
+        expect(result.score).toBe(3);
+    });
+
+    it('gives full credit when there are spaces around = (KEY = value)', () => {
+        writeFileSync(join(tmpDir, '.env'), 'VITE_API_KEY = sk-abc123\n');
+        const result = handler({ maxScore: 3 }, { extractedDir: tmpDir });
+        expect(result.score).toBe(3);
+    });
+
+    it('returns 0 when .env exists but has no valid KEY=VALUE pair', () => {
+        writeFileSync(join(tmpDir, '.env'), '# just a comment\n=nokey\n');
+        const result = handler({ maxScore: 3 }, { extractedDir: tmpDir });
+        expect(result.score).toBe(0);
+        expect(result.comment).toMatch(/no key=value/i);
+    });
+
+    it('flags for manual review when no .env found (probably gitignored)', () => {
+        const result = handler({ maxScore: 3 }, { extractedDir: tmpDir });
+        expect(result.score).toBe(0);
+        expect(result.keepComment).toBe(true);
+        expect(result.comment).toMatch(/manual check/i);
+    });
+
+    it('handles missing extractedDir gracefully', () => {
+        const result = handler({ maxScore: 3 }, {});
+        expect(result.keepComment).toBe(true);
+    });
+});
+
+// ── path_exists handler ───────────────────────────────────────────────────
+
+describe('path_exists handler', () => {
+    const handler = getHandler('path_exists');
+    let tmpDir;
+    beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'pe-test-')); });
+    afterEach(() => { rmSync(tmpDir, { recursive: true }); });
+
+    it('gives full credit when a file matching pathPattern is found', () => {
+        mkdirSync(join(tmpDir, 'functions'));
+        writeFileSync(join(tmpDir, 'functions', 'proxy.js'), 'export default {}');
+        const result = handler({ maxScore: 5, pathPattern: 'functions/' }, { extractedDir: tmpDir });
+        expect(result.score).toBe(5);
+        expect(result.comment).toMatch(/yes/i);
+        expect(result.comment).toMatch(/proxy\.js/);
+    });
+
+    it('returns 0 when no file matches pathPattern', () => {
+        const result = handler({ maxScore: 5, pathPattern: 'functions/' }, { extractedDir: tmpDir });
+        expect(result.score).toBe(0);
+        expect(result.comment).toMatch(/not found/i);
+    });
+
+    it('flags for manual check when pathPattern is not configured', () => {
+        const result = handler({ maxScore: 5 }, { extractedDir: tmpDir });
+        expect(result.score).toBe(0);
+        expect(result.keepComment).toBe(true);
+    });
+
+    it('returns 0 when no repo extracted', () => {
+        const result = handler({ maxScore: 5, pathPattern: 'functions/' }, {});
+        expect(result.score).toBe(0);
+        expect(result.comment).toMatch(/no repo/i);
+    });
+});
+
+// ── type-set consistency ──────────────────────────────────────────────────
+
+describe('type-set consistency', () => {
+    it('every type in lab_config MAPPING_TYPES has a registered handler', async () => {
+        const { createRequire: cr } = await import('module');
+        const req = cr(import.meta.url);
+        const { MAPPING_TYPES } = req('../lib/lab_config.js');
+        for (const { value: type } of MAPPING_TYPES) {
+            // 'feature' and 'part_feature' use the same handler pool but
+            // need a featureId at runtime — skip the schema-only ones.
+            if (type === 'feature' || type === 'part_feature') continue;
+            expect(getHandler(type), `no handler for type "${type}" from lab_config`).toBeInstanceOf(Function);
+        }
     });
 });
 

@@ -16,6 +16,7 @@ const toSafeName = name => name.replace(/[\s/\\:*?"<>|]+/g, '-');
 
 const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('../lib/ollama_comments');
 const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } = require('../lib/rubric_writer');
+const { walk } = require('../lib/file_walker');
 
 // --- Cell helpers ---
 
@@ -101,18 +102,23 @@ registerHandler('part_completed', partCompletedHandler);
 registerHandler('apps_in_repo', (map, student) => {
     const a = student.analysis || {};
     const pp = a.partPresence || {};
-    if (pp.allPresent && a.urls && a.urls.github) {
-        return { score: map.maxScore, comment: 'Yes (Both apps found in GitHub repo)' };
-    }
     if (!a.urls || !a.urls.github) {
         return { score: 0, comment: 'Missing GitHub repository' };
     }
     const partIds = Object.keys(pp).filter(k => k !== 'allPresent');
-    if (partIds.length === 0) {
-        return { score: 0, comment: 'Missing app folders' };
+    // Multi-app lab: parts are configured — require all to be present
+    if (partIds.length > 0) {
+        if (pp.allPresent) {
+            return { score: map.maxScore, comment: 'Yes (Both apps found in GitHub repo)' };
+        }
+        const status = partIds.map(id => `${id}: ${pp[id] ? 'Yes' : 'No'}`).join(', ');
+        return { score: 0, comment: `Missing folders (${status})` };
     }
-    const status = partIds.map(id => `${id}: ${pp[id] ? 'Yes' : 'No'}`).join(', ');
-    return { score: 0, comment: `Missing folders (${status})` };
+    // Single-app lab: no named parts — full credit if repo was successfully cloned
+    if (student.extractedDir) {
+        return { score: map.maxScore, comment: 'Yes (app in GitHub repo)' };
+    }
+    return { score: 0, comment: 'GitHub URL provided but repo could not be cloned' };
 });
 
 registerHandler('developer_comments', (map, student) => {
@@ -486,12 +492,116 @@ registerHandler('collaborator_check', (map, student) => {
     return { score: 0, comment: `GitHub repo provided but could not be cloned: ${url}` };
 });
 
+// Returns true if the gitignore content contains a line that covers `entry`
+// (e.g. ".env" is matched by lines like ".env", "/.env", ".env*", "*.env").
+function gitignoreCoversEntry(content, entry) {
+    const lines = content
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l && !l.startsWith('#'));
+    return lines.some(l => {
+        // Exact match or rooted form: ".env" or "/.env"
+        if (l === entry || l === `/${entry}`) return true;
+        // Wildcard suffix: ".env*" covers ".env", ".env.local", etc.
+        if (l.endsWith('*') && entry.startsWith(l.slice(0, -1))) return true;
+        // Wildcard prefix: "*.env" would cover "foo.env" etc.
+        if (l.startsWith('*') && entry.endsWith(l.slice(1))) return true;
+        return false;
+    });
+}
+
 registerHandler('gitignore_check', (map, student) => {
     if (!student.extractedDir) return { score: 0, comment: 'No repo extracted' };
-    if (fs.existsSync(path.join(student.extractedDir, '.gitignore'))) {
+    const gitignorePath = path.join(student.extractedDir, '.gitignore');
+    if (!fs.existsSync(gitignorePath)) {
+        return { score: 0, comment: '.gitignore not found' };
+    }
+    if (!map.requiredEntry) {
         return { score: map.maxScore, comment: 'yes, exists' };
     }
-    return { score: 0, comment: 'not found' };
+    const content = fs.readFileSync(gitignorePath, 'utf8');
+    const entry = map.requiredEntry;
+    if (gitignoreCoversEntry(content, entry)) {
+        return { score: map.maxScore, comment: `yes — ${entry} is listed` };
+    }
+    return { score: 0, comment: `.gitignore exists but "${entry}" is not listed` };
+});
+
+// Check that a .env file exists and contains at least one KEY=VALUE pair.
+// Search order: filesDir first (submitted separately outside git), then extractedDir
+// (committed to repo — the polarity trap: that is actually the *wrong* behaviour
+// for this rubric item but we still give credit while flagging it for manual review).
+// If the file is not found at all — the normal case for a correctly gitignored repo —
+// we cannot verify the contents, so we flag for manual review rather than scoring 0.
+registerHandler('env_file_check', (map, student) => {
+    const ENV_NAMES = ['.env', '.env.local', '.env.development'];
+
+    // Match any KEY=VALUE line: allow lowercase keys, optional spaces around =,
+    // require a non-whitespace value. dotenv itself trims whitespace around =.
+    const hasKeyValue = content => /^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*\S+/m.test(content);
+
+    // Check filesDir first (separately submitted, correct behaviour)
+    if (student.filesDir) {
+        for (const name of ENV_NAMES) {
+            const filePath = path.join(student.filesDir, name);
+            if (fs.existsSync(filePath)) {
+                const content = fs.readFileSync(filePath, 'utf8');
+                if (hasKeyValue(content)) {
+                    return { score: map.maxScore, comment: `yes — ${name} has key=value entry` };
+                }
+                return { score: 0, comment: `${name} found but no KEY=VALUE entry` };
+            }
+        }
+    }
+
+    // Check extractedDir (cloned repo — only present if committed to git)
+    if (student.extractedDir) {
+        for (const name of ENV_NAMES) {
+            const filePath = path.join(student.extractedDir, name);
+            if (fs.existsSync(filePath)) {
+                const content = fs.readFileSync(filePath, 'utf8');
+                if (hasKeyValue(content)) {
+                    return {
+                        score: map.maxScore,
+                        comment: `yes — ${name} has key=value entry (NOTE: file appears committed to repo — check .gitignore row)`,
+                        keepComment: true,   // preserve diagnostic even if stockComments.full is set
+                    };
+                }
+                return { score: 0, comment: `${name} found in repo but no KEY=VALUE entry` };
+            }
+        }
+    }
+
+    // .env not found anywhere — most likely gitignored correctly; cannot auto-verify
+    return {
+        score: 0,
+        comment: 'NEEDS MANUAL CHECK — .env not found in submission (may be correctly gitignored)',
+        keepComment: true,
+    };
+});
+
+// Check that at least one file matching pathPattern exists somewhere in the repo.
+// pathPattern is a substring or regex string matched against each file's full path.
+registerHandler('path_exists', (map, student) => {
+    if (!student.extractedDir) return { score: 0, comment: 'No repo extracted' };
+    const pattern = map.pathPattern;
+    if (!pattern) {
+        return {
+            score: 0,
+            comment: 'NEEDS MANUAL CHECK (no pathPattern configured)',
+            keepComment: true,
+        };
+    }
+    const re = new RegExp(pattern);
+    let found = null;
+    walk(student.extractedDir, {
+        shouldSkip: full => /node_modules|\/dist\/|\.git/.test(full),
+        onFile: full => { if (!found && re.test(full)) found = full; },
+    });
+    if (found) {
+        return { score: map.maxScore, comment: `yes — ${path.relative(student.extractedDir, found)}` };
+    }
+    return { score: 0, comment: `not found (expected: ${pattern})` };
 });
 
 registerHandler('scripts_check', (map, student) => {
@@ -551,7 +661,7 @@ function mappingDescription(map) {
         case 'deploy_check': return 'Deployed and running on citstudent';
         case 'code_review': return 'Code review, prod column completed';
         case 'url_check': return 'URL provided';
-        case 'apps_in_repo': return 'Apps in repository';
+        case 'apps_in_repo': return 'App(s) in GitHub repository';
         case 'repo_hygiene': return 'Repo hygiene';
         case 'npm_package': return 'NPM package used';
         case 'package_check': return 'package.json check';
@@ -559,6 +669,9 @@ function mappingDescription(map) {
         case 'part_completed': return map.partId || 'Part completed';
         case 'part1_completed': return 'Part 1 completed';
         case 'scripts_check': return `npm scripts: ${(map.scripts || 'dev,build,test')}`;
+        case 'env_file_check': return '.env file with API key';
+        case 'path_exists': return map.pathPattern ? `File exists: ${map.pathPattern}` : 'File exists check';
+        case 'gitignore_check': return map.requiredEntry ? `.gitignore contains ${map.requiredEntry}` : '.gitignore exists';
         default: return map.type;
     }
 }

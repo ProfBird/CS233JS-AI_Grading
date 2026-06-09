@@ -10,7 +10,7 @@ const {
     normalizeAssignmentName, colLetter,
     findSpreadsheets, readRubricCriteria,
     getExistingAssignments, getExistingSteps,
-    buildConfig, writeLab,
+    assembleConfig, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
 } = require('../lib/lab_config.js');
 
@@ -86,22 +86,35 @@ Required fields for every object:
 
 Use the RUBRIC SHEET descriptions above to infer the most accurate type for each row.
 Do NOT use type "feature" — it requires a regex not yet defined.
+
 Type selection rules:
   "lint" is ONLY for ESLint static analysis (code style/syntax) — never for build or runtime errors.
   "build_check" for Vite/webpack/npm-run-build failures or build errors only.
   "browser_check" for Puppeteer browser console errors or runtime errors only.
   "build_and_browser_check" when criteria mention BOTH build errors AND console/browser errors — half credit if only one check fails.
   "developer_comments" for developer name, date, or code comments present in files.
+  "env_file_check" when criteria check that a .env file exists and contains a KEY=VALUE API key entry.
+  "gitignore_check" when criteria mention .gitignore; add requiredEntry:".env" when the check is specifically that .env is excluded from the repo.
+  "path_exists" when criteria say a specific file or directory must exist (e.g. "file exists at functions/..."); set pathPattern to a substring matching that path.
+  "apps_in_repo" when criteria say the app (or apps) must be in a GitHub repository — for BOTH single-app and multi-app labs.
+  "github_repo" only when the check is that the student provided a valid cloneable GitHub URL.
+  "collaborator_check" only when the check specifically requires the instructor to be added as a repo collaborator.
+  "part_completed" ONLY for multi-part labs where students have separate named game/app subfolders (Part1/, Part2/, etc.) — do NOT use for checking that a single config file or source file exists.
+  "manual" for anything requiring human visual inspection, including: folder/file organization, CORS behavior, proxy configuration, API integration, no-hardcoded-secret checks, and deployment correctness.
 
 Type-specific extra fields:
-  manual       → msg: short description of what to check
-  lint         → severity: "errors" or "warnings"
+  manual            → msg: short description of what to check
+  lint              → severity: "errors" or "warnings"
+  gitignore_check   → requiredEntry: entry that must be listed (e.g. ".env")
+  path_exists       → pathPattern: substring or regex matched against file paths (required)
 
-Example (3 rows):
+Example (5 rows):
 [
-  {"scoreCell":"D7","commentCell":"F7","type":"manual","maxScore":10,"msg":"NEEDS MANUAL CHECK (index.html exists)"},
-  {"scoreCell":"D8","commentCell":"F8","type":"lint","maxScore":5,"severity":"errors"},
-  {"scoreCell":"D9","commentCell":"F9","type":"github_repo","maxScore":3}
+  {"scoreCell":"D7","commentCell":"F7","type":"env_file_check","maxScore":3},
+  {"scoreCell":"D8","commentCell":"F8","type":"gitignore_check","maxScore":2,"requiredEntry":".env"},
+  {"scoreCell":"D9","commentCell":"F9","type":"path_exists","maxScore":5,"pathPattern":"functions/"},
+  {"scoreCell":"D10","commentCell":"F10","type":"manual","maxScore":4,"msg":"NEEDS MANUAL CHECK (no hardcoded API key in source files)"},
+  {"scoreCell":"D11","commentCell":"F11","type":"apps_in_repo","maxScore":3}
 ]`;
 }
 
@@ -475,7 +488,7 @@ async function main() {
                 );
 
                 if (noRubricChoice === 'extract') {
-                    const cfg = buildConfig(labName, { extractOnly: true });
+                    const cfg = assembleConfig(null, { extractOnly: true });
                     writeLab(labDir, cfg, null, null);
                     summary = [
                         `\n=== Done! ===`,
@@ -551,24 +564,16 @@ async function main() {
             .filter(e => !e._skip)
             .map(({ _label, _skip, ...rest }) => rest);  // eslint-disable-line no-unused-vars
 
-        const config = buildConfig(labName, {
+        // assembleConfig deep-clones existingConfig and overwrites only the keys the
+        // wizard owns, so a re-run preserves customAnalyzer, validate, nameCheck,
+        // codeReview, variations, packageCheck, repoHygiene, lint, features, parts —
+        // anything the wizard doesn't prompt for.
+        const config = assembleConfig(existingConfig, {
             rubricName,
             titleText,
             runtimeCheck,
-            features:     existingConfig?.analysis?.features || [],
             mappings,
-            parts:        existingConfig?.analysis?.parts    || null,
-            variations:   existingConfig?.variations         || null,
-            analyzerName: null,
-            optional: {
-                titleCell,
-                summaryCell,
-                graderCell,
-                codeReview:   existingConfig?.codeReview         || null,
-                lintExclude:  existingConfig?.lint?.exclude       || null,
-                packageCheck: existingConfig?.packageCheck        || null,
-                repoHygiene:  existingConfig?.repoHygiene         || null,
-            },
+            optional: { titleCell, summaryCell, graderCell },
         });
 
         tui.print('\n--- Writing Config ---');

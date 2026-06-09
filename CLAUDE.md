@@ -10,6 +10,7 @@ node run_all.js Lab03        # first-time grade
 node run_all.js Lab03 --regrade   # re-run grading phases, keep extracted code
 node run_all.js Lab03 --reclone         # delete extracted code, re-clone, then grade
 node run_all.js Lab03 --ai-comments     # grade with Ollama-generated rubric summary sentences
+node run_all.js Lab03 --ai-model=qwen3-coder  # grade with a specific Ollama model (implies --ai-comments)
 node run_all.js Lab06 --text-report     # grade without rubric spreadsheet, generates .txt reports
 node run_all.js TermProject ApiDoc      # grade one step of a multi-step lab
 npx eslint --format json path/to/files/*.js
@@ -34,6 +35,7 @@ npx vitest                  # watch mode
 - **csstree-validator** — offline CSS validator used by `validate_css.js`
 - **globals** — browser/node global definitions for ESLint flat config
 - **eslint** — v9+ flat config
+- **neo-blessed** — terminal UI framework used by `configure_lab.js` wizard
 - **vitest** (dev) — test runner
 
 ## Architecture
@@ -56,6 +58,10 @@ npx vitest                  # watch mode
 - **lib/file_walker.js** — Recursive directory traversal. Exports: `walk(dir, opts)` (core traversal with `visit`, `onFile`, `onDir`, `shouldSkip`, `shouldDescend`, `followSymlinks`, `maxDepth`); `getAllFilesByExt(dir, ext, exclusions)` (collect files by extension); `DEFAULT_SKIP_DIRS` (Set of dirs never scanned: `node_modules`, `dist`, `build`, `.git`, `__MACOSX`).
 - **lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
 - **lib/ollama_comments.js** — HTTP client for a local Ollama server; generates one-sentence AI rubric summaries.
+- **lib/lab_config.js** — Pure, UI-agnostic functions for lab configuration. Exports spreadsheet helpers (`readRubricRows`, `detectRubricLayout`), assignment discovery (`getExistingAssignments`, `getExistingSteps`), config assembly (`buildConfig`, `writeLab`), mapping type schemas (`MAPPING_TYPES`, `MAPPING_TYPE_SCHEMA`), and `guessMappingType`. No readline/TUI/process.exit — safe to import from anywhere including tests.
+- **lib/llm_client.js** — Unified LLM client supporting Ollama, OpenRouter, and Anthropic. Used by `configure_lab.js` to generate AI-assisted config drafts. Exports `LLMClient`, `loadLLMClient` (reads provider/key from `local-config.json`), `setupLLMInteractive`, and `selectModel`. Handles HTTP 429 rate-limit retries with fallback model.
+- **lib/tui.js** — Terminal UI primitives for `configure_lab.js` wizard (neo-blessed). Provides a scrollable log pane, text input bar, arrow-key option popup, full-screen review table, and spinner. Redirects `console.log`/`console.error` to the TUI pane while active.
+- **lib/config_prompts.js** — Driver-based rubric prompt functions shared between the TUI wizard and tests. Implements `promptRubricRows`, `promptRubricCriteria`, `copyRubric`, `promptFields`, and `buildMappingEntry`. Uses a driver interface (`ask`, `askBoolean`, `askInt`, `askOptions`, `print`, `exit`) so the same logic runs in both interactive and test contexts.
 
 ### Config files
 
@@ -112,7 +118,11 @@ AI_Grading/   ← this directory
   ├── lib/                         # shared utilities used by pipeline phases
   │   ├── file_walker.js
   │   ├── rubric_writer.js
-  │   └── ollama_comments.js
+  │   ├── ollama_comments.js
+  │   ├── lab_config.js            # pure config helpers (spreadsheet parsing, mapping schemas)
+  │   ├── llm_client.js            # unified LLM client (Ollama / OpenRouter / Anthropic)
+  │   ├── tui.js                   # neo-blessed TUI for configure_lab.js wizard
+  │   └── config_prompts.js        # driver-based rubric prompt logic (TUI + test shared)
   ├── bin/                         # secondary CLI tools
   │   ├── rubric_to_md.js
   │   └── configure_lab.js         # interactive lab config creation wizard
@@ -175,6 +185,8 @@ AI_Grading/   ← this directory
 
 ### Config schema (configs/{AssignmentName}/{assignmentname}_config.json)
 
+  - extractOnly: boolean (optional) — when `true`, only the extraction phase runs; no runtime check, analysis, lint, or grade generation. Useful for previewing what was submitted before configuring the full rubric.
+
   - rubricName: string — rubric filename in the lab directory
 
   - runtimeCheck: "browser" | "build" | "both"
@@ -185,6 +197,8 @@ AI_Grading/   ← this directory
   - titleCell, titleText: (optional) — cell and text for lab title
 
   - codeReview: { studentNameCell, groupCell, manualFallback } (optional) — `studentNameCell`/`groupCell` name the cells where the student name and lab group letter are written. There is **no default**: if a cell is not specified, that value is not written (generic code makes no assumption about rubric layout). All current lab rubrics use `B1`/`C1`.
+
+  - variations: { "A": { appName }, "B": { appName }, "C": { appName } } (optional) — maps group letters to expected app names for labs where each group builds a different version of the project (e.g., group A builds "Double Trouble Domino"). When present, `analyze_code.js` scans the extracted directory for a folder whose name best matches the group's `appName` and records the detected variation in `analysis.versionVariation`.
 
   - analysis.features[]: { id, regex, fileRegex } — features to count via regex
   - analysis.customAnalyzer: string (optional) — path (relative to configs/{AssignmentName}/) to a JS module that receives (jsFiles, analysis, config, student) and merges its return into analysis. The return may include `reportSections: [{ title, lines[] }]` — the text-report renderer prints these generically (used by Lab06 for its "API Integration Pipeline" breakdown), so lab-specific report content lives in the analyzer, not in pipeline code.
@@ -200,7 +214,7 @@ AI_Grading/   ← this directory
     - extraAllowed: string — additional characters to allow in file/folder names beyond `[A-Za-z0-9._-]`
 
   - mappings[] — rubric cell assignments (types listed below)
-    - types: feature | part1_completed | part_completed | apps_in_repo | developer_comments | code_review | url_check | deploy_check | lint | build_check | browser_check | build_and_browser_check | html_validate | css_validate | name_check | manual | part_feature | repo_hygiene | github_repo | collaborator_check | gitignore_check | scripts_check | npm_package | package_check
+    - types: feature | part1_completed | part_completed | apps_in_repo | developer_comments | code_review | url_check | deploy_check | lint | build_check | browser_check | build_and_browser_check | html_validate | css_validate | name_check | manual | part_feature | repo_hygiene | github_repo | collaborator_check | gitignore_check | scripts_check | npm_package | package_check | env_file_check | path_exists
     - any mapping may include `stockComments: { full, partial, zero }` — short strings written into the comment cell instead of the verbose auto-generated comment. `keepComment: true` handlers (e.g. `deploy_check` manual-review flags) are **not** overridden by `stockComments.zero`.
     - lint mappings accept an optional `severity: "errors" | "warnings"` to report only errors (syntax) or only warnings (style) into separate cells
     - `html_validate` / `css_validate` mappings accept `tolerance` (default 3) — errors ≤ tolerance score half points; more score zero
@@ -209,6 +223,8 @@ AI_Grading/   ← this directory
     - `code_review` mappings: comment reports both review presence and production column completion as "yes and yes" / "yes and no" / "no and no". Full points when both are true; half points (maxScore/2) when review submitted but production column incomplete; 0 when no review.
     - `manual` mappings: assigned `_reviewIndex` sequentially (order in config). Uses production score from code review form; falls back to beta score when production cell is empty. Comment indicates which column was used.
     - `deploy_check` mappings: async — fetches the citstudent URL with up to 3 attempts (10s timeout each, 2s delay between retries), then inspects `<script>` tags for bundling indicators (hashed filenames, assets/dist/static paths, bundle/min/chunk). Full points for reachable + bundled; half points for reachable but unbundled. When the URL cannot be verified — a thrown fetch (DNS/connection/TLS/timeout) or an HTTP error response — the handler scores 0 **but flags the row for manual review** with a `NEEDS MANUAL CHECK: … — verify deployment manually` comment that carries the real failure reason (e.g. `ECONNRESET`, `HTTP 503`). It sets `keepComment: true` so this diagnostic is **not** overwritten by `stockComments.zero`; this prevents a transient grader-side network failure from silently zeroing a student whose app is actually live. A genuinely missing URL still scores 0 with the plain stock "zero" comment. Any handler may return `keepComment: true` to protect its comment from the stock-tier override.
+    - `env_file_check` mappings: full points if a `.env` file containing at least one `KEY=VALUE` pair is present in the submission. When not found, scores 0 but flags for manual review (normal if the file is gitignored and the student submitted via GitHub).
+    - `path_exists` mappings: full points if any file whose path contains `pathPattern` (substring or regex) exists in the submission. Use for "required file created" checks (e.g., verify a specific config or output file is present). Requires `pathPattern` field.
 
   - lint.exclude[]: path substrings to skip during linting
   - repoHygiene.excludedFromRepo[]: folder names that should not be committed (checked via `git ls-files`; only applies to git-cloned repos)

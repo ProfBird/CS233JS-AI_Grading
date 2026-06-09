@@ -414,8 +414,29 @@ async function main() {
                     process.exit(1);
                 }
             } else {
-                console.error(`ERROR: Directory not found at ${labDir}`);
-                console.error(`  Make sure your lab root (${labRoot}) is the folder that contains the ${labName} subdirectory.`);
+                // labRoot exists (verified at startup) but has no subfolder for this lab.
+                // Distinguish "submissions not downloaded yet" from "labRoot misconfigured":
+                // if labRoot already holds other lab folders, the root is clearly correct and
+                // the likely cause is that this lab's Moodle submissions haven't been downloaded.
+                let siblings = [];
+                try {
+                    siblings = fs.readdirSync(labRoot)
+                        .filter(d => {
+                            try { return fs.statSync(path.join(labRoot, d)).isDirectory(); }
+                            catch (e) { return false; }
+                        })
+                        .sort();
+                } catch (e) { /* labRoot unreadable — fall through to the generic hint */ }
+
+                console.error(`\nERROR: No submissions folder found for ${labName} at:`);
+                console.error(`  ${labDir}`);
+                if (siblings.length > 0) {
+                    console.error(`\n  Your lab root looks correct — it already contains: ${siblings.join(', ')}`);
+                    console.error(`  It just has no ${labName} folder yet. Have you downloaded the ${labName}`);
+                    console.error(`  submissions from Moodle into <labRoot>/${labName}/ ?`);
+                } else {
+                    console.error(`  Make sure your lab root (${labRoot}) is the folder that contains the ${labName} subdirectory.`);
+                }
                 process.exit(1);
             }
         }

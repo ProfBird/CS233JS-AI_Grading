@@ -423,6 +423,10 @@ async function main() {
             tui.print(`  Created: ${labDir}`);
         }
 
+        // configPath is needed both for the normal path and the extract-only early exit.
+        // writeLab uses path.basename(labDir) for the filename, so we match that here.
+        const configPath = path.join(labDir, `${path.basename(labDir).toLowerCase()}_config.json`);
+
         // 3. Find rubric
         tui.print('\n--- Rubric ---');
         const found = findSpreadsheets(labDir);
@@ -457,6 +461,31 @@ async function main() {
                 const rubricExt = path.extname(sourceRubricPath).toLowerCase();
                 rubricName = `CS233JS_${labName}_Rubric${rubricExt}`;
             } else {
+                // No rubric found anywhere — offer extract-only as an alternative to
+                // providing a file path. Extract-only clones repos and writes a log;
+                // no runtime check, analysis, lint, or grade spreadsheets are produced.
+                const noRubricChoice = await tui.askOptions(
+                    'No rubric spreadsheet found. How would you like to proceed?',
+                    [
+                        { label: 'Provide a rubric file path', value: 'provide',
+                          desc: 'Copy a .xlsx or .xlsm rubric into the config directory' },
+                        { label: 'Extract-only (no rubric)',   value: 'extract',
+                          desc: 'Just clone/extract repos; skip runtime/analysis/grading — grade manually' },
+                    ]
+                );
+
+                if (noRubricChoice === 'extract') {
+                    const cfg = buildConfig(labName, { extractOnly: true });
+                    writeLab(labDir, cfg, null, null);
+                    summary = [
+                        `\n=== Done! ===`,
+                        `  Extract-only config written — repos will be cloned, no grading.`,
+                        `  Config: ${configPath}`,
+                        `  Run: node run_all.js ${labName}${stepName ? ' ' + stepName : ''}`,
+                    ];
+                    return;   // skip rubric read, draft, review, and settings steps
+                }
+
                 const r = await copyRubric(tui, labName);
                 rubricName       = r.rubricName;
                 sourceRubricPath = r.rubricPath;
@@ -477,9 +506,7 @@ async function main() {
         const rubricPath = path.join(labDir, rubricName);
 
         // Load existing config (for defaults, feature-id guard, and preservation)
-        // writeLab uses path.basename(labDir) for the filename, so we match that here.
         let existingConfig = null;
-        const configPath = path.join(labDir, `${path.basename(labDir).toLowerCase()}_config.json`);
         try { existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
         const knownFeatureIds = new Set(
             (existingConfig?.analysis?.features || []).map(f => f.id).filter(Boolean)

@@ -32,7 +32,7 @@ const { getExistingSteps } = require('./lib/lab_config.js');
 const { VALID_MAPPING_TYPES } = generateGrades;
 const { CODE_DIR, REPO_DIR } = extractCode;
 
-const ARTIFACTS_DIR = 'ArtifactsAndRubrics';
+const ARTIFACTS_DIR = 'Artifacts';
 const SUBMISSIONS_DIR = 'SubmissionsAndAssessment';
 const LOG_FILE = 'grading_log.txt';
 

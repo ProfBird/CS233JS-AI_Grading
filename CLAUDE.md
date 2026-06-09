@@ -15,7 +15,7 @@ node run_all.js TermProject ApiDoc      # grade one step of a multi-step lab
 npx eslint --format json path/to/files/*.js
 
 node bin/rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
-node bin/create_lab.js [AssignmentName]       # interactive wizard to create a new lab/assignment config + copy rubric
+node bin/configure_lab.js [AssignmentName]    # interactive wizard to create a new lab/assignment config + copy rubric
 node archive/update_lab04_rubric.js            # one-time: rewrites Lab04 rubric cells to match Lab04 point design
 ```
 
@@ -85,7 +85,7 @@ configs/{AssignmentName}/
 - `rubricName` in each step config is the filename only (e.g. `"CS233JS_DevEnvAndStaticSite_Rubric.xlsm"`), resolved relative to that step's subdirectory.
 - Run: `node run_all.js TermProject DevEnvAndStaticSite` (or just `node run_all.js TermProject` for an interactive step picker).
 - If the labRoot has a matching step subdirectory (e.g. `<labRoot>/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from `<labRoot>/TermProject/` directly — the labRoot step layout is optional.
-- `create_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step to set up each step's config.
+- `configure_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step to set up each step's config.
 
 **Converting a flat lab to multi-step:**
 1. `mkdir configs/{Lab}/{StepName}`
@@ -115,7 +115,7 @@ AI_Grading/   ← this directory
   │   └── ollama_comments.js
   ├── bin/                         # secondary CLI tools
   │   ├── rubric_to_md.js
-  │   └── create_lab.js            # interactive lab config creation wizard
+  │   └── configure_lab.js         # interactive lab config creation wizard
   ├── configs/
   │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
   │   └── {AssignmentName}/
@@ -142,7 +142,7 @@ AI_Grading/   ← this directory
 
 <codeRoot>/   (local, outside Google Drive)
   └── {AssignmentName}/  ← flat lab: created automatically; keeps different assignments separate
-      ├── ArtifactsAndRubrics/   ← grader-produced files (reports, log)
+      ├── Artifacts/   ← grader-produced files (reports, log)
       │   ├── analysis_report.json
       │   ├── lint_report.json
       │   ├── runtime_report.json
@@ -155,10 +155,10 @@ AI_Grading/   ← this directory
               ├── repo/  (GitHub clone)  or  extracted_code/  (unzipped)
               └── StudentName_Grade.xlsx
 
-  # Multi-step: each step gets its own ArtifactsAndRubrics + SubmissionsAndAssessment tree
+  # Multi-step: each step gets its own Artifacts + SubmissionsAndAssessment tree
   └── {AssignmentName}/
       └── {StepName}/
-          ├── ArtifactsAndRubrics/
+          ├── Artifacts/
           └── SubmissionsAndAssessment/
               └── StudentName/
                   └── StudentName_Grade.xlsx

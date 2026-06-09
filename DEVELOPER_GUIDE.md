@@ -15,7 +15,7 @@ graph TD
     subgraph "Entry Points"
         run_all[run_all.js]
         rubric_to_md[rubric_to_md.js]
-        create_lab[create_lab.js]
+        configure_lab[configure_lab.js]
     end
 
     subgraph "Pipeline Modules"
@@ -91,7 +91,7 @@ graph TD
 
     style run_all fill:#4a90d9,color:#fff
     style rubric_to_md fill:#4a90d9,color:#fff
-    style create_lab fill:#4a90d9,color:#fff
+    style configure_lab fill:#4a90d9,color:#fff
     style extract fill:#50b86c,color:#fff
     style runtime fill:#50b86c,color:#fff
     style code_review fill:#50b86c,color:#fff
@@ -280,7 +280,7 @@ The entry point. Handles CLI argument parsing, interactive menus, env configurat
 **Key behaviors:**
 - Reads `labRoot` and `codeRoot` from `AI_Grading/configs/local-config.json` (prompts & saves if missing; tries `default-config.json` as fallback for new machines; migrates from old `env.json` automatically)
 - Scans `configs/` for subdirectories containing a matching `{assignmentname}_config.json` to build the assignment menu
-- Computes `submissionsDir = <codeRoot>/<labName>/SubmissionsAndAssessment` and `artifactsDir = <codeRoot>/<labName>/ArtifactsAndRubrics`
+- Computes `submissionsDir = <codeRoot>/<labName>/SubmissionsAndAssessment` and `artifactsDir = <codeRoot>/<labName>/Artifacts`
 - `--reclone` wipes both old-style dirs (inside submission folders) and the `<codeRoot>/<labName>` tree
 - `--regrade` without `--reclone` runs `git pull` on each student's existing repo before re-grading
 - When `labDir` has no direct Moodle submissions but contains subdirs that do (e.g. separate Beta/Production groups), prompts the user to pick which group to grade
@@ -470,25 +470,25 @@ Dumps a rubric spreadsheet's Grade sheet as Markdown. Not part of the grading pi
 
 Usage: `node bin/rubric_to_md.js path/to/Rubric.xlsm [output.md]`
 
-### `create_lab.js` — Assignment Configuration Wizard
+### `configure_lab.js` — Assignment Configuration Wizard
 
 Interactive CLI tool to create a new lab or assignment configuration from scratch. Not part of the grading pipeline.
 
-Usage: `node bin/create_lab.js [AssignmentName]`
+Usage: `node bin/configure_lab.js [AssignmentName]`
 
-**Exported functions (testable):**
-| Function | Purpose |
-|---|---|
-| `normalizeAssignmentName(input)` | Digits-only → `"Lab07"`; `Lab`-prefixed → normalized `"Lab07"`; other slug (e.g. `"TermProject"`) → returned as-is |
-| `colLetter(idx)` / `excelCell(col, row)` | Build Excel cell references (e.g., `"C7"`) |
-| `readRubricRows(path)` | Reads the Grade sheet from a rubric via xlsx, returns structured row objects |
-| `buildConfig(labName, responses)` | Assembles a `{assignmentname}_config.json` object from wizard responses |
-| `buildMappingEntry(rl, type, rubricRow)` | Creates a single mapping entry with type-specific fields |
-| `askBoolean(rl, q, default)` / `askOptions(rl, q, opts)` / `ask(rl, q)` | Readline-based prompt helpers |
+**Key functions (testable via `lib/lab_config.js` and `lib/config_prompts.js`):**
+| Function | Module | Purpose |
+|---|---|---|
+| `normalizeAssignmentName(input)` | `lab_config.js` | Digits-only → `"Lab07"`; `Lab`-prefixed → normalized `"Lab07"`; other slug (e.g. `"TermProject"`) → returned as-is |
+| `colLetter(idx)` / `excelCell(col, row)` | `lab_config.js` | Build Excel cell references (e.g., `"C7"`) |
+| `readRubricRows(path, labelOrLayout?)` | `lab_config.js` | Reads the Grade sheet from a rubric via xlsx, returns structured row objects |
+| `buildConfig(labName, responses)` | `lab_config.js` | Assembles a `{assignmentname}_config.json` object from wizard responses |
+| `buildMappingEntry(driver, type, rubricRow)` | `config_prompts.js` | Creates a single mapping entry with type-specific fields |
+| `copyRubric(driver, labName)` | `config_prompts.js` | Prompts for a rubric file path, suggests canonical name, returns `{ rubricPath, rubricName, ext }` |
 
-**Input mechanism:** Uses a `line`-event-based reader (not `rl.question`) for reliable behavior with both TTY and piped stdin. The `createRL()` factory creates a readline interface augmented with `_getLine(prompt)` that returns a Promise resolving to the next line or `null` on EOF.
+**Input mechanism:** Uses a `driver` abstraction (`{ ask, askBoolean, askInt, askOptions, print, exit }`) so the wizard logic is testable independently of the TUI. The TUI implementation lives in `configure_lab.js`; tests use a `mockDriver` factory in `test/configure_lab.spec.mjs`.
 
-Tests live in `test/create_lab.spec.mjs`.
+Tests live in `test/configure_lab.spec.mjs`.
 
 ---
 
@@ -508,7 +508,7 @@ Machine-specific. Gitignored. Created on first run. Both paths are prompted for 
 | Field | Description |
 |---|---|
 | `labRoot` | The Google Drive folder containing all lab directories (e.g., `StudentLabWork`) |
-| `codeRoot` | A local folder **outside** Google Drive where student code is cloned/unzipped. The grader creates `<labName>/SubmissionsAndAssessment/` and `<labName>/ArtifactsAndRubrics/` inside it automatically |
+| `codeRoot` | A local folder **outside** Google Drive where student code is cloned/unzipped. The grader creates `<labName>/SubmissionsAndAssessment/` and `<labName>/Artifacts/` inside it automatically |
 
 ### `configs/{AssignmentName}/{assignmentname}_config.json` schema
 
@@ -616,9 +616,9 @@ Machine-specific. Gitignored. Created on first run. Both paths are prompted for 
 ### Using the interactive wizard (recommended)
 
 ```bash
-node bin/create_lab.js               # fully interactive, prompts for assignment name
-node bin/create_lab.js Lab07         # pre-specify a lab by number or name
-node bin/create_lab.js TermProject   # pre-specify a non-numbered assignment
+node bin/configure_lab.js               # fully interactive, prompts for assignment name
+node bin/configure_lab.js Lab07         # pre-specify a lab by number or name
+node bin/configure_lab.js TermProject   # pre-specify a non-numbered assignment
 ```
 
 The wizard guides you through:

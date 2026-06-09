@@ -36,9 +36,9 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 Use the interactive wizard to set up grading for a new lab:
 
 ```bash
-node bin/create_lab.js               # interactive, prompts for assignment name
-node bin/create_lab.js Lab07         # pre-specify a lab by number or name
-node bin/create_lab.js TermProject   # pre-specify a non-numbered assignment
+node bin/configure_lab.js               # interactive, prompts for assignment name
+node bin/configure_lab.js Lab07         # pre-specify a lab by number or name
+node bin/configure_lab.js TermProject   # pre-specify a non-numbered assignment
 ```
 
 The wizard will:
@@ -77,7 +77,7 @@ AI_Grading/                   ← this tool (git repo)
 
 <codeRoot>/                   ← local folder outside Google Drive
   └── {AssignmentName}/       ← created automatically per assignment (flat lab)
-      ├── ArtifactsAndRubrics/
+      ├── Artifacts/
       │   └── ...
       └── SubmissionsAndAssessment/
           └── StudentName/
@@ -87,7 +87,7 @@ AI_Grading/                   ← this tool (git repo)
   # Multi-step labs: each step gets its own output tree
   └── {AssignmentName}/
       └── {StepName}/
-          ├── ArtifactsAndRubrics/
+          ├── Artifacts/
           └── SubmissionsAndAssessment/
               └── StudentName/
                   └── StudentName_Grade.xlsx
@@ -99,7 +99,7 @@ AI_Grading/                   ← this tool (git repo)
 - One config file at `configs/{AssignmentName}/{assignmentname}_config.json`
 - Rubric template lives alongside the config
 - Run: `node run_all.js Lab06`
-- `create_lab.js` creates this layout by default (answer "No" when asked about multiple submission sets)
+- `configure_lab.js` creates this layout by default (answer "No" when asked about multiple submission sets)
 
 **Multi-step lab** — separate submission sets for different stages of the same project (e.g., TermProject with DevEnvAndStaticSite, ApiDoc, Beta, Production):
 - No top-level config file; each step gets its own subdirectory under `configs/{AssignmentName}/{StepName}/`
@@ -107,7 +107,7 @@ AI_Grading/                   ← this tool (git repo)
 - If the labRoot has a matching step subdirectory (e.g. `<labRoot>/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from the lab root directly — the labRoot step layout is optional
 - Run a specific step: `node run_all.js TermProject DevEnvAndStaticSite`
 - Run interactively (step picker shown): `node run_all.js TermProject`
-- `create_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step
+- `configure_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step
 
 **Converting a flat lab to multi-step** (e.g., you want to add a Beta step to a lab that currently only has a Production config):
 ```bash
@@ -238,4 +238,4 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 
 **Rubric not found:** If the rubric spreadsheet isn't in `configs/{AssignmentName}/`, the grader will prompt you to provide one or automatically switch to `--text-report` mode (generates `.txt` files instead).
 
-**Output files:** Each student gets a graded spreadsheet (or `.txt` report) in `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/` (flat) or `<codeRoot>/<labName>/<stepName>/SubmissionsAndAssessment/StudentName/` (multi-step). A `grading_log.txt` summary is written to the corresponding `ArtifactsAndRubrics/` folder, alongside JSON reports for each pipeline phase.
+**Output files:** Each student gets a graded spreadsheet (or `.txt` report) in `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/` (flat) or `<codeRoot>/<labName>/<stepName>/SubmissionsAndAssessment/StudentName/` (multi-step). A `grading_log.txt` summary is written to the corresponding `Artifacts/` folder, alongside JSON reports for each pipeline phase.

@@ -9,7 +9,7 @@ const path = require('path');
 const {
     normalizeAssignmentName, colLetter,
     findSpreadsheets, readRubricCriteria,
-    getExistingAssignments,
+    getExistingAssignments, getExistingSteps,
     buildConfig, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
 } = require('../lib/lab_config.js');
@@ -369,7 +369,55 @@ async function main() {
             }
         }
 
-        const labDir = path.join(CONFIGS_DIR, labName);
+        // 2b. Multi-step detection
+        const labTopDir     = path.join(CONFIGS_DIR, labName);
+        const existingSteps = getExistingSteps(labName);
+        let stepName = null;
+
+        if (existingSteps.length > 0) {
+            const stepOptions = [
+                ...existingSteps.map(s => ({ label: s, value: s, status: 'existing step' })),
+                { label: 'Add new step', value: '__new__', color: 'green',
+                  desc: 'Create a new submission step for this lab' },
+            ];
+            const stepChoice = await tui.askOptions(
+                `${labName} has multiple submission steps. Which step?`, stepOptions, 0);
+            if (stepChoice === '__new__') {
+                while (true) {
+                    const raw = (await tui.ask('New step name (e.g. TermProjectProposal)')).trim();
+                    if (!raw) { tui.print('  Step name is required.'); continue; }
+                    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw)) {
+                        tui.print('  Invalid name. Use letters, numbers, underscores, or hyphens.');
+                        continue;
+                    }
+                    stepName = raw;
+                    break;
+                }
+            } else {
+                stepName = stepChoice;
+            }
+        } else if (!fs.existsSync(labTopDir)) {
+            // Brand-new lab — ask upfront
+            const multi = await tui.askBoolean(
+                'Will there be multiple sets of submissions for this lab?', false);
+            if (multi) {
+                while (true) {
+                    const raw = (await tui.ask('Step name (e.g. TermProjectProposal)')).trim();
+                    if (!raw) { tui.print('  Step name is required.'); continue; }
+                    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw)) {
+                        tui.print('  Invalid name. Use letters, numbers, underscores, or hyphens.');
+                        continue;
+                    }
+                    stepName = raw;
+                    break;
+                }
+            }
+        }
+
+        const labDir = stepName
+            ? path.join(labTopDir, stepName)
+            : labTopDir;
+
         if (!fs.existsSync(labDir)) {
             fs.mkdirSync(labDir, { recursive: true });
             tui.print(`  Created: ${labDir}`);
@@ -429,8 +477,9 @@ async function main() {
         const rubricPath = path.join(labDir, rubricName);
 
         // Load existing config (for defaults, feature-id guard, and preservation)
+        // writeLab uses path.basename(labDir) for the filename, so we match that here.
         let existingConfig = null;
-        const configPath = path.join(labDir, `${labName.toLowerCase()}_config.json`);
+        const configPath = path.join(labDir, `${path.basename(labDir).toLowerCase()}_config.json`);
         try { existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
         const knownFeatureIds = new Set(
             (existingConfig?.analysis?.features || []).map(f => f.id).filter(Boolean)

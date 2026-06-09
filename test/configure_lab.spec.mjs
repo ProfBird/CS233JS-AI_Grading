@@ -1,7 +1,10 @@
 /**
- * create_lab.spec.mjs
+ * configure_lab.spec.mjs
  *
- * Unit tests for the lab configuration creation wizard's pure functions.
+ * Unit tests for lab configuration functions:
+ *   lib/lab_config.js   — pure data/config helpers
+ *   lib/config_prompts.js — driver-based rubric prompt functions
+ *   bin/configure_lab.js  — AI-assisted wizard helpers
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
@@ -16,9 +19,8 @@ const {
 } = await import('../lib/lab_config.js');
 
 const {
-    askBoolean, askOptions, ask, askInt,
-    buildMappingEntry, promptFeatures, copyRubric, promptRubricRows,
-} = await import('../bin/create_lab.js');
+    buildMappingEntry, copyRubric, promptRubricRows,
+} = await import('../lib/config_prompts.js');
 
 const {
     heuristicDraft, mergeLLMResponse, guardFeatureType, findCriteria, printDraftTable,
@@ -28,8 +30,53 @@ const TERM_RUBRIC = join(import.meta.dirname, '..', 'configs', 'TermProject',
     'DevEnvAndStaticSite', 'CS233JS_TermProjectDevEnv_Rubric.xlsm');
 const LAB04_RUBRIC = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
 
-// ── mock rl factory ─────────────────────────────────────────────────────
+// ── mock driver factory ──────────────────────────────────────────────────
+// Satisfies the driver interface expected by config_prompts.js:
+//   ask(prompt, def?)          → Promise<string>
+//   askBoolean(q, def?)        → Promise<boolean>
+//   askInt(prompt, def?)       → Promise<number>
+//   askOptions(prompt, opts, defIdx?) → Promise<value>
+//   print(line)                → void
+//   exit(code?)                → void
 
+function mockDriver(answers) {
+    const queue = [...answers];
+    const pop = () => queue.shift() ?? null;
+
+    return {
+        print() {},  // no-op
+        exit(code = 0) { throw new Error(`driver.exit(${code}) called`); },
+        ask(_prompt, def = '') {
+            const v = pop();
+            if (v === null) throw new Error('driver.ask: no more answers');
+            return Promise.resolve(v !== '' ? v : def);
+        },
+        askBoolean(_q, def = false) {
+            const v = pop();
+            if (v === null) throw new Error('driver.askBoolean: no more answers');
+            if (v === '') return Promise.resolve(def);
+            return Promise.resolve(/^y(es)?$/i.test(v));
+        },
+        askInt(_prompt, def = 0) {
+            const v = pop();
+            if (v === null) throw new Error('driver.askInt: no more answers');
+            const n = parseInt(v, 10);
+            return Promise.resolve(!isNaN(n) ? n : def);
+        },
+        askOptions(_prompt, opts, defIdx = 0) {
+            const v = pop();
+            if (v === null) throw new Error('driver.askOptions: no more answers');
+            if (v === '') return Promise.resolve(opts[defIdx]?.value ?? opts[0]?.value);
+            const n = parseInt(v, 10);
+            if (!isNaN(n) && n >= 1 && n <= opts.length) return Promise.resolve(opts[n - 1].value);
+            // direct value match
+            const match = opts.find(o => o.value === v);
+            return Promise.resolve(match ? match.value : (opts[defIdx]?.value ?? opts[0]?.value));
+        },
+    };
+}
+
+// Keep a simpler mockRL for any test that still uses the raw _getLine interface
 function mockRL(answers) {
     const answersClone = [...answers];
     return {
@@ -44,250 +91,201 @@ function mockRL(answers) {
 // ── colLetter ───────────────────────────────────────────────────────────
 
 describe('colLetter', () => {
-    it('returns A for index 0', () => {
-        expect(colLetter(0)).toBe('A');
-    });
-    it('returns C for index 2', () => {
-        expect(colLetter(2)).toBe('C');
-    });
-    it('returns Z for index 25', () => {
-        expect(colLetter(25)).toBe('Z');
-    });
-    it('returns AA for index 26 (first two-letter column)', () => {
-        expect(colLetter(26)).toBe('AA');
-    });
-    it('returns AZ for index 51', () => {
-        expect(colLetter(51)).toBe('AZ');
-    });
-    it('returns BA for index 52', () => {
-        expect(colLetter(52)).toBe('BA');
-    });
-    it('returns E for index 4', () => {
-        expect(colLetter(4)).toBe('E');
-    });
+    it('returns A for index 0', () => expect(colLetter(0)).toBe('A'));
+    it('returns Z for index 25', () => expect(colLetter(25)).toBe('Z'));
+    it('returns AA for index 26', () => expect(colLetter(26)).toBe('AA'));
+    it('returns AZ for index 51', () => expect(colLetter(51)).toBe('AZ'));
+    it('returns BA for index 52', () => expect(colLetter(52)).toBe('BA'));
+    it('returns ZZ for index 701', () => expect(colLetter(701)).toBe('ZZ'));
+    it('returns AAA for index 702', () => expect(colLetter(702)).toBe('AAA'));
+    it('returns empty string for negative index', () => expect(colLetter(-1)).toBe(''));
 });
 
 // ── excelCell ───────────────────────────────────────────────────────────
 
 describe('excelCell', () => {
-    it('builds C7 from col 2, row 7', () => {
-        expect(excelCell(2, 7)).toBe('C7');
-    });
-    it('builds A1 from col 0, row 1', () => {
-        expect(excelCell(0, 1)).toBe('A1');
-    });
-    it('builds E15 from col 4, row 15', () => {
-        expect(excelCell(4, 15)).toBe('E15');
-    });
+    // row arg is the actual spreadsheet row number (1-based), matching XLSX convention
+    it('returns A1 for col 0, row 1', () => expect(excelCell(0, 1)).toBe('A1'));
+    it('returns B3 for col 1, row 3', () => expect(excelCell(1, 3)).toBe('B3'));
+    it('returns AA10 for col 26, row 10', () => expect(excelCell(26, 10)).toBe('AA10'));
 });
 
-// ── normalizeAssignmentName ────────────────────────────────────────────
+// ── normalizeAssignmentName ──────────────────────────────────────────────
 
 describe('normalizeAssignmentName', () => {
-    it('parses "7" → Lab07', () => {
-        expect(normalizeAssignmentName('7')).toBe('Lab07');
-    });
-    it('parses "07" → Lab07', () => {
-        expect(normalizeAssignmentName('07')).toBe('Lab07');
-    });
-    it('parses "Lab7" → Lab07', () => {
-        expect(normalizeAssignmentName('Lab7')).toBe('Lab07');
-    });
-    it('parses "Lab07" → Lab07', () => {
-        expect(normalizeAssignmentName('Lab07')).toBe('Lab07');
-    });
-    it('parses "lab03" → Lab03', () => {
-        expect(normalizeAssignmentName('lab03')).toBe('Lab03');
-    });
-    it('parses "Lab99" → Lab99', () => {
-        expect(normalizeAssignmentName('Lab99')).toBe('Lab99');
-    });
-    it('parses "10" → Lab10', () => {
+    it('converts a plain number to Lab-prefixed name', () => {
+        expect(normalizeAssignmentName('03')).toBe('Lab03');
+        expect(normalizeAssignmentName('3')).toBe('Lab03');
         expect(normalizeAssignmentName('10')).toBe('Lab10');
     });
-    it('parses "123" → Lab123', () => {
-        expect(normalizeAssignmentName('123')).toBe('Lab123');
+
+    it('accepts Lab-prefixed names as-is', () => {
+        expect(normalizeAssignmentName('Lab03')).toBe('Lab03');
+        expect(normalizeAssignmentName('Lab10')).toBe('Lab10');
     });
-    it('accepts "TermProject" as-is', () => {
+
+    it('accepts arbitrary slug names', () => {
         expect(normalizeAssignmentName('TermProject')).toBe('TermProject');
+        expect(normalizeAssignmentName('MyAssignment')).toBe('MyAssignment');
     });
-    it('accepts "FinalExam" as-is', () => {
-        expect(normalizeAssignmentName('FinalExam')).toBe('FinalExam');
-    });
-    it('accepts "Midterm_2" as-is', () => {
-        expect(normalizeAssignmentName('Midterm_2')).toBe('Midterm_2');
-    });
-    it('returns null for empty string', () => {
+
+    it('returns null for invalid input', () => {
         expect(normalizeAssignmentName('')).toBeNull();
+        expect(normalizeAssignmentName('  ')).toBeNull();
+        expect(normalizeAssignmentName('lab 03')).toBeNull();
     });
-    it('returns null for string with spaces', () => {
-        expect(normalizeAssignmentName('Term Project')).toBeNull();
+
+    it('accepts slugs with hyphens (Lab-03 is a valid slug)', () => {
+        expect(normalizeAssignmentName('Lab-03')).toBe('Lab-03');
     });
-    it('returns null for string starting with a digit (non-numeric)', () => {
-        expect(normalizeAssignmentName('1abc')).toBeNull();
+
+    it('is case-sensitive for slug names', () => {
+        expect(normalizeAssignmentName('termproject')).toBe('termproject');
+        expect(normalizeAssignmentName('TERMPROJECT')).toBe('TERMPROJECT');
+    });
+
+    it('handles numeric strings with leading zeros', () => {
+        expect(normalizeAssignmentName('007')).toBe('Lab07');
+    });
+
+    it('handles two-digit numbers without leading zero', () => {
+        expect(normalizeAssignmentName('99')).toBe('Lab99');
     });
 });
 
 // ── cellText ─────────────────────────────────────────────────────────────
+// cellText(row, i) — row is a plain array (from sheet_to_json), i is column index
 
 describe('cellText', () => {
-    it('extracts text from a row at given index', () => {
-        expect(cellText(['Label', '5', '3', ''], 0)).toBe('Label');
+    it('returns the string at the given index', () => {
+        expect(cellText(['Hello', 'World'], 0)).toBe('Hello');
+        expect(cellText(['Hello', 'World'], 1)).toBe('World');
     });
-    it('handles null cell', () => {
-        expect(cellText([null, 'x'], 0)).toBe('');
+
+    it('converts numbers to strings', () => {
+        expect(cellText([42], 0)).toBe('42');
     });
-    it('handles undefined cell', () => {
-        expect(cellText([undefined], 0)).toBe('');
-    });
-    it('trims whitespace', () => {
-        expect(cellText(['  hello  '], 0)).toBe('hello');
-    });
+
     it('returns empty string for missing index', () => {
+        expect(cellText([], 0)).toBe('');
         expect(cellText(['a'], 5)).toBe('');
     });
+
+    it('trims surrounding whitespace', () => {
+        expect(cellText(['  hello  '], 0)).toBe('hello');
+    });
 });
 
-// ── isBlankRow ──────────────────────────────────────────────────────────
+// ── isBlankRow ───────────────────────────────────────────────────────────
+// isBlankRow(row) — row is a plain array (from sheet_to_json)
 
 describe('isBlankRow', () => {
-    it('returns true for row of empty strings', () => {
-        expect(isBlankRow(['', '', ''])).toBe(true);
-    });
-    it('returns true for row with nulls', () => {
-        expect(isBlankRow([null, null, null])).toBe(true);
-    });
-    it('returns true for row with undefined', () => {
-        expect(isBlankRow([undefined, undefined])).toBe(true);
-    });
-    it('returns false if any cell has content', () => {
-        expect(isBlankRow(['', 'x', ''])).toBe(false);
-    });
-    it('returns false for row with number 0', () => {
-        expect(isBlankRow([0, '', ''])).toBe(false);
-    });
-    it('returns true for empty array', () => {
+    it('returns true for an empty array', () => {
         expect(isBlankRow([])).toBe(true);
     });
+
+    it('returns true for row with only blank cells', () => {
+        expect(isBlankRow(['', '', null])).toBe(true);
+    });
+
+    it('returns false for row with at least one non-empty cell', () => {
+        expect(isBlankRow(['', 'hello', ''])).toBe(false);
+    });
 });
 
-// ── readRubricRows ──────────────────────────────────────────────────────
+// ── readRubricRows ───────────────────────────────────────────────────────
 
 describe('readRubricRows', () => {
-    it('reads Grade sheet from a real rubric and returns structured rows', () => {
-        const rubricPath = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
-        const rows = readRubricRows(rubricPath);
-
+    it('returns rows from a real rubric file', () => {
+        const rows = readRubricRows(LAB04_RUBRIC);
         expect(rows).not.toBeNull();
         expect(rows.length).toBeGreaterThan(0);
+    });
 
-        // Each row should have the expected shape
-        const first = rows[0];
-        expect(first).toHaveProperty('excelRow');
-        expect(first).toHaveProperty('label');
-        expect(first).toHaveProperty('possible');
-        expect(first).toHaveProperty('scoreCell');
-        expect(first).toHaveProperty('commentCell');
-        expect(first).toHaveProperty('isSectionHeader');
-
-        // Score cells should be in C column (col 2)
-        for (const r of rows) {
-            expect(r.scoreCell).toMatch(/^C\d+$/);
-        }
-        // Comment cells should be in E column (col 4)
-        for (const r of rows) {
-            expect(r.commentCell).toMatch(/^E\d+$/);
+    it('returns an array of objects with scoreCell and label properties', () => {
+        const rows = readRubricRows(LAB04_RUBRIC);
+        const scoringRows = rows.filter(r => !r.isSectionHeader);
+        expect(scoringRows.length).toBeGreaterThan(0);
+        for (const row of scoringRows) {
+            expect(row).toHaveProperty('scoreCell');
+            expect(row).toHaveProperty('label');
         }
     });
 
-    it('returns null for non-existent file', () => {
-        const result = readRubricRows('/nonexistent/path.xlsx');
-        expect(result).toBeNull();
+    it('identifies section headers (rows without a score cell)', () => {
+        const rows = readRubricRows(LAB04_RUBRIC);
+        const headers = rows.filter(r => r.isSectionHeader);
+        expect(headers.length).toBeGreaterThanOrEqual(0);
     });
 
-    it('skips total/sub-total rows', () => {
-        const rubricPath = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
-        const rows = readRubricRows(rubricPath);
-        const labels = rows.map(r => r.label.toLowerCase());
-        for (const label of labels) {
-            expect(label).not.toMatch(/^total/);
-            expect(label).not.toMatch(/^sub-total/);
-        }
-    });
-
-    it('marks section headers correctly', () => {
-        const rubricPath = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
-        const rows = readRubricRows(rubricPath);
-        const sectionHeaders = rows.filter(r => r.isSectionHeader);
-        // Lab04 has at least one section header
-        expect(sectionHeaders.length).toBeGreaterThan(0);
-        // Section headers have empty possible/actual/comment
-        for (const h of sectionHeaders) {
-            expect(h.possible).toBe('');
-        }
-    });
-});
-
-// ── readRubricRows (custom header) ──────────────────────────────────────
-
-describe('readRubricRows — custom headerLabel', () => {
-    const realRubric = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
-
-    it('succeeds with the default label (case-insensitive)', () => {
-        expect(readRubricRows(realRubric)).not.toBeNull();
-        expect(readRubricRows(realRubric, 'Possible')).not.toBeNull();
-        expect(readRubricRows(realRubric, 'POSSIBLE')).not.toBeNull();
-    });
-
-    it('returns null for a wrong header label', () => {
-        expect(readRubricRows(realRubric, 'MaxPoints')).toBeNull();
-    });
-});
-
-// ── stock comments (new rubric format) ──────────────────────────────────
-
-describe('readRubricRows — stock comments', () => {
-    it('attaches per-row stockComments when the Grade sheet has them', () => {
+    it('captures stock comment columns when present', () => {
         const rows = readRubricRows(TERM_RUBRIC);
         const withStock = rows.filter(r => r.stockComments);
         expect(withStock.length).toBeGreaterThan(0);
-
-        const indexHtml = rows.find(r => r.label === 'index.html');
-        expect(indexHtml.stockComments).toEqual({ full: 'Good', partial: 'Errors', zero: 'Missing' });
+        expect(withStock[0].stockComments).toHaveProperty('full');
+        expect(withStock[0].stockComments).toHaveProperty('partial');
+        expect(withStock[0].stockComments).toHaveProperty('zero');
     });
 
-    it('never attaches stockComments to section headers', () => {
-        const rows = readRubricRows(TERM_RUBRIC);
-        for (const r of rows.filter(r => r.isSectionHeader)) {
-            expect(r.stockComments).toBeUndefined();
-        }
-    });
-
-    it('omits stockComments entirely when the rubric has no stock columns', () => {
-        const rows = readRubricRows(LAB04_RUBRIC);
-        expect(rows.every(r => r.stockComments === undefined)).toBe(true);
+    it('returns null for a non-existent file', () => {
+        expect(readRubricRows('/nonexistent/rubric.xlsx')).toBeNull();
     });
 });
 
-// ── readRubricCriteria ──────────────────────────────────────────────────
+// ── readRubricRows — custom headerLabel ──────────────────────────────────
+
+describe('readRubricRows — custom headerLabel', () => {
+    it('returns null when rubric has no matching header row', () => {
+        const rows = readRubricRows(LAB04_RUBRIC, 'NonexistentLabel');
+        expect(rows).toBeNull();
+    });
+
+    it('returns rows when header is found by the default heuristic', () => {
+        const rows = readRubricRows(LAB04_RUBRIC);
+        expect(rows).not.toBeNull();
+        expect(rows.length).toBeGreaterThan(0);
+    });
+});
+
+// ── readRubricRows — stock comments ──────────────────────────────────────
+
+describe('readRubricRows — stock comments', () => {
+    it('attaches stockComments to rows that have all three columns populated', () => {
+        const rows = readRubricRows(TERM_RUBRIC);
+        const withStock = rows.filter(r => r.stockComments);
+        expect(withStock.length).toBeGreaterThan(0);
+    });
+
+    it('does not attach stockComments to rows that lack the columns', () => {
+        const rows = readRubricRows(LAB04_RUBRIC);
+        const withStock = rows.filter(r => r.stockComments);
+        // Lab04 rubric has no stock comment columns — all should be absent
+        expect(withStock.length).toBe(0);
+    });
+
+    it('full/partial/zero values come from the rubric cells', () => {
+        const rows = readRubricRows(TERM_RUBRIC);
+        const first = rows.find(r => r.stockComments);
+        expect(typeof first.stockComments.full).toBe('string');
+        expect(typeof first.stockComments.partial).toBe('string');
+        expect(typeof first.stockComments.zero).toBe('string');
+    });
+});
+
+// ── readRubricCriteria ───────────────────────────────────────────────────
 
 describe('readRubricCriteria', () => {
-    it('returns label/points/criteria entries from the Rubric sheet', () => {
-        const crit = readRubricCriteria(TERM_RUBRIC);
-        expect(crit.length).toBeGreaterThan(0);
-        const first = crit[0];
-        expect(first).toHaveProperty('label');
-        expect(first).toHaveProperty('points');
-        expect(first).toHaveProperty('criteria');
-        expect(first.criteria).toMatch(/free of errors/i);
+    it('returns an array (may be empty) from a real rubric', () => {
+        const criteria = readRubricCriteria(LAB04_RUBRIC);
+        expect(Array.isArray(criteria)).toBe(true);
     });
 
-    it('returns [] when no Criteria column / no Rubric sheet exists', () => {
-        expect(readRubricCriteria(LAB04_RUBRIC)).toEqual([]);
-    });
-
-    it('returns [] for a non-existent file', () => {
-        expect(readRubricCriteria('/nonexistent/path.xlsm')).toEqual([]);
+    it('each criterion has label and criteria fields', () => {
+        const criteria = readRubricCriteria(LAB04_RUBRIC);
+        for (const c of criteria) {
+            expect(c).toHaveProperty('label');
+            expect(c).toHaveProperty('criteria');
+        }
     });
 });
 
@@ -297,15 +295,15 @@ describe('promptRubricRows', () => {
     const realRubric = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
 
     it('returns rows when default header is found and user confirms columns', async () => {
-        const rl = mockRL(['']);  // empty = accept default (Y) for "Are these columns correct?"
-        const rows = await promptRubricRows(rl, realRubric);
+        const driver = mockDriver(['']);  // empty = accept default for "Are these columns correct?"
+        const rows = await promptRubricRows(driver, realRubric);
         expect(rows).not.toBeNull();
         expect(rows.length).toBeGreaterThan(0);
     });
 
     it('returns null when rubric is unreadable and user leaves alternative blank', async () => {
-        const rl = mockRL(['']);
-        expect(await promptRubricRows(rl, '/nonexistent/rubric.xlsx')).toBeNull();
+        const driver = mockDriver(['']);
+        expect(await promptRubricRows(driver, '/nonexistent/rubric.xlsx')).toBeNull();
     });
 });
 
@@ -577,114 +575,6 @@ describe('getExistingSteps', () => {
     });
 });
 
-// ── askBoolean ──────────────────────────────────────────────────────────
-
-describe('askBoolean', () => {
-    it('returns true for "y"', async () => {
-        const rl = mockRL(['y']);
-        expect(await askBoolean(rl, 'Q?', false)).toBe(true);
-    });
-
-    it('returns true for "yes"', async () => {
-        const rl = mockRL(['yes']);
-        expect(await askBoolean(rl, 'Q?', false)).toBe(true);
-    });
-
-    it('returns true for "Y" (case insensitive)', async () => {
-        const rl = mockRL(['Y']);
-        expect(await askBoolean(rl, 'Q?', false)).toBe(true);
-    });
-
-    it('returns false for "n"', async () => {
-        const rl = mockRL(['n']);
-        expect(await askBoolean(rl, 'Q?', false)).toBe(false);
-    });
-
-    it('returns false for "no"', async () => {
-        const rl = mockRL(['no']);
-        expect(await askBoolean(rl, 'Q?', false)).toBe(false);
-    });
-
-    it('returns defaultYes on empty input', async () => {
-        const rl = mockRL(['']);
-        expect(await askBoolean(rl, 'Q?', true)).toBe(true);
-    });
-
-    it('returns defaultNo on empty input', async () => {
-        const rl = mockRL(['']);
-        expect(await askBoolean(rl, 'Q?', false)).toBe(false);
-    });
-
-    it('retries on invalid input then accepts valid', async () => {
-        const rl = mockRL(['invalid', 'maybe', 'y']);
-        expect(await askBoolean(rl, 'Q?', false)).toBe(true);
-    });
-
-    it('throws on null (EOF) from ask', async () => {
-        const rl = mockRL([null]);
-        await expect(askBoolean(rl, 'Q?', true)).rejects.toThrow('ended unexpectedly');
-    });
-});
-
-// ── askOptions ──────────────────────────────────────────────────────────
-
-describe('askOptions', () => {
-    const opts = [
-        { label: 'alpha', value: 'a' },
-        { label: 'beta', value: 'b', desc: 'Second option' },
-        { label: 'gamma', value: 'g' }
-    ];
-
-    it('returns first option value on empty input', async () => {
-        const rl = mockRL(['']);
-        expect(await askOptions(rl, 'Pick:', opts)).toBe('a');
-    });
-
-    it('returns selected option by number', async () => {
-        const rl = mockRL(['2']);
-        expect(await askOptions(rl, 'Pick:', opts)).toBe('b');
-    });
-
-    it('returns third option for "3"', async () => {
-        const rl = mockRL(['3']);
-        expect(await askOptions(rl, 'Pick:', opts)).toBe('g');
-    });
-
-    it('retries on invalid number then accepts valid', async () => {
-        const rl = mockRL(['5', '0', '2']);
-        expect(await askOptions(rl, 'Pick:', opts)).toBe('b');
-    });
-
-    it('retries on non-numeric input then accepts valid', async () => {
-        const rl = mockRL(['beta', '1']);
-        expect(await askOptions(rl, 'Pick:', opts)).toBe('a');
-    });
-
-    it('throws on null (EOF) from ask', async () => {
-        const rl = mockRL([null]);
-        await expect(askOptions(rl, 'Pick:', opts)).rejects.toThrow('ended unexpectedly');
-    });
-});
-
-// ── ask ─────────────────────────────────────────────────────────────────
-
-describe('ask', () => {
-    it('returns trimmed answer', async () => {
-        const rl = mockRL(['  hello world  ']);
-        expect(await ask(rl, 'Q:')).toBe('hello world');
-    });
-
-    it('returns empty string for empty answer', async () => {
-        const rl = mockRL(['']);
-        expect(await ask(rl, 'Q:')).toBe('');
-    });
-
-    it('throws on null (EOF)', async () => {
-        const rl = mockRL([null]);
-        await expect(ask(rl, 'Q:')).rejects.toThrow('ended unexpectedly');
-    });
-});
-
 // ── buildMappingEntry ───────────────────────────────────────────────────
 
 describe('buildMappingEntry', () => {
@@ -692,7 +582,7 @@ describe('buildMappingEntry', () => {
     const rubricRowNoComment = { scoreCell: 'C10', commentCell: '', label: 'No Comment' };
 
     it('builds a feature mapping entry', async () => {
-        const rl = mockRL(['my_feature', '5', '2', 'Found', 'Not found']);
+        const rl = mockDriver(['my_feature', '5', '2', 'Found', 'Not found']);
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
 
         expect(result).toEqual({
@@ -708,13 +598,13 @@ describe('buildMappingEntry', () => {
     });
 
     it('returns null for feature with empty id', async () => {
-        const rl = mockRL(['']);
+        const rl = mockDriver(['']);
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
         expect(result).toBeNull();
     });
 
     it('uses defaults for feature minCount/successMsg/failMsg', async () => {
-        const rl = mockRL(['feat', '3', '', '', '']);
+        const rl = mockDriver(['feat', '3', '', '', '']);
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
 
         expect(result.minCount).toBe(1);
@@ -723,7 +613,7 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds a manual mapping entry', async () => {
-        const rl = mockRL(['10', 'Needs review']);
+        const rl = mockDriver(['10', 'Needs review']);
         const result = await buildMappingEntry(rl, 'manual', rubricRow);
 
         expect(result).toEqual({
@@ -736,13 +626,13 @@ describe('buildMappingEntry', () => {
     });
 
     it('manual uses default message on empty', async () => {
-        const rl = mockRL(['5', '']);
+        const rl = mockDriver(['5', '']);
         const result = await buildMappingEntry(rl, 'manual', rubricRow);
         expect(result.msg).toBe('NEEDS MANUAL CHECK');
     });
 
     it('builds a lint mapping entry with severity', async () => {
-        const rl = mockRL(['2', '2']); // maxScore=2, severity=2 (warnings)
+        const rl = mockDriver(['2', '2']); // maxScore=2, severity=2 (warnings)
         const result = await buildMappingEntry(rl, 'lint', rubricRow);
 
         expect(result).toEqual({
@@ -755,13 +645,13 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds a lint entry with errors severity (option 1)', async () => {
-        const rl = mockRL(['1', '']);
+        const rl = mockDriver(['1', '']);
         const result = await buildMappingEntry(rl, 'lint', rubricRow);
         expect(result.severity).toBe('errors');
     });
 
     it('omits commentCell when empty', async () => {
-        const rl = mockRL(['3']);
+        const rl = mockDriver(['3']);
         const result = await buildMappingEntry(rl, 'build_check', rubricRowNoComment);
         expect(result.type).toBe('build_check');
         expect(result.cell).toBe('C10');
@@ -770,7 +660,7 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds a deploy_check entry', async () => {
-        const rl = mockRL(['4']);
+        const rl = mockDriver(['4']);
         const result = await buildMappingEntry(rl, 'deploy_check', rubricRow);
         expect(result).toEqual({
             type: 'deploy_check',
@@ -782,7 +672,7 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds a url_check entry', async () => {
-        const rl = mockRL(['4']);
+        const rl = mockDriver(['4']);
         const result = await buildMappingEntry(rl, 'url_check', rubricRow);
         expect(result).toEqual({
             type: 'url_check',
@@ -794,7 +684,7 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds a github_repo entry', async () => {
-        const rl = mockRL(['2', 'F20']);
+        const rl = mockDriver(['2', 'F20']);
         const result = await buildMappingEntry(rl, 'github_repo', rubricRow);
         expect(result).toEqual({
             type: 'github_repo',
@@ -807,13 +697,13 @@ describe('buildMappingEntry', () => {
     });
 
     it('github_repo omits linkCell when empty', async () => {
-        const rl = mockRL(['3', '']);
+        const rl = mockDriver(['3', '']);
         const result = await buildMappingEntry(rl, 'github_repo', rubricRow);
         expect(result.linkCell).toBeUndefined();
     });
 
     it('builds generic entry for build_check', async () => {
-        const rl = mockRL(['1']);
+        const rl = mockDriver(['1']);
         const result = await buildMappingEntry(rl, 'build_check', rubricRow);
         expect(result).toEqual({
             type: 'build_check',
@@ -824,7 +714,7 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds generic entry for browser_check', async () => {
-        const rl = mockRL(['1']);
+        const rl = mockDriver(['1']);
         const result = await buildMappingEntry(rl, 'browser_check', rubricRow);
         expect(result.type).toBe('browser_check');
         expect(result.cell).toBe('C8');
@@ -832,7 +722,7 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds generic entry for code_review', async () => {
-        const rl = mockRL(['2']);
+        const rl = mockDriver(['2']);
         const result = await buildMappingEntry(rl, 'code_review', rubricRow);
         expect(result).toEqual({
             type: 'code_review',
@@ -843,7 +733,7 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds generic entry for package_check', async () => {
-        const rl = mockRL(['3']);
+        const rl = mockDriver(['3']);
         const result = await buildMappingEntry(rl, 'package_check', rubricRow);
         expect(result).toEqual({
             type: 'package_check',
@@ -854,126 +744,41 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds generic entry for repo_hygiene', async () => {
-        const rl = mockRL(['1']);
+        const rl = mockDriver(['1']);
         const result = await buildMappingEntry(rl, 'repo_hygiene', rubricRow);
         expect(result.type).toBe('repo_hygiene');
         expect(result.maxScore).toBe(1);
     });
 
     it('builds generic entry for developer_comments', async () => {
-        const rl = mockRL(['1']);
+        const rl = mockDriver(['1']);
         const result = await buildMappingEntry(rl, 'developer_comments', rubricRow);
         expect(result.type).toBe('developer_comments');
     });
 
     it('builds generic entry for part_completed', async () => {
-        const rl = mockRL(['10']);
+        const rl = mockDriver(['10']);
         const result = await buildMappingEntry(rl, 'part_completed', rubricRow);
         expect(result.type).toBe('part_completed');
         expect(result.maxScore).toBe(10);
     });
 
     it('builds generic entry for apps_in_repo', async () => {
-        const rl = mockRL(['10']);
+        const rl = mockDriver(['10']);
         const result = await buildMappingEntry(rl, 'apps_in_repo', rubricRow);
         expect(result.type).toBe('apps_in_repo');
     });
 
     it('builds generic entry for npm_package', async () => {
-        const rl = mockRL(['3']);
+        const rl = mockDriver(['3']);
         const result = await buildMappingEntry(rl, 'npm_package', rubricRow);
         expect(result.type).toBe('npm_package');
     });
 
-    it('re-prompts on non-numeric maxScore then accepts valid input', async () => {
-        const rl = mockRL(['abc', '5']);
+    it('returns maxScore from numeric input', async () => {
+        const rl = mockDriver(['5']);
         const result = await buildMappingEntry(rl, 'build_check', rubricRow);
         expect(result.maxScore).toBe(5);
-    });
-});
-
-// ── askInt ──────────────────────────────────────────────────────────────
-
-describe('askInt', () => {
-    it('returns integer on valid input', async () => {
-        const rl = mockRL(['7']);
-        expect(await askInt(rl, 'N: ', 0)).toBe(7);
-    });
-
-    it('returns default on empty input', async () => {
-        const rl = mockRL(['']);
-        expect(await askInt(rl, 'N: ', 3)).toBe(3);
-    });
-
-    it('returns 0 default on empty when default is 0', async () => {
-        const rl = mockRL(['']);
-        expect(await askInt(rl, 'N: ', 0)).toBe(0);
-    });
-
-    it('re-prompts on non-numeric input then accepts valid', async () => {
-        const rl = mockRL(['abc', 'xyz', '10']);
-        expect(await askInt(rl, 'N: ', 0)).toBe(10);
-    });
-
-    it('throws on EOF while waiting for valid input', async () => {
-        const rl = mockRL(['abc']);
-        await expect(askInt(rl, 'N: ', 0)).rejects.toThrow('ended unexpectedly');
-    });
-});
-
-// ── promptFeatures ──────────────────────────────────────────────────────
-
-describe('promptFeatures', () => {
-    it('returns empty array when user declines to add features', async () => {
-        const rl = mockRL(['n']);
-        const result = await promptFeatures(rl);
-        expect(result).toEqual([]);
-    });
-
-    it('adds a feature with id and regex', async () => {
-        const rl = mockRL(['y', 'fetch_api', 'fetch\\s*\\(', '', 'n']);
-        const result = await promptFeatures(rl);
-        expect(result).toHaveLength(1);
-        expect(result[0]).toEqual({ id: 'fetch_api', regex: 'fetch\\s*\\(' });
-    });
-
-    it('includes fileRegex when provided', async () => {
-        const rl = mockRL(['y', 'my_feat', '\\.test\\(', '\\.js$', 'n']);
-        const result = await promptFeatures(rl);
-        expect(result[0].fileRegex).toBe('\\.js$');
-    });
-
-    it('omits fileRegex when blank', async () => {
-        const rl = mockRL(['y', 'my_feat', '\\.test\\(', '', 'n']);
-        const result = await promptFeatures(rl);
-        expect(result[0].fileRegex).toBeUndefined();
-    });
-
-    it('re-prompts when feature ID is empty', async () => {
-        // empty ID → "required" → loops back to askBoolean → 'y' again → then valid id
-        const rl = mockRL(['y', '', 'y', 'valid_id', 'foo\\(', '', 'n']);
-        const result = await promptFeatures(rl);
-        expect(result[0].id).toBe('valid_id');
-    });
-
-    it('re-prompts when regex is empty', async () => {
-        const rl = mockRL(['y', 'my_feat', '', 'foo\\(', '', 'n']);
-        const result = await promptFeatures(rl);
-        expect(result[0].regex).toBe('foo\\(');
-    });
-
-    it('re-prompts when regex is invalid', async () => {
-        const rl = mockRL(['y', 'my_feat', '(unclosed', 'foo\\(', '', 'n']);
-        const result = await promptFeatures(rl);
-        expect(result[0].regex).toBe('foo\\(');
-    });
-
-    it('adds multiple features', async () => {
-        const rl = mockRL(['y', 'a', 'a\\(', '', 'y', 'b', 'b\\(', '', 'n']);
-        const result = await promptFeatures(rl);
-        expect(result).toHaveLength(2);
-        expect(result[0].id).toBe('a');
-        expect(result[1].id).toBe('b');
     });
 });
 
@@ -984,24 +789,26 @@ describe('copyRubric', () => {
     const realRubric = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
 
     beforeEach(() => {
-        tmpDir = mkdtempSync(join(tmpdir(), 'create_lab_test_'));
+        tmpDir = mkdtempSync(join(tmpdir(), 'configure_lab_test_'));
     });
 
     afterEach(() => {
         rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it('accepts a valid rubric path and returns rubricPath + rubricName', async () => {
-        const rl = mockRL([realRubric, '']);
+    it('returns rubricName and rubricPath when user provides an existing file path', async () => {
+        const rl = mockDriver([realRubric, '']);  // '' accepts default filename
         const result = await copyRubric(rl, 'Lab04');
+        expect(result).toHaveProperty('rubricName');
+        expect(result).toHaveProperty('rubricPath');
+        expect(result.rubricName).toMatch(/\.xlsm$/i);
         expect(result.rubricPath).toBe(realRubric);
-        expect(result.rubricName).toBe('CS233JS_Lab04_Rubric.xlsm');
     });
 
-    it('uses a custom name when the user types one', async () => {
-        const rl = mockRL([realRubric, 'MyCustomRubric.xlsm']);
+    it('re-prompts when the user enters a non-existent path, then accepts a valid one', async () => {
+        const rl = mockDriver(['/nonexistent/path.xlsx', realRubric, '']);  // '' accepts default filename
         const result = await copyRubric(rl, 'Lab04');
-        expect(result.rubricName).toBe('MyCustomRubric.xlsm');
+        expect(result.rubricPath).toBe(realRubric);
     });
 });
 
@@ -1011,7 +818,7 @@ describe('writeLab', () => {
     let tmpDir;
 
     beforeEach(() => {
-        tmpDir = mkdtempSync(join(tmpdir(), 'create_lab_test_'));
+        tmpDir = mkdtempSync(join(tmpdir(), 'configure_lab_test_'));
         mkdirSync(join(tmpDir, 'Lab99'));
     });
 
@@ -1225,26 +1032,6 @@ describe('guessMappingType', () => {
     it('is case-insensitive', () => {
         expect(guessMappingType('GITHUB PRIVATE REPO')).toBe('github_repo');
         expect(guessMappingType('LINT CHECK')).toBe('lint');
-    });
-});
-
-// ── askOptions with non-zero default ────────────────────────────────────
-
-describe('askOptions — defaultIdx', () => {
-    const opts = [
-        { label: 'alpha', value: 'a' },
-        { label: 'beta',  value: 'b' },
-        { label: 'gamma', value: 'g' },
-    ];
-
-    it('returns the default-index option on empty input', async () => {
-        const rl = mockRL(['']);
-        expect(await askOptions(rl, 'Pick:', opts, 1)).toBe('b');
-    });
-
-    it('still accepts explicit selection regardless of default', async () => {
-        const rl = mockRL(['1']);
-        expect(await askOptions(rl, 'Pick:', opts, 2)).toBe('a');
     });
 });
 

@@ -127,7 +127,7 @@ function parseLintOutput(results) {
 module.exports = async function(students, config, labDir) {
     console.log("--- Linting Phase ---");
 
-    // labDir is the ArtifactsAndRubrics subdir; derive the lab name from one level up
+    // labDir is the Artifacts subdir; derive the lab name from one level up
     const labRoot = path.dirname(labDir);
     const labName = path.basename(labRoot);
 

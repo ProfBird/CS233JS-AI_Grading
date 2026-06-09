@@ -12,6 +12,7 @@ import lab02Analyzer from '../configs/Lab02/lab02_analyzer.js';
 import lab05Analyzer from '../configs/Lab05/lab05_analyzer.js';
 
 const { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer } = analyzeCode;
+const analyzeStudents = analyzeCode;
 
 // ── stripComments ────────────────────────────────────────────────────────
 
@@ -195,6 +196,39 @@ describe('applyCustomAnalyzer', () => {
         expect(seen.jsFiles).toEqual(['a.js']);
         expect(seen.config).toEqual({ x: 1 });
         expect(seen.student).toEqual({ name: 'S' });
+    });
+});
+
+// ── hasDeveloperComments ─────────────────────────────────────────────────────
+
+describe('hasDeveloperComments', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'devcomments-test-'));
+    });
+
+    afterEach(() => {
+        rmSync(tmpDir, { recursive: true });
+    });
+
+    const runAnalysis = (tmpDir, fileName, content) => {
+        writeFileSync(join(tmpDir, fileName), content);
+        const students = [{ name: 'Zoey McKee', extractedDir: tmpDir, urls: {} }];
+        analyzeStudents(students, { analysis: { features: [] } }, tmpDir);
+        return students[0].analysis.hasDeveloperComments;
+    };
+
+    it('detects last name in a .js file', () => {
+        expect(runAnalysis(tmpDir, 'app.js', '/* Written by Zoey McKee */')).toBe(true);
+    });
+
+    it('detects last name in a .mjs file', () => {
+        expect(runAnalysis(tmpDir, 'app.mjs', '/* Code Written by Brian Bird, Modified by Zoey McKee */')).toBe(true);
+    });
+
+    it('returns false when no name is present in .mjs file', () => {
+        expect(runAnalysis(tmpDir, 'app.mjs', 'export function foo() {}')).toBe(false);
     });
 });
 

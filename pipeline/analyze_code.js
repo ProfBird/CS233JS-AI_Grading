@@ -598,7 +598,7 @@ module.exports = function(students, config, labDir, configDir = null) {
         }
         allExtractedFiles.forEach(checkCodeReview);
 
-        const jsFiles = allExtractedFiles.filter(f => f.endsWith('.js') && !f.includes('node_modules') && !f.includes('dist'));
+        const jsFiles = allExtractedFiles.filter(f => (f.endsWith('.js') || f.endsWith('.mjs')) && !f.includes('node_modules') && !f.includes('dist'));
 
         const nameParts = student.name.toLowerCase().split(/\s+/);
         const firstName = nameParts.length > 0 ? nameParts[0] : null;

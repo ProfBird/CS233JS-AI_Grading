@@ -130,12 +130,17 @@ module.exports = async function(students, config, labDir) {
     // labDir is the Artifacts subdir; derive the lab name from one level up
     const labRoot = path.dirname(labDir);
     const labName = path.basename(labRoot);
+    // For multi-step labs labRoot is <codeRoot>/{AssignmentName}/{StepName}; parentName = AssignmentName.
+    const parentName = path.basename(path.dirname(labRoot));
 
     // Grader uses config from inside AI_Grading/ so that node_modules (globals, etc.) resolve correctly.
-    // Priority: configs/LabXX/eslint.config.mjs > configs/eslint.config.mjs
-    const labSpecific = path.join(__dirname, 'configs', labName, 'eslint.config.mjs');
-    const defaultConfig = path.join(__dirname, 'configs', 'eslint.config.mjs');
-    const eslintConfigFile = fs.existsSync(labSpecific) ? labSpecific
+    // Priority: configs/{Parent}/{Step}/ > configs/{Lab}/ > configs/ (default)
+    const configsDir = path.join(__dirname, '..', 'configs');
+    const stepSpecific  = path.join(configsDir, parentName, labName, 'eslint.config.mjs');
+    const labSpecific   = path.join(configsDir, labName, 'eslint.config.mjs');
+    const defaultConfig = path.join(configsDir, 'eslint.config.mjs');
+    const eslintConfigFile = fs.existsSync(stepSpecific)  ? stepSpecific
+                           : fs.existsSync(labSpecific)   ? labSpecific
                            : fs.existsSync(defaultConfig) ? defaultConfig
                            : null;
     if (!eslintConfigFile) {

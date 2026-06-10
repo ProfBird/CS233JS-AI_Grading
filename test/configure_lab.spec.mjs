@@ -6,7 +6,7 @@
  *   lib/config_prompts.js — driver-based rubric prompt functions
  *   bin/configure_lab.js  — AI-assisted wizard helpers
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -73,18 +73,6 @@ function mockDriver(answers) {
             const match = opts.find(o => o.value === v);
             return Promise.resolve(match ? match.value : (opts[defIdx]?.value ?? opts[0]?.value));
         },
-    };
-}
-
-// Keep a simpler mockRL for any test that still uses the raw _getLine interface
-function mockRL(answers) {
-    const answersClone = [...answers];
-    return {
-        _getLine(_prompt) {
-            const val = answersClone.shift();
-            if (val === undefined) return Promise.resolve(null);
-            return Promise.resolve(val);
-        }
     };
 }
 
@@ -1025,7 +1013,7 @@ describe('mergeLLMResponse', () => {
     const rows = readRubricRows(TERM_RUBRIC).filter(r => !r.isSectionHeader).slice(0, 2);
 
     it('downgrades an LLM feature guess with an unknown featureId', () => {
-        const llm = rows.map(r => ({ type: 'feature', featureId: 'made-up', maxScore: 5 }));
+        const llm = rows.map(() => ({ type: 'feature', featureId: 'made-up', maxScore: 5 }));
         const merged = mergeLLMResponse(llm, rows, new Set());
         expect(merged.every(m => m.type !== 'feature')).toBe(true);
     });

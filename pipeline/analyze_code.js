@@ -61,12 +61,12 @@ function countFeatures(allFiles, configFeatures) {
             // Normalize to forward slashes so path-segment patterns (e.g. "src/")
             // match on Windows, where file paths are backslash-separated.
             ? f => new RegExp(feat.fileRegex).test(toPosix(f))
-            : f => f.endsWith('.js');
+            : f => f.toLowerCase().endsWith('.js');
         const filesToSearch = allFiles.filter(fileFilter);
         for (const file of filesToSearch) {
             let content;
             try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
-            const searchable = file.endsWith('.js') ? stripComments(content) : content;
+            const searchable = file.toLowerCase().endsWith('.js') ? stripComments(content) : content;
             try {
                 const regex = new RegExp(feat.regex, 'g');
                 const matches = searchable.match(regex);
@@ -281,7 +281,7 @@ function buildVariationCorpus(extractedDir) {
 
     // HTML title tags (up to 20 HTML files, skipping excluded dirs)
     const allFiles = getAllFiles(extractedDir).filter(f => !isExcluded(f));
-    const htmlFiles = allFiles.filter(f => f.endsWith('.html'));
+    const htmlFiles = allFiles.filter(f => f.toLowerCase().endsWith('.html'));
     for (const f of htmlFiles.slice(0, 20)) {
         try {
             const content = fs.readFileSync(f, 'utf8');
@@ -600,7 +600,10 @@ module.exports = function(students, config, labDir, configDir = null) {
         }
         allExtractedFiles.forEach(checkCodeReview);
 
-        const jsFiles = allExtractedFiles.filter(f => (f.endsWith('.js') || f.endsWith('.mjs')) && !f.includes('node_modules') && !f.includes('dist'));
+        const jsFiles = allExtractedFiles.filter(f => {
+            const lf = f.toLowerCase();
+            return (lf.endsWith('.js') || lf.endsWith('.mjs')) && !lf.includes('node_modules') && !lf.includes('dist');
+        });
 
         const nameParts = student.name.toLowerCase().split(/\s+/);
         const firstName = nameParts.length > 0 ? nameParts[0] : null;

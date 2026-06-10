@@ -13,10 +13,23 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { exec, spawn } = require('child_process');
+const { exec, spawn, execFileSync } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
 const { walk } = require('../lib/file_walker');
+
+// Kill a spawned process and its whole tree, cross-platform. On POSIX we signal
+// the negative PID (the detached process group). Windows has no process groups,
+// so use taskkill /T to walk and terminate the child tree (npm -> node -> vite).
+function killProcessTree(pid) {
+    if (!pid) return;
+    if (process.platform === 'win32') {
+        try { execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch (_) {}
+    } else {
+        try { process.kill(-pid, 'SIGKILL'); }
+        catch (_) { try { process.kill(pid, 'SIGKILL'); } catch (_) {} }
+    }
+}
 
 const RUNTIME_REPORT = 'runtime_report.json';
 
@@ -221,7 +234,10 @@ function spawnScript(pkgDir, scriptName, timeoutMs) {
     return new Promise(resolve => {
         let child;
         try {
-            child = spawn('npm', ['run', scriptName], { cwd: pkgDir, detached: true, stdio: 'pipe' });
+            // shell:true so "npm" resolves to npm.cmd on Windows (and avoids Node's
+            // EINVAL when spawning a .cmd without a shell). detached:true gives the
+            // child its own process group on POSIX so the whole tree can be killed.
+            child = spawn('npm', ['run', scriptName], { cwd: pkgDir, detached: true, stdio: 'pipe', shell: true });
         } catch (err) {
             resolve({ code: null, stdout: '', stderr: err.message, killed: false });
             return;
@@ -240,13 +256,13 @@ function spawnScript(pkgDir, scriptName, timeoutMs) {
         };
 
         const timer = setTimeout(() => {
-            try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
+            killProcessTree(child.pid);
             done(null, true);
         }, timeoutMs);
 
         child.on('close', code => done(code, false));
         child.on('error', () => {
-            try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
+            killProcessTree(child.pid);
             done(null, false);
         });
     });

@@ -1,38 +1,63 @@
+// eslint.config.mjs
+//
+// Minimal lint config for THIS tool's OWN source — a syntax/correctness gate for
+// CI and the editor, deliberately free of stylistic/formatting rules so it never
+// fails on spacing, quotes, semicolons, trailing commas, etc.
+//
+// NOTE: this does NOT govern how student submissions are linted. That path uses
+// configs/eslint.config.mjs (the VS Code-shared ruleset) passed explicitly via
+// `overrideConfigFile` in pipeline/lint_code.js, which bypasses config discovery.
+//
+// It flags real problems only (parse errors are always fatal; plus the rules
+// below) and demotes unused variables to a non-failing warning.
+
+import globals from 'globals';
+
+// Correctness rules only — no formatting/style. Every rule here catches a likely
+// bug, not an opinion.
+const correctnessRules = {
+    'no-undef': 'error',            // references to undeclared variables (typos)
+    'no-unreachable': 'error',      // code after return/throw/break
+    'no-dupe-keys': 'error',        // duplicate object literal keys
+    'no-dupe-args': 'error',        // duplicate function parameters
+    'no-duplicate-case': 'error',   // duplicate switch cases
+    'no-cond-assign': 'error',      // assignment where a comparison was meant
+    'no-const-assign': 'error',     // reassigning a const
+    'no-func-assign': 'error',      // reassigning a function declaration
+    'no-obj-calls': 'error',        // calling non-callable globals, e.g. Math()
+    'no-redeclare': 'error',        // declaring the same variable twice
+    'no-self-assign': 'error',      // x = x
+    'no-sparse-arrays': 'error',    // [ , , ] holes from stray commas
+    'no-unsafe-negation': 'error',  // !a in b / !a instanceof b precedence traps
+    'use-isnan': 'error',           // x === NaN (always false)
+    'valid-typeof': 'error',        // typeof x === 'strnig' typos
+    // noise -> warning; ignore unused fn args prefixed _ and unused catch
+    // bindings (this codebase intentionally uses `catch (e) {}` to swallow errors).
+    'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
+};
+
 export default [
-  {
-    files: ['**/*.js'],
-    ignores: ['**/node_modules/**', '**/dist/**', '**/build/**'],
-    languageOptions: {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-      globals: {
-        window: 'readonly',
-        document: 'readonly',
-        console: 'readonly',
-        process: 'readonly',
-        module: 'readonly',
-        require: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        alert: 'readonly',
-        confirm: 'readonly',
-        prompt: 'readonly'
-      }
+    {
+        ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', 'coverage/**', 'archive/**'],
     },
-    linterOptions: {
-      reportUnusedDisableDirectives: 'warn'
+    {
+        // Pipeline/lib/bin and run_all.js are CommonJS (require / module.exports).
+        files: ['**/*.js'],
+        languageOptions: {
+            ecmaVersion: 'latest',
+            sourceType: 'commonjs',
+            globals: { ...globals.node },
+        },
+        rules: correctnessRules,
     },
-    rules: {
-      'no-undef': 'error',
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
-      'no-unreachable': 'error',
-      'no-debugger': 'warn',
-      'no-constant-condition': ['warn', { checkLoops: false }],
-      eqeqeq: ['warn', 'always'],
-      curly: ['warn', 'all'],
-      semi: ['error', 'always'],
-      'no-extra-semi': 'error',
-      'comma-dangle': ['warn', 'never']
-    }
-  }
+    {
+        // Tests and this config are ES modules.
+        files: ['**/*.mjs'],
+        languageOptions: {
+            ecmaVersion: 'latest',
+            sourceType: 'module',
+            globals: { ...globals.node },
+        },
+        rules: correctnessRules,
+    },
 ];

@@ -28,3 +28,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  lint:
+    # Correctness/syntax gate for the grader's own source. Lint results are
+    # OS-independent, so this runs once rather than across the matrix.
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint

@@ -14,8 +14,13 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import * as fs from 'fs';
 import xlsx from 'xlsx';
 import generateGrades from '../pipeline/generate_grades.js';
+
+// The xlsx ESM build (0.20.x) does not auto-wire Node's fs; writeFile/readFile
+// throw "cannot save file" until set_fs() is called. CJS require('xlsx') is unaffected.
+xlsx.set_fs(fs);
 
 const { computeResults } = generateGrades;
 

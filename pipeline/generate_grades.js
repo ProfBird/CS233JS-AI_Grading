@@ -594,9 +594,11 @@ registerHandler('path_exists', (map, student) => {
     }
     const re = new RegExp(pattern);
     let found = null;
+    // Normalize to forward slashes so patterns like "functions/" match on Windows,
+    // where walk() yields backslash-separated paths.
     walk(student.extractedDir, {
-        shouldSkip: full => /node_modules|\/dist\/|\.git/.test(full),
-        onFile: full => { if (!found && re.test(full)) found = full; },
+        shouldSkip: full => /node_modules|\/dist\/|\.git/.test(full.replace(/\\/g, '/')),
+        onFile: full => { if (!found && re.test(full.replace(/\\/g, '/'))) found = full; },
     });
     if (found) {
         return { score: map.maxScore, comment: `yes — ${path.relative(student.extractedDir, found)}` };

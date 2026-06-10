@@ -58,7 +58,9 @@ function countFeatures(allFiles, configFeatures) {
 
     for (const feat of configFeatures) {
         const fileFilter = feat.fileRegex
-            ? f => new RegExp(feat.fileRegex).test(f)
+            // Normalize to forward slashes so path-segment patterns (e.g. "src/")
+            // match on Windows, where file paths are backslash-separated.
+            ? f => new RegExp(feat.fileRegex).test(f.replace(/\\/g, '/'))
             : f => f.endsWith('.js');
         const filesToSearch = allFiles.filter(fileFilter);
         for (const file of filesToSearch) {

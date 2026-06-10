@@ -10,9 +10,9 @@
  * Attaches results to student.codeReview for use by generate_grades.js.
  */
 
-const fs = require('fs');
-const path = require('path');
-const mammoth = require('mammoth');
+import fs from 'fs';
+import path from 'path';
+import mammoth from 'mammoth';
 
 // --- Finding the .docx file ---
 
@@ -192,7 +192,7 @@ function parseTableScores(html) {
 
 // --- Main export ---
 
-module.exports = async function (students, _config) {
+export default async function (students, _config) {
     console.log('--- Code Review Reading Phase ---');
 
     for (const student of students) {

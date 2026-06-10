@@ -6,12 +6,12 @@
  * Attaches results directly to each student object as student.analysis.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execFileSync } = require('child_process');
-const { walk, toPosix } = require('../lib/file_walker');
-let xlsx;
-try { xlsx = require('xlsx'); } catch (e) {}
+import fs from 'fs';
+import path from 'path';
+import { execFileSync } from 'child_process';
+import { pathToFileURL } from 'url';
+import { walk, toPosix } from '../lib/file_walker.js';
+import xlsx from '../lib/xlsx.js';
 
 const ANALYSIS_REPORT = 'analysis_report.json';
 
@@ -517,7 +517,7 @@ function applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student)
     }
 }
 
-module.exports = function(students, config, labDir, configDir = null) {
+export default async function(students, config, labDir, configDir = null) {
     console.log("--- Analysis Phase ---");
 
     const rubricPath = config.rubricName
@@ -541,10 +541,10 @@ module.exports = function(students, config, labDir, configDir = null) {
     // Load custom analyzer if configured
     let customAnalyzer = null;
     if (config.analysis && config.analysis.customAnalyzer) {
-        const analyzerPath = path.resolve(configDir || path.join(__dirname, 'configs'), config.analysis.customAnalyzer);
+        const analyzerPath = path.resolve(configDir || path.join(import.meta.dirname, 'configs'), config.analysis.customAnalyzer);
         if (fs.existsSync(analyzerPath)) {
             try {
-                customAnalyzer = require(analyzerPath);
+                customAnalyzer = (await import(pathToFileURL(analyzerPath).href)).default;
                 console.log(`  Custom analyzer loaded: ${config.analysis.customAnalyzer}`);
             } catch (e) {
                 console.warn(`  WARNING: Failed to load custom analyzer "${config.analysis.customAnalyzer}": ${e.message}`);
@@ -695,10 +695,4 @@ module.exports = function(students, config, labDir, configDir = null) {
     console.log(`Created ${ANALYSIS_REPORT} for ${report.length} students.`);
 };
 
-module.exports.stripComments = stripComments;
-module.exports.normalizeDirName = normalizeDirName;
-module.exports.getAllFiles = getAllFiles;
-module.exports.getSubdirs = getSubdirs;
-module.exports.checkRepoHygiene = checkRepoHygiene;
-module.exports.detectPartsPresent = detectPartsPresent;
-module.exports.applyCustomAnalyzer = applyCustomAnalyzer;
+export { stripComments, normalizeDirName, getAllFiles, getSubdirs, checkRepoHygiene, detectPartsPresent, applyCustomAnalyzer };

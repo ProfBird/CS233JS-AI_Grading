@@ -7,7 +7,7 @@
  *   bin/configure_lab.js  — AI-assisted wizard helpers
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -705,7 +705,7 @@ describe('writeLab', () => {
         const labDir = join(tmpDir, 'Lab99');
         const config = { rubricName: 'r.xlsm', mappings: [] };
         writeLab(labDir, config, null, null);
-        const written = JSON.parse(require('fs').readFileSync(join(labDir, 'lab99_config.json'), 'utf8'));
+        const written = JSON.parse(readFileSync(join(labDir, 'lab99_config.json'), 'utf8'));
         expect(written).toEqual(config);
     });
 
@@ -713,14 +713,14 @@ describe('writeLab', () => {
         const labDir = join(tmpDir, 'Lab99');
         const config = { rubricName: 'r.xlsm', mappings: [] };
         writeLab(labDir, config, 'module.exports = () => {};', 'lab99_analyzer.js');
-        const content = require('fs').readFileSync(join(labDir, 'lab99_analyzer.js'), 'utf8');
+        const content = readFileSync(join(labDir, 'lab99_analyzer.js'), 'utf8');
         expect(content).toBe('module.exports = () => {};');
     });
 
     it('does not write analyzer file when analyzerContent is null', () => {
         const labDir = join(tmpDir, 'Lab99');
         writeLab(labDir, { rubricName: 'r.xlsm', mappings: [] }, null, null);
-        expect(require('fs').existsSync(join(labDir, 'lab99_analyzer.js'))).toBe(false);
+        expect(existsSync(join(labDir, 'lab99_analyzer.js'))).toBe(false);
     });
 });
 

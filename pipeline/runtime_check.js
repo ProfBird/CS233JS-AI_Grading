@@ -10,13 +10,13 @@
  * Attaches results directly to each student object as student.runtimeCheck.
  */
 
-const fs = require('fs');
-const path = require('path');
-const http = require('http');
-const { exec, spawn, execFileSync } = require('child_process');
-const util = require('util');
+import fs from 'fs';
+import path from 'path';
+import http from 'http';
+import { exec, spawn, execFileSync } from 'child_process';
+import util from 'util';
 const execAsync = util.promisify(exec);
-const { walk } = require('../lib/file_walker');
+import { walk } from '../lib/file_walker.js';
 
 // Kill a spawned process and its whole tree, cross-platform. On POSIX we signal
 // the negative PID (the detached process group). Windows has no process groups,
@@ -35,8 +35,16 @@ const RUNTIME_REPORT = 'runtime_report.json';
 
 // ========== Browser-based check ==========
 
+// Loaded on demand (only when a browser check actually runs) so build-only labs
+// don't pay Puppeteer's startup cost. Dynamic import keeps it lazy under ESM.
 let puppeteer;
-try { puppeteer = require('puppeteer'); } catch (e) { /* loaded on demand */ }
+async function loadPuppeteer() {
+    if (puppeteer === undefined) {
+        try { puppeteer = (await import('puppeteer')).default; }
+        catch (e) { puppeteer = null; }
+    }
+    return puppeteer;
+}
 
 function serveDir(dir) {
     return new Promise((resolve, reject) => {
@@ -335,11 +343,12 @@ async function checkStudentScripts(extractedDir, scriptNames) {
 
 // ========== Main export ==========
 
-module.exports = async function(students, config, labDir) {
+export default async function(students, config, labDir) {
     const mode = config.runtimeCheck || 'build';
     const needsBrowser = mode === 'browser' || mode === 'both';
     console.log(`--- Runtime Check Phase (${mode} mode) ---`);
 
+    if (needsBrowser) await loadPuppeteer();
     if (needsBrowser && !puppeteer) {
         console.error('  ERROR: Puppeteer not installed. Run: npm install puppeteer');
         students.forEach(s => {
@@ -468,8 +477,4 @@ module.exports = async function(students, config, labDir) {
     console.log(`Created ${RUNTIME_REPORT} for ${report.length} students.`);
 };
 
-module.exports.findAllIndexHtmlDirs  = findAllIndexHtmlDirs;
-module.exports.findDistIndexHtmlDirs = findDistIndexHtmlDirs;
-module.exports.findPackageJsonDirs   = findPackageJsonDirs;
-module.exports.runNpmScript          = runNpmScript;
-module.exports.checkStudentScripts   = checkStudentScripts;
+export { findAllIndexHtmlDirs, findDistIndexHtmlDirs, findPackageJsonDirs, runNpmScript, checkStudentScripts };

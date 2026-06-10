@@ -5,11 +5,11 @@
  * based on URLs found in onlinetext.html
  */
 
-const fs = require('fs');
+import fs from 'fs';
 const fsp = fs.promises;
-const path = require('path');
-const { execFileSync } = require('child_process');
-const AdmZip = require('adm-zip');
+import path from 'path';
+import { execFileSync } from 'child_process';
+import AdmZip from 'adm-zip';
 
 const CODE_DIR = 'extracted_code';
 const REPO_DIR = 'repo';
@@ -192,7 +192,7 @@ async function extractStudentCode(student, labDir, repoClonePath) {
     return urls;
 }
 
-module.exports = async function(labDir, repoClonePath) {
+export default async function(labDir, repoClonePath) {
     console.log("--- Code Acquisition Phase ---");
     if (repoClonePath) {
         try {
@@ -244,5 +244,4 @@ module.exports = async function(labDir, repoClonePath) {
     return students; // returns array of augmented student objects
 };
 
-module.exports.CODE_DIR = CODE_DIR;
-module.exports.REPO_DIR = REPO_DIR;
+export { CODE_DIR, REPO_DIR };

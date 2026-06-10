@@ -5,9 +5,9 @@
  * Attaches results directly to each student object as student.lint.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { getAllFilesByExt } = require('../lib/file_walker');
+import fs from 'fs';
+import path from 'path';
+import { getAllFilesByExt } from '../lib/file_walker.js';
 
 const LINT_REPORT = 'lint_report.json';
 
@@ -23,7 +23,8 @@ async function lintFiles(jsFiles, eslintConfigFile, extractedDir) {
 
     let ESLint;
     try {
-        ({ ESLint } = require(path.join(__dirname, 'node_modules', 'eslint')));
+        const mod = await import('eslint');
+        ESLint = mod.ESLint ?? mod.default?.ESLint;
     } catch (e) {
         return { errors: 0, warnings: 0, messages: ['ESLint not installed'], ruleCounts: {} };
     }
@@ -124,7 +125,7 @@ function parseLintOutput(results) {
     };
 }
 
-module.exports = async function(students, config, labDir) {
+export default async function(students, config, labDir) {
     console.log("--- Linting Phase ---");
 
     // labDir is the Artifacts subdir; derive the lab name from one level up
@@ -135,7 +136,7 @@ module.exports = async function(students, config, labDir) {
 
     // Grader uses config from inside AI_Grading/ so that node_modules (globals, etc.) resolve correctly.
     // Priority: configs/{Parent}/{Step}/ > configs/{Lab}/ > configs/ (default)
-    const configsDir = path.join(__dirname, '..', 'configs');
+    const configsDir = path.join(import.meta.dirname, '..', 'configs');
     const stepSpecific  = path.join(configsDir, parentName, labName, 'eslint.config.mjs');
     const labSpecific   = path.join(configsDir, labName, 'eslint.config.mjs');
     const defaultConfig = path.join(configsDir, 'eslint.config.mjs');
@@ -195,4 +196,4 @@ module.exports = async function(students, config, labDir) {
     console.log(`Created ${LINT_REPORT} for ${report.length} students.`);
 };
 
-module.exports.getAllJsFiles = getAllJsFiles;
+export { getAllJsFiles };

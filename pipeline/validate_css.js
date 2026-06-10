@@ -7,9 +7,10 @@
  * all work identically. csstree reports validity errors only (no warning tier).
  */
 
-const fs = require('fs');
-const path = require('path');
-const { getAllFilesByExt } = require('../lib/file_walker');
+import fs from 'fs';
+import path from 'path';
+import { validate } from 'csstree-validator';
+import { getAllFilesByExt } from '../lib/file_walker.js';
 
 const CSS_REPORT = 'css_validation_report.json';
 
@@ -36,13 +37,6 @@ function aggregate(errorLists) {
 function validateCssFiles(cssFiles) {
     if (cssFiles.length === 0) return { errors: 0, warnings: 0, messages: [], ruleCounts: {} };
 
-    let validate;
-    try {
-        ({ validate } = require('csstree-validator'));
-    } catch (e) {
-        return { errors: 0, warnings: 0, messages: ['csstree-validator not installed'], ruleCounts: {} };
-    }
-
     const errorLists = [];
     for (const file of cssFiles) {
         try {
@@ -55,7 +49,7 @@ function validateCssFiles(cssFiles) {
     return aggregate(errorLists);
 }
 
-module.exports = async function(students, config, labDir) {
+export default async function(students, config, labDir) {
     console.log('--- CSS Validation Phase ---');
 
     const exclusions = (config.validate && config.validate.exclude) ? config.validate.exclude : [];
@@ -87,5 +81,4 @@ module.exports = async function(students, config, labDir) {
     console.log(`Created ${CSS_REPORT} for ${report.length} students.`);
 };
 
-module.exports.validateCssFiles = validateCssFiles;
-module.exports.aggregate = aggregate;
+export { validateCssFiles, aggregate };

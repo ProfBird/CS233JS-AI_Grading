@@ -7,11 +7,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import analyzeCode from '../pipeline/analyze_code.js';
+import analyzeCode, { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer } from '../pipeline/analyze_code.js';
 import lab02Analyzer from '../configs/Lab02/lab02_analyzer.js';
 import lab05Analyzer from '../configs/Lab05/lab05_analyzer.js';
 
-const { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer } = analyzeCode;
 const analyzeStudents = analyzeCode;
 
 // ── stripComments ────────────────────────────────────────────────────────

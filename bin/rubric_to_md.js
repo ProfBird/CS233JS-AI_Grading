@@ -2,9 +2,9 @@
 // Usage: node rubric_to_md.js <path/to/Rubric.xlsm> [output.md]
 // Writes a .md version of the Grade sheet table alongside the spreadsheet if no output path given.
 
-const XLSX = require('./node_modules/xlsx');
-const fs = require('fs');
-const path = require('path');
+import XLSX from '../lib/xlsx.js';
+import fs from 'fs';
+import path from 'path';
 
 const inputPath = process.argv[2];
 if (!inputPath) {

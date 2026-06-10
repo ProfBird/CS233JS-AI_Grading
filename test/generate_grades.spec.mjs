@@ -7,13 +7,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createRequire } from 'module';
-import generateGrades from '../pipeline/generate_grades.js';
+import * as fs from 'fs';
+import * as XLSX from 'xlsx';
+import { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType, resolveOutputPath, stockCommentFor, computeResults } from '../pipeline/generate_grades.js';
 
-const require = createRequire(import.meta.url);
-const XLSX = require('xlsx');
-
-const { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType, resolveOutputPath, stockCommentFor } = generateGrades;
+// The xlsx ESM build does not auto-wire Node's fs; writeFile needs set_fs() first.
+XLSX.set_fs(fs);
 
 // ── stock comments by score tier ────────────────────────────────────────────
 describe('stockCommentFor', () => {
@@ -124,7 +123,6 @@ describe('name_check handler', () => {
 
 // ── stock comments wired into computeResults ─────────────────────────────────
 describe('computeResults — stock comment override', () => {
-    const { computeResults } = generateGrades;
     const sc = { full: 'Good', partial: 'Errors', zero: 'Missing' };
     const config = { mappings: [
         { type: 'lint', severity: 'errors', cell: 'D7', commentCell: 'F7', maxScore: 6, stockComments: sc },
@@ -179,7 +177,6 @@ describe('computeResults — stock comment override', () => {
 // scored as a stock "No" — it is indistinguishable from real non-deployment otherwise.
 // These flag for manual review and keep their diagnostic through the stock override.
 describe('deploy_check — failure comments survive stock override', () => {
-    const { computeResults } = generateGrades;
     const sc = { full: 'Yes', partial: 'Bad URL', zero: 'No' };
     const cfg = { mappings: [
         { type: 'deploy_check', cell: 'D18', commentCell: 'F18', maxScore: 4, urlType: 'citstudent', stockComments: sc },
@@ -255,7 +252,7 @@ describe('handler registry', () => {
         // gets a fresh instance — isolated from the shared registry the other
         // tests depend on. The top-level `import` bindings are unaffected.
         vi.resetModules();
-        const { default: fresh } = await import('../pipeline/generate_grades.js');
+        const fresh = await import('../pipeline/generate_grades.js');
         const { getHandler: gh, registerHandler: rh, VALID_MAPPING_TYPES: vmt } = fresh;
         const custom = () => ({ score: 42, comment: 'custom' });
         rh('test_isolated', custom);
@@ -626,9 +623,7 @@ describe('path_exists handler', () => {
 
 describe('type-set consistency', () => {
     it('every type in lab_config MAPPING_TYPES has a registered handler', async () => {
-        const { createRequire: cr } = await import('module');
-        const req = cr(import.meta.url);
-        const { MAPPING_TYPES } = req('../lib/lab_config.js');
+        const { MAPPING_TYPES } = await import('../lib/lab_config.js');
         for (const { value: type } of MAPPING_TYPES) {
             // 'feature' and 'part_feature' use the same handler pool but
             // need a featureId at runtime — skip the schema-only ones.

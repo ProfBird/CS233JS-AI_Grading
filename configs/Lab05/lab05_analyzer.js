@@ -1,5 +1,5 @@
 'use strict';
-const fs = require('fs');
+import fs from 'fs';
 
 /**
  * Detects Lab05 rubric items that need richer analysis than simple regex counting.
@@ -14,7 +14,7 @@ const fs = require('fs');
  *   Group B – Font color:        model has a user-settable textColor/fontColor property
  *   Group C – Font style:        model has a user-settable fontSelect/fontFamily/font property
  */
-module.exports = function(jsFiles, analysis) {
+export default function(jsFiles, analysis) {
     let scaleCount = 0;
     let lineToCount = 0;
     let hasMouseEvent = false;

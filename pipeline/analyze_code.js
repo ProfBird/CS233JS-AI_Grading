@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { walk } = require('../lib/file_walker');
+const { walk, toPosix } = require('../lib/file_walker');
 let xlsx;
 try { xlsx = require('xlsx'); } catch (e) {}
 
@@ -45,7 +45,7 @@ function escapeRegex(word) {
 function getAllFiles(dirPath, exclusions = []) {
     const results = [];
     walk(dirPath, {
-        shouldSkip: full => exclusions.some(ex => full.includes(ex)),
+        shouldSkip: full => exclusions.some(ex => toPosix(full).includes(toPosix(ex))),
         onFile: full => results.push(full)
     });
     return results;
@@ -60,7 +60,7 @@ function countFeatures(allFiles, configFeatures) {
         const fileFilter = feat.fileRegex
             // Normalize to forward slashes so path-segment patterns (e.g. "src/")
             // match on Windows, where file paths are backslash-separated.
-            ? f => new RegExp(feat.fileRegex).test(f.replace(/\\/g, '/'))
+            ? f => new RegExp(feat.fileRegex).test(toPosix(f))
             : f => f.endsWith('.js');
         const filesToSearch = allFiles.filter(fileFilter);
         for (const file of filesToSearch) {
@@ -357,7 +357,7 @@ function checkRepoHygiene(extractedDir, hygiene) {
             ).toString();
         } catch (e) { /* fall through to empty string */ }
 
-        const trackedPaths = trackedFiles.split('\n').filter(Boolean);
+        const trackedPaths = trackedFiles.split(/\r?\n/).filter(Boolean);
         const found = [];
         for (const dirName of hygiene.excludedFromRepo) {
             const otherExcluded = hygiene.excludedFromRepo.filter(d => d !== dirName);

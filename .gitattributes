@@ -1,0 +1,17 @@
+# Normalize all text files to LF in the repository and on checkout, on every OS.
+# This keeps line endings consistent across Windows/macOS/Linux and avoids the
+# stray "\r" that breaks line-based parsing (e.g. splitting file content on "\n").
+* text=auto eol=lf
+
+# Binary assets — git must never apply line-ending or text normalization to these.
+# The rubric spreadsheets carry VBA macros/buttons that byte-level edits would corrupt.
+*.xlsm binary
+*.xlsx binary
+*.xls  binary
+*.docx binary
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary

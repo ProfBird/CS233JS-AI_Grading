@@ -9,6 +9,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const { execFileSync } = require('child_process');
+const AdmZip = require('adm-zip');
 
 const CODE_DIR = 'extracted_code';
 const REPO_DIR = 'repo';
@@ -158,7 +159,9 @@ async function extractStudentCode(student, labDir, repoClonePath) {
     if (student.zipFile) {
         console.log(`  Extracting zip for ${student.name}...`);
         try {
-            execFileSync('unzip', ['-o', student.zipFile, '-d', codeDir], { stdio: 'ignore' });
+            // Extract in-process with adm-zip rather than shelling out to `unzip`,
+            // which is not installed on stock Windows. true = overwrite existing files (-o).
+            new AdmZip(student.zipFile).extractAllTo(codeDir, true);
             student.extractedDir = codeDir;
         } catch (e) {
             console.log(`  Failed to unzip for ${student.name}`);

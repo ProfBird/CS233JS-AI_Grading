@@ -16,7 +16,7 @@ const toSafeName = name => name.replace(/[\s/\\:*?"<>|]+/g, '-');
 
 const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('../lib/ollama_comments');
 const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } = require('../lib/rubric_writer');
-const { walk } = require('../lib/file_walker');
+const { walk, toPosix } = require('../lib/file_walker');
 
 // --- Cell helpers ---
 
@@ -496,7 +496,7 @@ registerHandler('collaborator_check', (map, student) => {
 // (e.g. ".env" is matched by lines like ".env", "/.env", ".env*", "*.env").
 function gitignoreCoversEntry(content, entry) {
     const lines = content
-        .split('\n')
+        .split(/\r?\n/)
         .map(l => l.trim())
         .filter(l => l && !l.startsWith('#'));
     return lines.some(l => {
@@ -597,8 +597,8 @@ registerHandler('path_exists', (map, student) => {
     // Normalize to forward slashes so patterns like "functions/" match on Windows,
     // where walk() yields backslash-separated paths.
     walk(student.extractedDir, {
-        shouldSkip: full => /node_modules|\/dist\/|\.git/.test(full.replace(/\\/g, '/')),
-        onFile: full => { if (!found && re.test(full.replace(/\\/g, '/'))) found = full; },
+        shouldSkip: full => /node_modules|\/dist\/|\.git/.test(toPosix(full)),
+        onFile: full => { if (!found && re.test(toPosix(full))) found = full; },
     });
     if (found) {
         return { score: map.maxScore, comment: `yes — ${path.relative(student.extractedDir, found)}` };

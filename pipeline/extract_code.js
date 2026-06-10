@@ -68,7 +68,7 @@ function getStudents(labDir) {
                 students[name].filesDir = fullPath;
                 const inner = fs.readdirSync(fullPath);
                 inner.forEach(iFiles => {
-                    if (iFiles.endsWith('.zip')) {
+                    if (iFiles.toLowerCase().endsWith('.zip')) {
                         students[name].zipFile = path.join(fullPath, iFiles);
                     }
                 });

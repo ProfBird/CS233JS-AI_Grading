@@ -39,7 +39,7 @@ import fileWalker from '../lib/file_walker.js';
 const { getAllFiles, getSubdirs, checkRepoHygiene } = analyzeCode;
 const { getAllJsFiles } = lintCode;
 const { findAllIndexHtmlDirs, findDistIndexHtmlDirs, findPackageJsonDirs } = runtimeCheck;
-const { walk } = fileWalker;
+const { walk, toPosix } = fileWalker;
 
 let root;
 let symlinksCreated = false;
@@ -420,5 +420,28 @@ describe('walk', () => {
         let visitCount = 0;
         expect(() => walk(join(wroot, 'does-not-exist'), { visit: () => { visitCount++; } })).not.toThrow();
         expect(visitCount).toBe(0);
+    });
+});
+
+// ── toPosix (shared path normalizer, file_walker.js) ───────────────────────
+// Pins the cross-platform contract: any path-vs-pattern match site routes the
+// path through toPosix first, so "/"-based patterns behave identically on a
+// Windows backslash path. Uses literal backslash strings (not path.join) so the
+// Windows behavior is exercised even when the suite runs on Linux/macOS.
+
+describe('toPosix', () => {
+    it('converts backslashes to forward slashes', () => {
+        expect(toPosix('a\\b\\c.js')).toBe('a/b/c.js');
+        expect(toPosix('C:\\Users\\pc\\functions\\proxy.js')).toBe('C:/Users/pc/functions/proxy.js');
+    });
+
+    it('leaves already-posix paths unchanged', () => {
+        expect(toPosix('a/b/c.js')).toBe('a/b/c.js');
+    });
+
+    it('lets a "/"-based pattern match a Windows-style path after normalization', () => {
+        const winPath = 'repo\\functions\\proxy.js';
+        expect(/functions\//.test(winPath)).toBe(false);          // raw: no match
+        expect(/functions\//.test(toPosix(winPath))).toBe(true);  // normalized: matches
     });
 });

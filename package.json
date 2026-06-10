@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "prepare": "git config core.hooksPath githooks || exit 0",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"
   },

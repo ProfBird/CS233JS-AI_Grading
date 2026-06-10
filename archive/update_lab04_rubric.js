@@ -44,10 +44,10 @@
 
 'use strict';
 
-const XLSX = require('xlsx');
-const path = require('path');
+import XLSX from '../lib/xlsx.js';
+import path from 'path';
 
-const filePath = path.resolve(__dirname, '../Lab04/CS233JS_Lab04_Rubric.xlsm');
+const filePath = path.resolve(import.meta.dirname, '../Lab04/CS233JS_Lab04_Rubric.xlsm');
 
 const wb = XLSX.readFile(filePath, { bookVBA: true, cellStyles: true });
 

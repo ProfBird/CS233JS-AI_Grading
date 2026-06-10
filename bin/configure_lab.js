@@ -3,24 +3,25 @@
 // LLM-assisted lab configuration wizard. Reads the rubric spreadsheet, generates a
 // draft mapping table with AI, then lets the user review and edit before saving.
 
-const fs   = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { pathToFileURL } from 'url';
 
-const {
+import {
     normalizeAssignmentName,
     findSpreadsheets,
     getExistingAssignments, getExistingSteps,
     assembleConfig, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
-} = require('../lib/lab_config.js');
+} from '../lib/lab_config.js';
 
-const { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry } =
-    require('../lib/config_prompts.js');
+import { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry }
+    from '../lib/config_prompts.js';
 
-const { selectModel } = require('../lib/llm_client.js');
-const { TUI } = require('../lib/tui.js');
+import { selectModel } from '../lib/llm_client.js';
+import { TUI } from '../lib/tui.js';
 
-const CONFIGS_DIR       = path.join(__dirname, '..', 'configs');
+const CONFIGS_DIR       = path.join(import.meta.dirname, '..', 'configs');
 const LOCAL_CONFIG_PATH = path.join(CONFIGS_DIR, 'local-config.json');
 
 // ── Helpers passed to selectModel ────────────────────────────────────────
@@ -593,13 +594,13 @@ async function main() {
     if (summary) summary.forEach(line => process.stdout.write(line + '\n'));
 }
 
-module.exports = {
+export {
     heuristicDraft, mergeLLMResponse, guardFeatureType, findCriteria,
     buildLLMPrompt, buildCriteriaRef, extractJSON, summaryNotes, defPrompt,
     printDraftTable,
 };
 
-if (require.main === module) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     main().catch(err => {
         process.stderr.write(`Fatal error: ${err.stack || err.message}\n`);
         process.exit(1);

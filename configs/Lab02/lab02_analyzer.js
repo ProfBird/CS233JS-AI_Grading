@@ -1,8 +1,8 @@
 // Lab02: modules feature requires BOTH import and export statements.
 // countFeatures only counts import matches; this overrides with a boolean AND check.
-const fs = require('fs');
+import fs from 'fs';
 
-module.exports = function(jsFiles, analysis) {
+export default function(jsFiles, analysis) {
     let hasImport = false;
     let hasExport = false;
     for (const js of jsFiles) {

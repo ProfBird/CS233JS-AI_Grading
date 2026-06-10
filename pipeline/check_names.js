@@ -13,9 +13,9 @@
  * all work identically.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { walk, DEFAULT_SKIP_DIRS } = require('../lib/file_walker');
+import fs from 'fs';
+import path from 'path';
+import { walk, DEFAULT_SKIP_DIRS } from '../lib/file_walker.js';
 
 const NAME_REPORT = 'name_check_report.json';
 
@@ -55,7 +55,7 @@ function findInvalidNames(dir, { exclusions = [], extraAllowed = '' } = {}) {
     return { entriesChecked, badNames };
 }
 
-module.exports = async function(students, config, labDir) {
+export default async function(students, config, labDir) {
     console.log('--- File/Folder Name Check Phase ---');
 
     const validateCfg = config.validate || {};
@@ -86,5 +86,4 @@ module.exports = async function(students, config, labDir) {
     console.log(`Created ${NAME_REPORT} for ${report.length} students.`);
 };
 
-module.exports.validateName = validateName;
-module.exports.findInvalidNames = findInvalidNames;
+export { validateName, findInvalidNames };

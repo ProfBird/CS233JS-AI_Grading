@@ -7,11 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const checkNamesPhase = require('../pipeline/check_names.js');
-const { validateName, findInvalidNames } = checkNamesPhase;
+import checkNamesPhase, { validateName, findInvalidNames } from '../pipeline/check_names.js';
 
 // ── validateName ───────────────────────────────────────────────────────────
 describe('validateName', () => {

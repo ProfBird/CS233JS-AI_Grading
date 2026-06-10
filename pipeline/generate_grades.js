@@ -8,12 +8,12 @@
  * without editing this file.
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
-const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('../lib/ollama_comments');
-const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } = require('../lib/rubric_writer');
-const { walk, toPosix } = require('../lib/file_walker');
+import { getAvailableModel, generateSummary as ollamaGenerateSummary } from '../lib/ollama_comments.js';
+import { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } from '../lib/rubric_writer.js';
+import { walk, toPosix } from '../lib/file_walker.js';
 
 // --- Cell helpers ---
 
@@ -858,7 +858,7 @@ function formatTextReport(student, config, results, labTitle) {
 
 // --- Main export ---
 
-module.exports = async function(students, config, labDir, opts = {}) {
+export default async function(students, config, labDir, opts = {}) {
     console.log("--- Grade Generation Phase ---");
 
     let aiModel = null;
@@ -1041,10 +1041,4 @@ module.exports = async function(students, config, labDir, opts = {}) {
     return summary;
 };
 
-module.exports.registerHandler = registerHandler;
-module.exports.getHandler = getHandler;
-module.exports.VALID_MAPPING_TYPES = VALID_MAPPING_TYPES;
-module.exports.isCodeSourceType = isCodeSourceType;
-module.exports.resolveOutputPath = resolveOutputPath;
-module.exports.computeResults = computeResults;
-module.exports.stockCommentFor = stockCommentFor;
+export { registerHandler, getHandler, VALID_MAPPING_TYPES, isCodeSourceType, resolveOutputPath, computeResults, stockCommentFor };

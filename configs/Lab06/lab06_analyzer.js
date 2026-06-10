@@ -18,8 +18,8 @@
  * Results are attached as analysis.apiCompleteness.
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
 const VERSIONS = {
     A: {
@@ -106,7 +106,7 @@ function detectVersion(jsFiles) {
     return best;
 }
 
-module.exports = function (jsFiles, analysis, config, student) {
+export default function (jsFiles, analysis, config, student) {
     const group = (student.codeReview && student.codeReview.group) || null;
     let version = VERSIONS[group] || null;
 

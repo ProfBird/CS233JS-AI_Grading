@@ -7,14 +7,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const { getAllFilesByExt } = require('../lib/file_walker.js');
-const validateHtmlPhase = require('../pipeline/validate_html.js');
-const validateCssPhase = require('../pipeline/validate_css.js');
-const { validateHtmlFiles } = validateHtmlPhase;
-const { validateCssFiles } = validateCssPhase;
+import { getAllFilesByExt } from '../lib/file_walker.js';
+import validateHtmlPhase, { validateHtmlFiles } from '../pipeline/validate_html.js';
+import validateCssPhase, { validateCssFiles } from '../pipeline/validate_css.js';
 
 // ── getAllFilesByExt ─────────────────────────────────────────────────────
 describe('getAllFilesByExt', () => {

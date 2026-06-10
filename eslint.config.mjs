@@ -46,18 +46,8 @@ export default [
         ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', 'coverage/**', 'archive/**', 'configs/**'],
     },
     {
-        // Pipeline/lib/bin and run_all.js are CommonJS (require / module.exports).
-        files: ['**/*.js'],
-        languageOptions: {
-            ecmaVersion: 'latest',
-            sourceType: 'commonjs',
-            globals: { ...globals.node },
-        },
-        rules: correctnessRules,
-    },
-    {
-        // Tests and this config are ES modules.
-        files: ['**/*.mjs'],
+        // The whole project is ES modules ("type": "module"): .js and .mjs alike.
+        files: ['**/*.js', '**/*.mjs'],
         languageOptions: {
             ecmaVersion: 'latest',
             sourceType: 'module',

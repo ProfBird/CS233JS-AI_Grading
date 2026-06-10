@@ -7,9 +7,10 @@
  * all work identically.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { getAllFilesByExt } = require('../lib/file_walker');
+import fs from 'fs';
+import path from 'path';
+import { HtmlValidate } from 'html-validate';
+import { getAllFilesByExt } from '../lib/file_walker.js';
 
 const HTML_REPORT = 'html_validation_report.json';
 
@@ -40,13 +41,6 @@ function aggregate(reports) {
 async function validateHtmlFiles(htmlFiles, options = {}) {
     if (htmlFiles.length === 0) return { errors: 0, warnings: 0, messages: [], ruleCounts: {} };
 
-    let HtmlValidate;
-    try {
-        ({ HtmlValidate } = require('html-validate'));
-    } catch (e) {
-        return { errors: 0, warnings: 0, messages: ['html-validate not installed'], ruleCounts: {} };
-    }
-
     const hv = new HtmlValidate({
         extends: options.extends || ['html-validate:recommended'],
         rules: { 'no-trailing-whitespace': 'off', ...(options.rules || {}) },
@@ -64,7 +58,7 @@ async function validateHtmlFiles(htmlFiles, options = {}) {
     return aggregate(reports);
 }
 
-module.exports = async function(students, config, labDir) {
+export default async function(students, config, labDir) {
     console.log('--- HTML Validation Phase ---');
 
     const validateCfg = config.validate || {};
@@ -99,5 +93,4 @@ module.exports = async function(students, config, labDir) {
     console.log(`Created ${HTML_REPORT} for ${report.length} students.`);
 };
 
-module.exports.validateHtmlFiles = validateHtmlFiles;
-module.exports.aggregate = aggregate;
+export { validateHtmlFiles, aggregate };

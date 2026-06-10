@@ -7,14 +7,14 @@ const fs   = require('fs');
 const path = require('path');
 
 const {
-    normalizeAssignmentName, colLetter,
-    findSpreadsheets, readRubricCriteria,
+    normalizeAssignmentName,
+    findSpreadsheets,
     getExistingAssignments, getExistingSteps,
     assembleConfig, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
 } = require('../lib/lab_config.js');
 
-const { promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry } =
+const { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry } =
     require('../lib/config_prompts.js');
 
 const { selectModel } = require('../lib/llm_client.js');
@@ -562,7 +562,7 @@ async function main() {
         // 9. Build and write
         const mappings = draft
             .filter(e => !e._skip)
-            .map(({ _label, _skip, ...rest }) => rest);  // eslint-disable-line no-unused-vars
+            .map(({ _label, _skip, ...rest }) => rest);
 
         // assembleConfig deep-clones existingConfig and overwrites only the keys the
         // wizard owns, so a re-run preserves customAnalyzer, validate, nameCheck,

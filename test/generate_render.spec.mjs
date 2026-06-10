@@ -11,7 +11,7 @@
  * paths; those are flagged inline and updated when the paths are unified.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import * as fs from 'fs';

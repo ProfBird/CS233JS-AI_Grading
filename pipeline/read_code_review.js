@@ -90,7 +90,6 @@ function parseCellValue(text) {
 }
 
 const parseScoreFromCell = text => parseCellValue(text).score;
-const isCellFilled = text => parseCellValue(text).filled;
 
 /**
  * Parse all HTML tables and return the one most likely to contain review scores
@@ -193,7 +192,7 @@ function parseTableScores(html) {
 
 // --- Main export ---
 
-module.exports = async function (students, config) {
+module.exports = async function (students, _config) {
     console.log('--- Code Review Reading Phase ---');
 
     for (const student of students) {

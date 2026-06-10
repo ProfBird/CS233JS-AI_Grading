@@ -31,14 +31,19 @@ const correctnessRules = {
     'no-unsafe-negation': 'error',  // !a in b / !a instanceof b precedence traps
     'use-isnan': 'error',           // x === NaN (always false)
     'valid-typeof': 'error',        // typeof x === 'strnig' typos
-    // noise -> warning; ignore unused fn args prefixed _ and unused catch
-    // bindings (this codebase intentionally uses `catch (e) {}` to swallow errors).
-    'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
+    // noise -> warning; ignore unused fn args prefixed _, unused catch bindings
+    // (this codebase intentionally uses `catch (e) {}` to swallow errors), and
+    // rest siblings (the `const { a, ...rest } = obj` key-omission idiom).
+    'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none', ignoreRestSiblings: true }],
 };
 
 export default [
     {
-        ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', 'coverage/**', 'archive/**'],
+        // configs/ holds lab data and the student-facing ruleset (configs/eslint.config.mjs).
+        // ESLint flat config resolves the nearest config per file, so files there are linted
+        // with the student rules, not this gate — exclude them so the gate covers only the
+        // grader engine (pipeline/lib/bin/run_all.js) and its tests.
+        ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', 'coverage/**', 'archive/**', 'configs/**'],
     },
     {
         // Pipeline/lib/bin and run_all.js are CommonJS (require / module.exports).

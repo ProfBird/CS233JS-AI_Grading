@@ -11,9 +11,6 @@
 const fs = require('fs');
 const path = require('path');
 
-// Replace spaces and filesystem-unfriendly characters with hyphens for directory/file names.
-const toSafeName = name => name.replace(/[\s/\\:*?"<>|]+/g, '-');
-
 const { getAvailableModel, generateSummary: ollamaGenerateSummary } = require('../lib/ollama_comments');
 const { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } = require('../lib/rubric_writer');
 const { walk, toPosix } = require('../lib/file_walker');

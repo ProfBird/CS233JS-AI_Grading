@@ -401,7 +401,7 @@ describe('walk', () => {
 
     it('onDir does not fire for the root directory itself, only for children', () => {
         const dirs = [];
-        walk(wroot, { onDir: (full, name) => dirs.push(full) });
+        walk(wroot, { onDir: full => dirs.push(full) });
         expect(dirs).not.toContain(wroot);
     });
 

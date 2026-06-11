@@ -6,7 +6,11 @@ import fs from 'fs';
 import path from 'path';
 import XLSX from './xlsx.js';
 
-const CONFIGS_DIR = path.join(import.meta.dirname, '..', 'configs');
+// This module lives at src/lib/, two levels under the repo root, so reach the root
+// with two '..' segments — matching the repoRoot convention in src/pipeline/lint_code.js.
+// (The Phase 1 src/ move left this as a single '..', which resolved to the nonexistent
+// src/configs and made getExistingAssignments return nothing.)
+const CONFIGS_DIR = path.join(import.meta.dirname, '..', '..', 'configs');
 
 // ── Column helpers ────────────────────────────────────────────────────────
 

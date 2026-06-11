@@ -44,15 +44,15 @@ function parseGroupLetter(text) {
  */
 function parseGroupFromTable(html) {
     // Find all tables (there may be more than one)
-    const tableRe = /<table>([\s\S]*?)<\/table>/gi;
+    const tableRe = /<table[^>]*>([\s\S]*?)<\/table>/gi;
     let tableMatch;
     while ((tableMatch = tableRe.exec(html)) !== null) {
         const rows = [];
-        const rowRe = /<tr>([\s\S]*?)<\/tr>/gi;
+        const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
         let rowMatch;
         while ((rowMatch = rowRe.exec(tableMatch[1])) !== null) {
             const cells = [];
-            const cellRe = /<td>([\s\S]*?)<\/td>/gi;
+            const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
             let cellMatch;
             while ((cellMatch = cellRe.exec(rowMatch[1])) !== null) {
                 cells.push(cellMatch[1].replace(/<[^>]+>/g, '').trim());
@@ -96,14 +96,14 @@ const parseScoreFromCell = text => parseCellValue(text).score;
  * (has the most cells with fractions or Y/N values).
  */
 function findScoresTable(html) {
-    const tableRe = /<table>([\s\S]*?)<\/table>/gi;
+    const tableRe = /<table[^>]*>([\s\S]*?)<\/table>/gi;
     let bestTable = null;
     let bestScore = 0;
 
     let tableMatch;
     while ((tableMatch = tableRe.exec(html)) !== null) {
         let cellCount = 0;
-        const cellRe = /<td>([\s\S]*?)<\/td>/gi;
+        const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
         let cellMatch;
         while ((cellMatch = cellRe.exec(tableMatch[1])) !== null) {
             const text = cellMatch[1].replace(/<[^>]+>/g, '').trim();
@@ -130,11 +130,11 @@ function parseTableScores(html) {
 
     // Extract rows
     const rows = [];
-    const rowRe = /<tr>([\s\S]*?)<\/tr>/gi;
+    const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let rowMatch;
     while ((rowMatch = rowRe.exec(tableHtml)) !== null) {
         const cells = [];
-        const cellRe = /<td>([\s\S]*?)<\/td>/gi;
+        const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
         let cellMatch;
         while ((cellMatch = cellRe.exec(rowMatch[1])) !== null) {
             const text = cellMatch[1].replace(/<[^>]+>/g, '').trim();
@@ -189,6 +189,9 @@ function parseTableScores(html) {
         productionCompleted: anyProdFilled
     };
 }
+
+// Exported for unit testing the HTML-table parsing against mammoth-style output.
+export { parseCellValue, parseGroupFromTable, findScoresTable, parseTableScores };
 
 // --- Main export ---
 

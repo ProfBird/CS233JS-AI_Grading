@@ -188,11 +188,31 @@ async function promptRegexList(driver, combinator) {
     return patterns;
 }
 
-// Ask which files to search (a regex over file paths). Asked AFTER the code pattern(s) so a
-// code pattern isn't accidentally typed into this prompt; defaults to .js files.
+// Convert a plain extension list ("js, mjs" or ".js .mjs") into a path regex like
+// "\.(js|mjs)$" (single extension → "\.js$"). If the input is not a simple extension list
+// (it contains regex syntax), it's returned unchanged so advanced users can still enter a
+// raw regex. Empty input → null. Tokens may be comma- and/or space-separated.
+function extensionsToFileRegex(input) {
+    const trimmed = (input || '').trim();
+    if (!trimmed) return null;
+    const tokens = trimmed.split(/[\s,]+/).filter(Boolean);
+    if (tokens.length > 0 && tokens.every(t => /^\.?\w+$/.test(t))) {
+        const exts = tokens.map(t => t.replace(/^\./, ''));
+        const alt = exts.length === 1 ? exts[0] : `(${exts.join('|')})`;
+        return `\\.${alt}$`;
+    }
+    return trimmed;  // looks like a regex already — use as-is
+}
+
+// Ask which files to search, accepting a friendly extension list (e.g. "js, mjs") or a raw
+// regex. Asked AFTER the code pattern(s) so a code pattern isn't mistyped here. Echoes the
+// resulting path regex so the user can confirm what was built.
 async function askFileRegex(driver, currentValues) {
-    const def = currentValues.fileRegex || '\\.js$';
-    return (await driver.ask('Which files to search? (regex over file paths, e.g. \\.js$)', def)).trim() || def;
+    const def = currentValues.fileRegex || 'js';
+    const raw = await driver.ask('Which files? extensions (e.g. "js, mjs") or a regex', def);
+    const fileRegex = extensionsToFileRegex(raw) || '\\.js$';
+    driver.print(`  Searching files matching: ${fileRegex}`);
+    return fileRegex;
 }
 
 // Builds a `feature` mapping AND its analysis.features[] definition, attaching the
@@ -247,4 +267,4 @@ async function buildMappingEntry(driver, type, rubricRow, currentValues = {}) {
     return m;
 }
 
-export { promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry, buildFeatureEntry };
+export { promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry, buildFeatureEntry, extensionsToFileRegex };

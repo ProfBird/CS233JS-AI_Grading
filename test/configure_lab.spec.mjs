@@ -21,7 +21,7 @@ const {
 const { countFeatures } = await import('../src/pipeline/analyze_code.js');
 
 const {
-    buildMappingEntry, copyRubric, promptRubricRows,
+    buildMappingEntry, copyRubric, promptRubricRows, extensionsToFileRegex,
 } = await import('../src/lib/config_prompts.js');
 
 const {
@@ -481,6 +481,29 @@ describe('getExistingSteps', () => {
     });
 });
 
+// ── extensionsToFileRegex ─────────────────────────────────────────────────
+
+describe('extensionsToFileRegex', () => {
+    it('builds a single-extension path regex', () => {
+        expect(extensionsToFileRegex('js')).toBe('\\.js$');
+        expect(extensionsToFileRegex('.js')).toBe('\\.js$');   // leading dot tolerated
+    });
+    it('builds an alternation for multiple extensions (comma or space separated)', () => {
+        expect(extensionsToFileRegex('js, mjs')).toBe('\\.(js|mjs)$');
+        expect(extensionsToFileRegex('js mjs cjs')).toBe('\\.(js|mjs|cjs)$');
+        expect(extensionsToFileRegex('.js, .mjs')).toBe('\\.(js|mjs)$');
+    });
+    it('passes a raw regex through unchanged (advanced use)', () => {
+        expect(extensionsToFileRegex('\\.m?js$')).toBe('\\.m?js$');
+        expect(extensionsToFileRegex('\\.(js|mjs)$')).toBe('\\.(js|mjs)$');
+        expect(extensionsToFileRegex('src/.*\\.js$')).toBe('src/.*\\.js$');
+    });
+    it('returns null for empty input', () => {
+        expect(extensionsToFileRegex('')).toBeNull();
+        expect(extensionsToFileRegex('   ')).toBeNull();
+    });
+});
+
 // ── buildMappingEntry ───────────────────────────────────────────────────
 
 describe('buildMappingEntry', () => {
@@ -504,6 +527,13 @@ describe('buildMappingEntry', () => {
             maxScore: 5,
             _featureDef: { id: 'my_feature', regex: 'fetch\\(', fileRegex: '\\.js$' },
         });
+    });
+
+    it('accepts a plain extension list for the file prompt (js, mjs)', async () => {
+        // featureId, combinator, regex, fileRegex(extensions), minCount, maxScore
+        const rl = mockDriver(['feat', 'single', 'import\\b', 'js, mjs', '1', '3']);
+        const result = await buildMappingEntry(rl, 'feature', rubricRow);
+        expect(result._featureDef.fileRegex).toBe('\\.(js|mjs)$');
     });
 
     it('returns null for feature with empty id', async () => {

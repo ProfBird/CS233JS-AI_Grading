@@ -221,39 +221,42 @@ registerHandler('deploy_check', async (map, student) => {
     return { score, comment: `URL reachable but page may not be bundled (${scripts.join(', ')})` };
 });
 
-registerHandler('lint', (map, student) => {
+const LINT_TOP_ISSUES = 6;  // how many offending rules to list in the lint comment
+
+// Computes the lint score + a comment carrying the actual ESLint findings (issue count plus
+// the top offending rules, e.g. "Good - 5 minor issues (Prefer const: 3, Use ===: 2)").
+function lintResult(map, student) {
     const lint = student.lint || {};
-    if (lint.jsFiles > 0) {
-        const severity = map.severity; // 'errors', 'warnings', or undefined (all)
+    if (!(lint.jsFiles > 0)) return { score: 0, comment: 'No JS files to lint' };
 
-        if (severity === 'errors') {
-            const count = lint.errors || 0;
-            const topIssues = (lint.errorMessages || lint.messages || []).slice(0, 3).join(', ');
-            if (count === 0) return { score: map.maxScore, comment: 'No syntax errors' };
-            return { score: 0, comment: `${count} error${count !== 1 ? 's' : ''} found (${topIssues})` };
-        }
+    const severity = map.severity; // 'errors', 'warnings', or undefined (all)
 
-        let count, topIssues;
-        if (severity === 'warnings') {
-            count = lint.warnings || 0;
-            topIssues = (lint.warningMessages || lint.messages || []).slice(0, 3).join(', ');
-        } else {
-            count = (lint.errors || 0) + (lint.warnings || 0);
-            topIssues = (lint.messages || []).slice(0, 3).join(', ');
-        }
-
-        if (count === 0) {
-            return { score: map.maxScore, comment: 'Excellent - no lint issues' };
-        } else if (count <= 10) {
-            return { score: map.maxScore, comment: `Good - ${count} minor issues (${topIssues})` };
-        } else if (count <= 30) {
-            return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${count} issues (${topIssues})` };
-        } else {
-            return { score: 0, comment: `${count} issues (${topIssues})` };
-        }
+    if (severity === 'errors') {
+        const count = lint.errors || 0;
+        const topIssues = (lint.errorMessages || lint.messages || []).slice(0, LINT_TOP_ISSUES).join(', ');
+        if (count === 0) return { score: map.maxScore, comment: 'No syntax errors' };
+        return { score: 0, comment: `${count} error${count !== 1 ? 's' : ''} found (${topIssues})` };
     }
-    return { score: 0, comment: 'No JS files to lint' };
-});
+
+    let count, topIssues;
+    if (severity === 'warnings') {
+        count = lint.warnings || 0;
+        topIssues = (lint.warningMessages || lint.messages || []).slice(0, LINT_TOP_ISSUES).join(', ');
+    } else {
+        count = (lint.errors || 0) + (lint.warnings || 0);
+        topIssues = (lint.messages || []).slice(0, LINT_TOP_ISSUES).join(', ');
+    }
+
+    if (count === 0) return { score: map.maxScore, comment: 'Excellent - no lint issues' };
+    if (count <= 10) return { score: map.maxScore, comment: `Good - ${count} minor issues (${topIssues})` };
+    if (count <= 30) return { score: Math.max(1, Math.floor(map.maxScore / 2)), comment: `${count} issues (${topIssues})` };
+    return { score: 0, comment: `${count} issues (${topIssues})` };
+}
+
+// keepComment:true so the linter findings are written to the comment cell verbatim, rather
+// than being replaced by a mapping's stockComments — for style/best-practice rows the output
+// is more useful than a canned "Good"/"Fair"/"Poor".
+registerHandler('lint', (map, student) => ({ ...lintResult(map, student), keepComment: true }));
 
 // Shared tiered scorer for the markup validators: 0 errors = full, ≤ tolerance =
 // half, more = zero. Returns { score, comment }; the stock-comment tier override

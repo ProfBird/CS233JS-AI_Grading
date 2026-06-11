@@ -148,22 +148,44 @@ describe('manual handler — prod cell filled but not affirmative', () => {
 // ── stock comments wired into computeResults ─────────────────────────────────
 describe('computeResults — stock comment override', () => {
     const sc = { full: 'Good', partial: 'Errors', zero: 'Missing' };
+    // `feature` honors stockComments. (lint keeps its own findings — see the lint tests below.)
     const config = { mappings: [
-        { type: 'lint', severity: 'errors', cell: 'D7', commentCell: 'F7', maxScore: 6, stockComments: sc },
+        { type: 'feature', featureId: 'x', cell: 'D7', commentCell: 'F7', maxScore: 6, stockComments: sc },
     ] };
 
     it('writes the full-tier stock comment when the handler scores max', async () => {
-        const student = { lint: { jsFiles: 1, errors: 0 } };
+        const student = { analysis: { features: { x: 1 } } };
         const [r] = await computeResults(student, config);
         expect(r.score).toBe(6);
-        expect(r.comment).toBe('Good');           // overrode handler's "No syntax errors"
+        expect(r.comment).toBe('Good');
     });
 
     it('writes the zero-tier stock comment when the handler scores 0', async () => {
-        const student = { lint: { jsFiles: 1, errors: 4 } };
+        const student = { analysis: { features: { x: 0 } } };
         const [r] = await computeResults(student, config);
         expect(r.score).toBe(0);
         expect(r.comment).toBe('Missing');
+    });
+
+    it('keeps the linter findings for lint mappings, ignoring stockComments', async () => {
+        const cfg = { mappings: [
+            { type: 'lint', severity: 'warnings', cell: 'D7', commentCell: 'F7', maxScore: 4,
+              stockComments: { full: 'Excellent', partial: 'Fair', zero: 'Poor' } },
+        ] };
+        const student = { lint: { jsFiles: 1, errors: 0, warnings: 5, warningMessages: ['Prefer const: 3', 'Use ===: 2'] } };
+        const [r] = await computeResults(student, cfg);
+        expect(r.score).toBe(4);
+        expect(r.comment).toContain('Prefer const: 3');   // the linter output…
+        expect(r.comment).toContain('Use ===: 2');
+        expect(r.comment).not.toBe('Excellent');          // …not the stock comment
+    });
+
+    it('keeps the lint clean-state comment too (not the full stock comment)', async () => {
+        const cfg = { mappings: [
+            { type: 'lint', cell: 'D7', commentCell: 'F7', maxScore: 4, stockComments: { full: 'Excellent', partial: 'Fair', zero: 'Poor' } },
+        ] };
+        const [r] = await computeResults({ lint: { jsFiles: 1, errors: 0, warnings: 0 } }, cfg);
+        expect(r.comment).toBe('Excellent - no lint issues');
     });
 
     it('leaves manual rows with their own comment (exempt)', async () => {
@@ -740,14 +762,15 @@ describe('lint handler', () => {
     it('gives maxScore for zero issues', () => {
         const map = { maxScore: 2 };
         expect(handler(map, { lint: { jsFiles: 5, errors: 0, warnings: 0, messages: [] } }))
-            .toEqual({ score: 2, comment: 'Excellent - no lint issues' });
+            .toMatchObject({ score: 2, comment: 'Excellent - no lint issues' });
     });
 
-    it('gives maxScore for minor issues (<= 10)', () => {
+    it('gives maxScore for minor issues (<= 10), keeping its comment (not stock)', () => {
         const map = { maxScore: 2 };
         const result = handler(map, { lint: { jsFiles: 5, errors: 2, warnings: 3, messages: ['rule1: 3', 'rule2: 2'] } });
         expect(result.score).toBe(2);
         expect(result.comment).toContain('Good - 5 minor issues');
+        expect(result.keepComment).toBe(true);   // lint findings are not overridden by stockComments
     });
 
     it('gives half score for moderate issues (<= 30)', () => {
@@ -767,22 +790,21 @@ describe('lint handler', () => {
     it('scores 0 when there are no JS files', () => {
         const map = { maxScore: 2 };
         expect(handler(map, { lint: { jsFiles: 0, errors: 0, warnings: 0, messages: [] } }))
-            .toEqual({ score: 0, comment: 'No JS files to lint' });
+            .toMatchObject({ score: 0, comment: 'No JS files to lint' });
     });
 
     it('scores 0 when lint data is missing', () => {
         const map = { maxScore: 2 };
-        expect(handler(map, {})).toEqual({ score: 0, comment: 'No JS files to lint' });
+        expect(handler(map, {})).toMatchObject({ score: 0, comment: 'No JS files to lint' });
     });
 
-    it('includes top issues in comment', () => {
+    it('lists the top offending rules in the comment, capped at 6', () => {
         const map = { maxScore: 2 };
-        const messages = ['no-unused-vars: 5', 'no-undef: 3', 'eqeqeq: 2', 'semi: 1'];
-        const result = handler(map, { lint: { jsFiles: 3, errors: 8, warnings: 3, messages } });
-        expect(result.comment).toContain('no-unused-vars: 5');
-        expect(result.comment).toContain('no-undef: 3');
-        expect(result.comment).toContain('eqeqeq: 2');
-        expect(result.comment).not.toContain('semi: 1'); // only top 3
+        const messages = ['r1: 9', 'r2: 8', 'r3: 7', 'r4: 6', 'r5: 5', 'r6: 4', 'r7: 3'];
+        const result = handler(map, { lint: { jsFiles: 3, errors: 20, warnings: 15, messages } });
+        expect(result.comment).toContain('r1: 9');
+        expect(result.comment).toContain('r6: 4');     // up to 6 rules shown
+        expect(result.comment).not.toContain('r7: 3'); // 7th is capped off
     });
 });
 

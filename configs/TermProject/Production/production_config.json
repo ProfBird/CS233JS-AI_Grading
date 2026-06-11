@@ -1,0 +1,228 @@
+{
+  "rubricName": "CS233JS_TermProjectFinal_Rubric.xlsm",
+  "titleText": "Term Project: Production",
+  "titleCell": "A1",
+  "summaryCell": "A2",
+  "graderCell": "G1",
+  "runtimeCheck": "build",
+  "mappings": [
+    {
+      "cell": "D6",
+      "commentCell": "F6",
+      "type": "manual",
+      "maxScore": 20,
+      "msg": "Check all features are working correctly overall.",
+      "stockComments": {
+        "full": "Excellent",
+        "partial": "Mostly working",
+        "zero": "Not workinig"
+      }
+    },
+    {
+      "cell": "D8",
+      "commentCell": "F8",
+      "type": "manual",
+      "maxScore": 5,
+      "msg": "Check that Fetch API is used to call a web service asynchronously.",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Attempted",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D9",
+      "commentCell": "F9",
+      "type": "manual",
+      "maxScore": 3,
+      "msg": "Check that try-catch or .then is used to handle errors.",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Attempted",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D10",
+      "commentCell": "F10",
+      "type": "env_file_check",
+      "maxScore": 5,
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Attempted",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D11",
+      "commentCell": "F11",
+      "type": "manual",
+      "maxScore": 8,
+      "msg": "Check at least one class is used and is used appropriately.",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Attempted",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D12",
+      "commentCell": "F12",
+      "type": "manual",
+      "maxScore": 5,
+      "msg": "Check at least one new JS technology is used (local storage, canvas, regex, arrow functions, destructuring, spread operator).",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Partially",
+        "zero": "None"
+      }
+    },
+    {
+      "cell": "D15",
+      "commentCell": "F15",
+      "type": "scripts_check",
+      "maxScore": 4,
+      "scripts": [
+        "dev",
+        "build"
+      ],
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Partially",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D16",
+      "commentCell": "F16",
+      "type": "scripts_check",
+      "maxScore": 8,
+      "scripts": [
+        "test"
+      ],
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Attempted",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D18",
+      "commentCell": "F18",
+      "type": "gitignore_check",
+      "maxScore": 3,
+      "requiredEntry": "node_modules",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Incorrect",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D19",
+      "commentCell": "F19",
+      "type": "deploy_check",
+      "maxScore": 8,
+      "urlType": "citstudent",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Not running",
+        "zero": "No"
+      }
+    },
+    {
+      "cell": "D21",
+      "commentCell": "F21",
+      "type": "manual",
+      "maxScore": 3,
+      "msg": "Check web page has good visual design (professional looking).",
+      "stockComments": {
+        "full": "Excellent",
+        "partial": "Good",
+        "zero": "Needs improvement"
+      }
+    },
+    {
+      "cell": "D22",
+      "commentCell": "F22",
+      "type": "manual",
+      "maxScore": 3,
+      "msg": "Check some kind of styling has been applied (CSS, Bootstrap, etc.).",
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Attempted",
+        "zero": "Missing"
+      }
+    },
+    {
+      "cell": "D23",
+      "commentCell": "F23",
+      "type": "manual",
+      "maxScore": 3,
+      "msg": "Check UI behavior is intuitive and logical (good UX).",
+      "stockComments": {
+        "full": "Excellent",
+        "partial": "Good",
+        "zero": "Needs improvement"
+      }
+    },
+    {
+      "cell": "D25",
+      "commentCell": "F25",
+      "type": "manual",
+      "maxScore": 6,
+      "msg": "Check good architectural design: separation of business rules from UI code.",
+      "stockComments": {
+        "full": "Excellent",
+        "partial": "Fair",
+        "zero": "Poor"
+      }
+    },
+    {
+      "cell": "D26",
+      "commentCell": "F26",
+      "type": "manual",
+      "maxScore": 4,
+      "msg": "Check code conforms to class standards for style and best practices.",
+      "stockComments": {
+        "full": "Excellent",
+        "partial": "Fair",
+        "zero": "Poor"
+      }
+    },
+    {
+      "cell": "D27",
+      "commentCell": "F27",
+      "type": "developer_comments",
+      "maxScore": 4,
+      "stockComments": {
+        "full": "Yes",
+        "partial": "Some",
+        "zero": "Missing"
+      }
+    },
+    {
+      "cell": "D28",
+      "commentCell": "F28",
+      "type": "manual",
+      "maxScore": 4,
+      "msg": "Check standard folder structure and conventional, descriptive file names.",
+      "stockComments": {
+        "full": "Excellent",
+        "partial": "Fair",
+        "zero": "Needs improvement"
+      }
+    },
+    {
+      "cell": "D29",
+      "commentCell": "F29",
+      "type": "code_review",
+      "maxScore": 4,
+      "stockComments": {
+        "full": "Yes, yes",
+        "partial": "Yes, no",
+        "zero": "No, no"
+      }
+    }
+  ]
+}

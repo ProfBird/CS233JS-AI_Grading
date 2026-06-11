@@ -4,24 +4,25 @@ AI grading pipeline for CS233JS (Lane Community College). Automates grading of s
 
 ## Commands
 
-```bash
-node run_all.js              # interactive menu
-node run_all.js Lab03        # first-time grade
-node run_all.js Lab03 --regrade   # re-run grading phases, keep extracted code
-node run_all.js Lab03 --reclone         # delete extracted code, re-clone, then grade
-node run_all.js Lab03 --ai-comments     # grade with Ollama-generated rubric summary sentences
-node run_all.js Lab03 --ai-model=qwen3-coder  # grade with a specific Ollama model (implies --ai-comments)
-node run_all.js Lab06 --text-report     # grade without rubric spreadsheet, generates .txt reports
-node run_all.js TermProject ApiDoc      # grade one step of a multi-step lab
-npx eslint --format json path/to/files/*.js
+The entry point is `bin/grade.js` (also installed as the `cs233-grade` bin). The codebase is ESM (`"type": "module"`).
 
-node bin/rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
-node bin/configure_lab.js [AssignmentName]    # interactive wizard to create a new lab/assignment config + copy rubric
-node docs/archive/update_lab04_rubric.js       # one-time: rewrites Lab04 rubric cells to match Lab04 point design
+```bash
+node bin/grade.js              # interactive menu  (or: cs233-grade)
+node bin/grade.js Lab03        # first-time grade
+node bin/grade.js Lab03 --regrade   # re-run grading phases, keep extracted code
+node bin/grade.js Lab03 --reclone         # delete extracted code, re-clone, then grade
+node bin/grade.js Lab03 --ai-comments     # grade with Ollama-generated rubric summary sentences
+node bin/grade.js Lab03 --ai-model=qwen3-coder  # grade with a specific Ollama model (implies --ai-comments)
+node bin/grade.js Lab06 --text-report     # grade without rubric spreadsheet, generates .txt reports
+node bin/grade.js TermProject ApiDoc      # grade one step of a multi-step lab
+
+node bin/rubric-to-md.js path/to/Rubric.xlsm  # dump Grade sheet as Markdown (or: cs233-rubric-to-md)
+node bin/configure-lab.js [AssignmentName]    # lab config wizard + copy rubric (or: cs233-configure-lab)
 ```
 
 ```bash
-npx vitest run              # run all tests
+npm test                    # run all tests (vitest)
+npm run lint                # eslint . (the CI lint gate)
 npx vitest                  # watch mode
 ```
 
@@ -35,33 +36,33 @@ npx vitest                  # watch mode
 - **csstree-validator** — offline CSS validator used by `validate_css.js`
 - **globals** — browser/node global definitions for ESLint flat config
 - **eslint** — v9+ flat config
-- **neo-blessed** — terminal UI framework used by `configure_lab.js` wizard
+- **neo-blessed** — terminal UI framework used by `configure-lab.js` wizard
 - **vitest** (dev) — test runner
 
 ## Architecture
 
-### Pipeline (`run_all.js`)
+### Pipeline (`bin/grade.js`)
 
-1. **pipeline/extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`.
-2. **pipeline/runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: deletes any existing `node_modules/` then runs `npm install && npm run build`. `"both"` mode: runs build first, then browser check; stores `buildSuccess`/`browserSuccess` sub-results separately. Also runs a `scripts_check` sub-phase (verifies npm run dev/build/preview scripts exist and succeed) when `scripts_check` mappings are present in the config. Attaches to `student.runtimeCheck` and `student.scriptsCheck`.
-3. **pipeline/read_code_review.js** — Reads each student's code review form (`.docx`). Parses the HTML table (via mammoth) to extract per-item beta and production scores, plus the lab assignment group letter. Attaches `student.codeReview` with `items[{betaScore, prodScore}]`, `productionCompleted`, and `group`. Runs *before* analysis so the group letter is available to the analyzer.
-4. **pipeline/analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`. A configured `customAnalyzer` is invoked via `applyCustomAnalyzer()`, whose return object is merged into `analysis` (a throwing analyzer is logged and skipped). A custom analyzer can attach `analysis.reportSections` (see below) to add lab-specific output to text reports without touching generic code.
-5. **pipeline/lint_code.js** — Runs ESLint (flat config) against each student's `.js` files using `~/.eslint/eslint.config.mjs` — the same config VS Code uses, ensuring consistent results. Attaches to `student.lint`.
-5b. **pipeline/validate_html.js** — Validates `.html`/`.htm` files with `html-validate` (pure JS, offline). Attaches `student.htmlValidation` with `{ htmlFiles, errors, warnings, messages, ruleCounts }`. Respects `config.validate.exclude`. Ruleset overrideable via `config.validate.htmlExtends` / `config.validate.htmlRules`; `no-trailing-whitespace` is off by default.
-5c. **pipeline/validate_css.js** — Validates `.css` files with `csstree-validator` (pure JS, offline). Attaches `student.cssValidation` with `{ cssFiles, errors, warnings, messages, ruleCounts }`. Reports validity errors only (no warning tier). Respects `config.validate.exclude`.
-5d. **pipeline/check_names.js** — Checks every file and folder name in the submission for Linux/web portability. A name is invalid if it contains any character outside `[A-Za-z0-9._-]` (spaces, parens, accented chars, etc.). Attaches `student.nameCheck` with `{ entriesChecked, errors, messages, badNames }`. Extra allowed characters configurable via `config.nameCheck.extraAllowed`.
+1. **src/pipeline/extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`.
+2. **src/pipeline/runtime_check.js** — `"browser"` mode: Puppeteer captures console errors and failed loads. `"build"` mode: deletes any existing `node_modules/` then runs `npm install && npm run build`. `"both"` mode: runs build first, then browser check; stores `buildSuccess`/`browserSuccess` sub-results separately. Also runs a `scripts_check` sub-phase (verifies npm run dev/build/preview scripts exist and succeed) when `scripts_check` mappings are present in the config. Attaches to `student.runtimeCheck` and `student.scriptsCheck`.
+3. **src/pipeline/read_code_review.js** — Reads each student's code review form (`.docx`). Parses the HTML table (via mammoth) to extract per-item beta and production scores, plus the lab assignment group letter. Attaches `student.codeReview` with `items[{betaScore, prodScore}]`, `productionCompleted`, and `group`. Runs *before* analysis so the group letter is available to the analyzer.
+4. **src/pipeline/analyze_code.js** — Regex-based feature detection per-lab config. For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`. A configured `customAnalyzer` is invoked via `applyCustomAnalyzer()`, whose return object is merged into `analysis` (a throwing analyzer is logged and skipped). A custom analyzer can attach `analysis.reportSections` (see below) to add lab-specific output to text reports without touching generic code.
+5. **src/pipeline/lint_code.js** — Runs ESLint (flat config) against each student's `.js` files. Ruleset resolution: a per-step or per-lab `configs/{Lab}/eslint.config.mjs` override if present, else the shipped `eslint/student.eslint.config.mjs`; the resolved config is also copied into the lab folder for VS Code consistency. Attaches to `student.lint`.
+5b. **src/pipeline/validate_html.js** — Validates `.html`/`.htm` files with `html-validate` (pure JS, offline). Attaches `student.htmlValidation` with `{ htmlFiles, errors, warnings, messages, ruleCounts }`. Respects `config.validate.exclude`. Ruleset overrideable via `config.validate.htmlExtends` / `config.validate.htmlRules`; `no-trailing-whitespace` is off by default.
+5c. **src/pipeline/validate_css.js** — Validates `.css` files with `csstree-validator` (pure JS, offline). Attaches `student.cssValidation` with `{ cssFiles, errors, warnings, messages, ruleCounts }`. Reports validity errors only (no warning tier). Respects `config.validate.exclude`.
+5d. **src/pipeline/check_names.js** — Checks every file and folder name in the submission for Linux/web portability. A name is invalid if it contains any character outside `[A-Za-z0-9._-]` (spaces, parens, accented chars, etc.). Attaches `student.nameCheck` with `{ entriesChecked, errors, messages, badNames }`. Extra allowed characters configurable via `config.nameCheck.extraAllowed`.
 
-6. **pipeline/generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`, `student.codeReview`, `student.htmlValidation`, `student.cssValidation`, `student.nameCheck`, `student.scriptsCheck`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, delegates OOXML/ZIP surgery to `lib/rubric_writer.js`. With `--ai-comments`, calls `lib/ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`. With `--text-report`, produces `.txt` grade reports instead of spreadsheets — useful when a rubric template isn't available yet. If `config.graderCell` is set, writes "Computer" into that cell; on regrade, creates a versioned copy (`-V2`, `-V3`, …) rather than overwriting a spreadsheet that has been manually reviewed.
+6. **src/pipeline/generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`, `student.codeReview`, `student.htmlValidation`, `student.cssValidation`, `student.nameCheck`, `student.scriptsCheck`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type. For `.xlsm` rubrics, delegates OOXML/ZIP surgery to `src/lib/rubric_writer.js`. With `--ai-comments`, calls `src/lib/ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`. With `--text-report`, produces `.txt` grade reports instead of spreadsheets — useful when a rubric template isn't available yet. If `config.graderCell` is set, writes "Computer" into that cell; on regrade, creates a versioned copy (`-V2`, `-V3`, …) rather than overwriting a spreadsheet that has been manually reviewed.
 
-### Shared utilities (`lib/`)
+### Shared utilities (`src/lib/`)
 
-- **lib/file_walker.js** — Recursive directory traversal. Exports: `walk(dir, opts)` (core traversal with `visit`, `onFile`, `onDir`, `shouldSkip`, `shouldDescend`, `followSymlinks`, `maxDepth`); `getAllFilesByExt(dir, ext, exclusions)` (collect files by extension); `DEFAULT_SKIP_DIRS` (Set of dirs never scanned: `node_modules`, `dist`, `build`, `.git`, `__MACOSX`).
-- **lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
-- **lib/ollama_comments.js** — HTTP client for a local Ollama server; generates one-sentence AI rubric summaries.
-- **lib/lab_config.js** — Pure, UI-agnostic functions for lab configuration. Exports spreadsheet helpers (`readRubricRows`, `detectRubricLayout`), assignment discovery (`getExistingAssignments`, `getExistingSteps`), config assembly (`buildConfig`, `writeLab`), mapping type schemas (`MAPPING_TYPES`, `MAPPING_TYPE_SCHEMA`), and `guessMappingType`. No readline/TUI/process.exit — safe to import from anywhere including tests.
-- **lib/llm_client.js** — Unified LLM client supporting Ollama, OpenRouter, and Anthropic. Used by `configure_lab.js` to generate AI-assisted config drafts. Exports `LLMClient`, `loadLLMClient` (reads provider/key from `local-config.json`), `setupLLMInteractive`, and `selectModel`. Handles HTTP 429 rate-limit retries with fallback model.
-- **lib/tui.js** — Terminal UI primitives for `configure_lab.js` wizard (neo-blessed). Provides a scrollable log pane, text input bar, arrow-key option popup, full-screen review table, and spinner. Redirects `console.log`/`console.error` to the TUI pane while active.
-- **lib/config_prompts.js** — Driver-based rubric prompt functions shared between the TUI wizard and tests. Implements `promptRubricRows`, `promptRubricCriteria`, `copyRubric`, `promptFields`, and `buildMappingEntry`. Uses a driver interface (`ask`, `askBoolean`, `askInt`, `askOptions`, `print`, `exit`) so the same logic runs in both interactive and test contexts.
+- **src/lib/file_walker.js** — Recursive directory traversal. Exports: `walk(dir, opts)` (core traversal with `visit`, `onFile`, `onDir`, `shouldSkip`, `shouldDescend`, `followSymlinks`, `maxDepth`); `getAllFilesByExt(dir, ext, exclusions)` (collect files by extension); `DEFAULT_SKIP_DIRS` (Set of dirs never scanned: `node_modules`, `dist`, `build`, `.git`, `__MACOSX`).
+- **src/lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
+- **src/lib/ollama_comments.js** — HTTP client for a local Ollama server; generates one-sentence AI rubric summaries.
+- **src/lib/lab_config.js** — Pure, UI-agnostic functions for lab configuration. Exports spreadsheet helpers (`readRubricRows`, `detectRubricLayout`), assignment discovery (`getExistingAssignments`, `getExistingSteps`), config assembly (`buildConfig`, `writeLab`), mapping type schemas (`MAPPING_TYPES`, `MAPPING_TYPE_SCHEMA`), and `guessMappingType`. No readline/TUI/process.exit — safe to import from anywhere including tests.
+- **src/lib/llm_client.js** — Unified LLM client supporting Ollama, OpenRouter, and Anthropic. Used by `configure-lab.js` to generate AI-assisted config drafts. Exports `LLMClient`, `loadLLMClient` (reads provider/key from `local-config.json`), `setupLLMInteractive`, and `selectModel`. Handles HTTP 429 rate-limit retries with fallback model.
+- **src/lib/tui.js** — Terminal UI primitives for `configure-lab.js` wizard (neo-blessed). Provides a scrollable log pane, text input bar, arrow-key option popup, full-screen review table, and spinner. Redirects `console.log`/`console.error` to the TUI pane while active.
+- **src/lib/config_prompts.js** — Driver-based rubric prompt functions shared between the TUI wizard and tests. Implements `promptRubricRows`, `promptRubricCriteria`, `copyRubric`, `promptFields`, and `buildMappingEntry`. Uses a driver interface (`ask`, `askBoolean`, `askInt`, `askOptions`, `print`, `exit`) so the same logic runs in both interactive and test contexts.
 
 ### Config files
 
@@ -72,10 +73,9 @@ Two layouts are supported — flat (single submission set) and multi-step (multi
 configs/{AssignmentName}/
   {assignmentname}_config.json          # e.g. lab06_config.json
   CS233JS_{AssignmentName}_Rubric.xlsm  # rubric template lives alongside config
-  {assignmentname}_analyzer.js          # optional custom analyzer
 ```
 - `rubricName` in the config is the filename only (e.g. `"CS233JS_Lab06_Rubric.xlsm"`), resolved relative to the config's directory.
-- Run: `node run_all.js Lab06`
+- Run: `node bin/grade.js Lab06`
 
 **Multi-step lab** — one subdirectory per submission step, no top-level config:
 ```
@@ -89,9 +89,9 @@ configs/{AssignmentName}/
 ```
 - Detection rule: top-level `{assignmentname}_config.json` is **absent**, but one or more subdirectories each contain a `{subdir_lower}_config.json`.
 - `rubricName` in each step config is the filename only (e.g. `"CS233JS_DevEnvAndStaticSite_Rubric.xlsm"`), resolved relative to that step's subdirectory.
-- Run: `node run_all.js TermProject DevEnvAndStaticSite` (or just `node run_all.js TermProject` for an interactive step picker).
+- Run: `node bin/grade.js TermProject DevEnvAndStaticSite` (or just `node bin/grade.js TermProject` for an interactive step picker).
 - If the labRoot has a matching step subdirectory (e.g. `<labRoot>/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from `<labRoot>/TermProject/` directly — the labRoot step layout is optional.
-- `configure_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step to set up each step's config.
+- `configure-lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step to set up each step's config.
 
 **Converting a flat lab to multi-step:**
 1. `mkdir configs/{Lab}/{StepName}`
@@ -103,35 +103,37 @@ configs/{AssignmentName}/
 ### Directory structure
 
 ```
-AI_Grading/   ← this directory
-  ├── run_all.js                   # primary entry point
-  ├── pipeline/                    # grading phases (run in order by run_all.js)
-  │   ├── extract_code.js
-  │   ├── runtime_check.js
-  │   ├── read_code_review.js
-  │   ├── analyze_code.js
-  │   ├── lint_code.js
-  │   ├── validate_html.js
-  │   ├── validate_css.js
-  │   ├── check_names.js
-  │   └── generate_grades.js
-  ├── lib/                         # shared utilities used by pipeline phases
-  │   ├── file_walker.js
-  │   ├── rubric_writer.js
-  │   ├── ollama_comments.js
-  │   ├── lab_config.js            # pure config helpers (spreadsheet parsing, mapping schemas)
-  │   ├── llm_client.js            # unified LLM client (Ollama / OpenRouter / Anthropic)
-  │   ├── tui.js                   # neo-blessed TUI for configure_lab.js wizard
-  │   └── config_prompts.js        # driver-based rubric prompt logic (TUI + test shared)
-  ├── bin/                         # secondary CLI tools
-  │   ├── rubric_to_md.js
-  │   └── configure_lab.js         # interactive lab config creation wizard
+AI_Grading/   ← repo root (ESM; "type": "module")
+  ├── bin/                         # entry points (mapped to cs233-* commands in package.json)
+  │   ├── grade.js                 # primary entry point (cs233-grade)
+  │   ├── configure-lab.js         # lab config wizard (cs233-configure-lab)
+  │   └── rubric-to-md.js          # dump rubric Grade sheet as Markdown (cs233-rubric-to-md)
+  ├── src/
+  │   ├── pipeline/                # grading phases (run in order by bin/grade.js)
+  │   │   ├── extract_code.js
+  │   │   ├── runtime_check.js
+  │   │   ├── read_code_review.js
+  │   │   ├── analyze_code.js
+  │   │   ├── lint_code.js
+  │   │   ├── validate_html.js
+  │   │   ├── validate_css.js
+  │   │   ├── check_names.js
+  │   │   └── generate_grades.js
+  │   ├── lib/                     # shared utilities used by pipeline phases + wizard
+  │   │   ├── file_walker.js
+  │   │   ├── rubric_writer.js
+  │   │   ├── ollama_comments.js
+  │   │   ├── lab_config.js        # pure config helpers (spreadsheet parsing, mapping schemas)
+  │   │   ├── llm_client.js        # unified LLM client (Ollama / OpenRouter / Anthropic)
+  │   │   ├── tui.js               # neo-blessed TUI for the configure-lab wizard
+  │   │   ├── config_prompts.js    # driver-based rubric prompt logic (TUI + test shared)
+  │   │   └── xlsx.js              # ESM wrapper around the xlsx package
+  │   └── analyzers/               # (deprecated; now empty) former per-lab custom analyzers
   ├── configs/
   │   ├── local-config.json        # labRoot + codeRoot (machine-specific, gitignored, auto-created)
   │   └── {AssignmentName}/
-  │       ├── {assignmentname}_config.json    # flat-lab: rubric config, feature regexes, cell mappings
+  │       ├── {assignmentname}_config.json    # flat-lab: rubric config, feature/match rules, cell mappings
   │       ├── CS233JS_{AssignmentName}_Rubric.xlsm  # rubric template (tracked in git)
-  │       ├── {assignmentname}_analyzer.js   # optional custom analyzer (if any)
   │       └── {StepName}/                    # multi-step lab: one subdir per submission step
   │           ├── {stepname}_config.json     # step-level config (e.g. apidoc_config.json)
   │           └── CS233JS_{StepName}_Rubric.xlsm
@@ -175,11 +177,11 @@ AI_Grading/   ← this directory
 ```
 
 
-- ESLint config: `~/.eslint/eslint.config.mjs` — shared with VS Code; not stored in this repo.
+- ESLint ruleset: shipped at `eslint/student.eslint.config.mjs`, overridable per-lab via `configs/{Lab}/eslint.config.mjs` (or per-step); `lint_code.js` copies the resolved config into the lab folder for VS Code consistency. The grader's *own* source is linted via the repo's root ESLint config (`npm run lint`, the CI gate).
 - `--reclone` implies `--regrade`.
 - In **normal mode** (no flags), students whose grade spreadsheet already exists are skipped entirely — no runtime check, analysis, linting, or spreadsheet rewrite. Use `--regrade` to re-process them.
 - **`--regrade` without `--reclone`** automatically runs `git pull` on each student's cloned repo before re-grading, so updated submissions are picked up without a full re-clone.
-- When `labDir` contains no direct Moodle submissions but has subdirectories that do (e.g., Moodle exported Beta/Production as separate groups), `run_all.js` prompts you to pick which group to grade.
+- When `labDir` contains no direct Moodle submissions but has subdirectories that do (e.g., Moodle exported Beta/Production as separate groups), `bin/grade.js` prompts you to pick which group to grade.
 - `configs/local-config.json` is tried first; `default-config.json` (shipped with the repo) is the fallback for new machines.
 - Each pipeline phase attaches data to the shared `students` array; `generate_grades` consumes the combined output.
 
@@ -200,10 +202,12 @@ AI_Grading/   ← this directory
 
   - variations: { "A": { appName }, "B": { appName }, "C": { appName } } (optional) — maps group letters to expected app names for labs where each group builds a different version of the project (e.g., group A builds "Double Trouble Domino"). When present, `analyze_code.js` scans the extracted directory for a folder whose name best matches the group's `appName` and records the detected variation in `analysis.versionVariation`.
 
-  - analysis.features[]: { id, regex, fileRegex } — features to count via regex
-  - analysis.customAnalyzer: string (optional) — **⚠️ DEPRECATED — do not write new custom analyzers.** The grading system is built on flexible, reusable, config-driven modules; lab-specific JS analyzers are being phased out. For any new check, express it with a generic mapping type / feature check, and if the logic exceeds a single regex (e.g. requiring AND/OR of patterns), **extend a generic mapping type** rather than writing a per-lab analyzer. A custom analyzer is a documented last resort, allowed only when a check genuinely cannot be expressed generically.
-    - Mechanics (for the analyzers that remain): filename of a JS module in `src/analyzers/` that receives (jsFiles, analysis, config, student) and merges its return into `analysis`. May set `analysis.features[id]` (feeding `feature` mappings) and/or `analysis.reportSections: [{ title, lines[] }]` (text-report output only — not used for spreadsheets).
-    - Migration status: **Lab02** (`modules` = import AND export) and **Lab05** (`c12`/`c13` = any-of several group-specific patterns) still rely on analyzers because the generic `feature` check supports only one regex. They should migrate to a multi-pattern (`allOf`/`anyOf`) generic feature check, after which their analyzers — and this option — can be removed. Lab06's analyzer was text-report-only and has been deleted.
+  - analysis.features[] — features detected per file. Each entry has `{ id, fileRegex }` plus **either**:
+    - **counted:** `{ regex }` — counts regex matches; the `feature` mapping passes when count ≥ `minCount` (default 1).
+    - **boolean (match):** `{ match }` where `match` is a nested tree of `{ regex, flags? }` leaves combined with `allOf` / `anyOf`. The feature is `1` if the tree is satisfied across the searched files, else `0`. Each leaf's presence is computed **codebase-wide**, so an `allOf` matches even when its patterns appear in different files. Use it for checks needing AND/OR of patterns — e.g. `modules` = import AND export, or a group-variation row = any-of several implementations. Comments are stripped from `.js` before matching. (See `evalMatchNode` in analyze_code.js.) `validateConfig` accepts `regex` or `match`.
+  - analysis.customAnalyzer: string (optional) — **⚠️ DEPRECATED — do not write new custom analyzers.** The grading system runs on flexible, reusable, config-driven modules. Express every check with a generic mapping type / feature check; if the logic exceeds a single regex, use a nested `match` (allOf/anyOf) feature (above) rather than a per-lab analyzer. A custom analyzer is a documented last resort, allowed only when a check genuinely cannot be expressed generically.
+    - **Status: no analyzers currently exist.** All former analyzers were removed — Lab02 (`modules`) and Lab05 (`c12`/`c13`) migrated to nested `match` features; Lab06's was text-report-only and deleted. `src/analyzers/` is empty.
+    - Mechanics (if one is ever re-added as a last resort): filename of a JS module in `src/analyzers/` that receives (jsFiles, analysis, config, student) and merges its return into `analysis`. May set `analysis.features[id]` and/or `analysis.reportSections: [{ title, lines[] }]` (text-report output only — not used for spreadsheets).
 
   - parts[]: { id, gameNames[], folderPattern, featureCounts[] } — multi-part lab config (optional). gameNames is the list of expected game/project names for that part; folderPattern is a regex fallback for "Part1/Pt2"-style folder naming.
 

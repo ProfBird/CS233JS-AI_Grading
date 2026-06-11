@@ -13,9 +13,9 @@
 ```mermaid
 graph TD
     subgraph "Entry Points"
-        run_all[run_all.js]
-        rubric_to_md[rubric_to_md.js]
-        configure_lab[configure_lab.js]
+        run_all[bin/grade.js]
+        rubric_to_md[bin/rubric-to-md.js]
+        configure_lab[bin/configure-lab.js]
     end
 
     subgraph "Pipeline Modules"
@@ -50,7 +50,7 @@ graph TD
     subgraph "Configuration"
         local_config[configs/local-config.json]
         lab_configs[configs/{AssignmentName}/{assignmentname}_config.json]
-        eslint_config[~/.eslint/eslint.config.mjs]
+        eslint_config[eslint/student.eslint.config.mjs]
     end
 
     %% Entry → Pipeline
@@ -119,11 +119,11 @@ graph TD
 ```mermaid
 sequenceDiagram
     participant User
-    participant run_all as run_all.js
+    participant run_all as bin/grade.js
     participant lc as configs/local-config.json
     participant config as configs/{AssignmentName}/{assignmentname}_config.json
 
-    User->>run_all: node run_all.js [AssignmentName] [flags]
+    User->>run_all: node bin/grade.js [AssignmentName] [flags]
 
     Note over run_all: === Startup ===
     run_all->>lc: read labRoot + codeRoot
@@ -156,7 +156,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant run_all as run_all.js
+    participant run_all as bin/grade.js
     participant extract as extract_code.js
     participant runtime as runtime_check.js
 
@@ -199,7 +199,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant run_all as run_all.js
+    participant run_all as bin/grade.js
     participant code_review as read_code_review.js
     participant analyze as analyze_code.js
     participant lint as lint_code.js
@@ -282,7 +282,7 @@ sequenceDiagram
 
 ## File-by-File Reference
 
-### `run_all.js` — Master Orchestrator
+### `bin/grade.js` — Master Orchestrator
 
 The entry point. Handles CLI argument parsing, interactive menus, env configuration, and orchestrates all pipeline phases.
 
@@ -370,7 +370,7 @@ Regex-based analysis of student JavaScript files.
 
 Runs ESLint v9+ with flat config.
 
-- Uses `~/.eslint/eslint.config.mjs` — the same config VS Code uses, so lint results are consistent between the grader and the editor. `globals.browser` and `globals.node` are included via the `globals` npm package installed in `~/.eslint/`.
+- Resolves the ruleset per-lab (a `configs/{Lab}/eslint.config.mjs` override if present, else the shipped `eslint/student.eslint.config.mjs`) and copies it into the lab folder for VS Code consistency. Uses ESLint's Node API (`new ESLint().lintFiles()`), not a shelled-out CLI.
 - Collects `.js` files recursively, respecting per-lab exclusions (e.g., `node_modules`, `dist`, `part1`)
 - Outputs human-readable rule descriptions (42 rules mapped)
 - Writes `lint_report.json`
@@ -412,7 +412,7 @@ Checks every file and folder name in each student's submission for Linux/web por
 
 Reads the rubric template and writes per-student graded spreadsheets.
 
-**Handler registry:** Mapping types are registered via `registerHandler(type, fn)`. External modules can add new types without editing this file. The exported `VALID_MAPPING_TYPES` Set is built dynamically from the registry (imported by `run_all.js` for config validation).
+**Handler registry:** Mapping types are registered via `registerHandler(type, fn)`. External modules can add new types without editing this file. The exported `VALID_MAPPING_TYPES` Set is built dynamically from the registry (imported by `bin/grade.js` for config validation).
 
 **Cell mapping types:**
 
@@ -637,8 +637,8 @@ Machine-specific. Gitignored. Created on first run. Both paths are prompted for 
 | `nameCheck.extraAllowed` | No | Extra characters allowed in file/folder names |
 | `repoHygiene.excludedFromRepo` | No | Folder names that should not be committed to the repo |
 | `packageCheck` | No | Expected npm package sections; `allowedExtras` whitelists student-added packages |
-| `analysis.features` | Yes | Array of features to detect via regex |
-| `analysis.customAnalyzer` | No | Path (relative to `configs/{AssignmentName}/`) to a custom analysis module |
+| `analysis.features` | Yes | Array of features to detect. Each is counted (`regex`) or boolean (`match`: nested `allOf`/`anyOf`/`regex`) |
+| `analysis.customAnalyzer` | No | **DEPRECATED** (use a `match` feature instead). Filename in `src/analyzers/` of a last-resort custom module; none currently exist |
 | `parts` | No | Multi-part lab configuration |
 | `mappings` | Yes | Array of rubric cell assignments |
 
@@ -647,15 +647,14 @@ Machine-specific. Gitignored. Created on first run. Both paths are prompted for 
 ### Using the interactive wizard (recommended)
 
 ```bash
-node bin/configure_lab.js               # fully interactive, prompts for assignment name
-node bin/configure_lab.js Lab07         # pre-specify a lab by number or name
-node bin/configure_lab.js TermProject   # pre-specify a non-numbered assignment
+node bin/configure-lab.js               # fully interactive, prompts for assignment name
+node bin/configure-lab.js Lab07         # pre-specify a lab by number or name
+node bin/configure-lab.js TermProject   # pre-specify a non-numbered assignment
 ```
 
 The wizard guides you through:
 1. Copying a rubric spreadsheet into `configs/{AssignmentName}/`
-2. Configuring the title, runtime check mode, feature regexes, and rubric cell mappings
-3. Optionally creating a `{assignmentname}_analyzer.js` skeleton for custom analysis
+2. Configuring the title, runtime check mode, feature rules, and rubric cell mappings
 
 Choose between two mapping modes:
 - **cell-by-cell wizard** — reads the rubric Grade sheet via xlsx, displays each row with auto-derived cell references, and lets you assign mapping types row by row
@@ -666,9 +665,9 @@ Choose between two mapping modes:
 1. Create `configs/{AssignmentName}/` (e.g., `configs/Lab05/` or `configs/TermProject/`)
 2. Create `configs/{AssignmentName}/{assignmentname}_config.json` following the schema above
 3. Copy the rubric spreadsheet (`CS233JS_{AssignmentName}_Rubric.xlsx` or `.xlsm`) into `configs/{AssignmentName}/`
-4. ESLint config is shared across all assignments via `~/.eslint/eslint.config.mjs` — no per-assignment config needed.
-5. (Optional) Create `configs/{AssignmentName}/{assignmentname}_analyzer.js` if the assignment needs custom analysis. The module should export a function `(jsFiles, analysis, config, student)` and return an object to merge into `analysis`.
-6. Run `node run_all.js` — the new assignment will appear in the menu automatically.
+4. ESLint ruleset comes from the shipped `eslint/student.eslint.config.mjs`; add `configs/{AssignmentName}/eslint.config.mjs` only to override it for that lab — no per-assignment config needed otherwise.
+5. For a check that needs more than counting one regex, use a nested `match` (allOf/anyOf) feature in the config — **not** a custom analyzer (deprecated; see schema notes).
+6. Run `node bin/grade.js` (or `cs233-grade`) — the new assignment appears in the menu automatically.
 
 ## Data Flow
 

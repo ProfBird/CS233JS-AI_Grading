@@ -36,23 +36,68 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 Use the interactive wizard to set up grading for a new lab:
 
 ```bash
-node bin/configure_lab.js               # interactive, prompts for assignment name
-node bin/configure_lab.js Lab07         # pre-specify a lab by number or name
-node bin/configure_lab.js TermProject   # pre-specify a non-numbered assignment
+node bin/configure-lab.js               # interactive, prompts for assignment name
+node bin/configure-lab.js Lab07         # pre-specify a lab by number or name
+node bin/configure-lab.js TermProject   # pre-specify a non-numbered assignment
 ```
 
 The wizard will:
 1. Ask whether the lab has **multiple sets of submissions** (e.g., Proposal, Beta, Production). If yes, it prompts for the first step name and creates a step-level config (`configs/{AssignmentName}/{StepName}/`). Run the wizard again to add more steps.
-2. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm)
-3. Copy it into `configs/{AssignmentName}/` (or the step subdirectory) with the standard naming convention
-4. Guide you through configuring title, runtime mode, feature regexes, and rubric cell mappings
-5. Optionally create a custom analyzer skeleton
+2. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm) and copy it into the config directory with the standard naming convention.
+3. Read the rubric's Grade sheet and — using AI (or a heuristic fallback if no model is configured) — **draft a check type for each rubric row**. The types are listed under [Available checks](#available-checks-rubric-mapping-types) below.
+4. Let you **review and edit** the drafted checks before saving: a navigable table where you can change a row's check type, adjust its fields (max score, etc.), or mark a row "graded by hand."
+5. Prompt for the lab title, runtime-check mode (`browser` / `build` / `both`), and the optional summary / grader / title cells, then write `{assignmentname}_config.json`.
+
+> **The wizard does not configure `feature` / `match` checks.** Those need a code pattern (a regex, or a nested AND/OR rule) that you supply, so the wizard leaves them out — add or edit them directly in the generated `{assignmentname}_config.json`. See [Available checks](#available-checks-rubric-mapping-types). (Custom JS analyzers are **deprecated**; use a `match` check instead.)
+
+### Available checks (rubric mapping types)
+
+Each rubric row in the config is a *mapping* with a `type` that tells the grader what to check, the `cell` / `commentCell` to write, and a `maxScore`. These are the available types — the wizard drafts most of them automatically; the ones marked **config-only** need a pattern you add by hand.
+
+**Code features** — detect language/API usage in the student's `.js`:
+- `feature` *(config-only)* — counts matches of a `regex` (full credit at `minCount`, default 1), **or** evaluates a boolean `match` rule for checks needing AND/OR of several patterns. Example: `"match": { "allOf": [{ "regex": "import\\s+.*from" }, { "regex": "export\\s+" }] }` requires both import and export; use `"anyOf"` for "any one of these implementations" (e.g. group A/B/C variations). Each pattern's presence is computed across all files, so an `allOf` matches even when its patterns live in different files.
+
+**Code quality & validity:**
+- `lint` — runs ESLint; set `severity: "errors"` (syntax) or `"warnings"` (style).
+- `html_validate` / `css_validate` — validate `.html` / `.css`; partial credit up to a `tolerance` (default 3 errors).
+- `name_check` — file/folder names must be Linux-safe (no spaces/special chars); `tolerance` default 2.
+
+**Build & runtime** (require `runtimeCheck` set accordingly):
+- `build_check` — `npm install` + `npm run build` succeeds.
+- `browser_check` — app loads in headless Chrome with no console errors.
+- `build_and_browser_check` — both; half credit if only one passes.
+- `scripts_check` — the named npm `scripts` (e.g. `dev,build,preview`) are defined and run.
+
+**Repository & GitHub:**
+- `github_repo` — a GitHub URL was submitted and the repo cloned.
+- `collaborator_check` — instructor was added as a collaborator (proven by a successful clone).
+- `gitignore_check` — `.gitignore` exists (add `requiredEntry`, e.g. `.env`, to also require an entry).
+- `repo_hygiene` — excluded folders (`node_modules`, `dist`, …) were not committed.
+- `apps_in_repo` — the app (or all app subfolders) exist in the cloned repo.
+
+**Files & packages:**
+- `package_check` — `package.json` has the required (and not the forbidden) dependencies.
+- `npm_package` — a specific npm package is imported in the code.
+- `env_file_check` — a `.env` file with at least one `KEY=VALUE` was submitted (flags for manual review if absent — normal when gitignored).
+- `path_exists` — any file whose path matches `pathPattern` exists (a "required file was created" check).
+- `part1_completed` / `part_completed` — files for a lab part are present (multi-part labs with named subfolders).
+
+**Deployment & links:**
+- `deploy_check` — fetches the citstudent URL; full credit if live and Vite-bundled, half if live but unbundled, flags for manual review if unreachable.
+- `url_check` — fetches a submitted URL; full credit on HTTP 200.
+
+**Review & manual:**
+- `code_review` — peer code review submitted and the production column filled.
+- `developer_comments` — code files contain developer name/date/header comments.
+- `manual` — no automation; pulls the score from the student's peer code-review form, otherwise flagged `NEEDS MANUAL CHECK` for you to grade.
+
+Any mapping may also carry `stockComments: { full, partial, zero }` to write a short canned comment per score tier instead of the verbose auto-generated one.
 
 ### File layout
 
 ```
 AI_Grading/                   ← this tool (git repo)
-  ├── run_all.js              ← main entry point
+  ├── bin/grade.js              ← main entry point
   └── configs/
       ├── local-config.json   ← machine-specific paths (auto-created, gitignored)
       └── {AssignmentName}/
@@ -98,16 +143,16 @@ AI_Grading/                   ← this tool (git repo)
 **Flat lab** — a single submission set graded as one unit (Lab03, Lab06, etc.):
 - One config file at `configs/{AssignmentName}/{assignmentname}_config.json`
 - Rubric template lives alongside the config
-- Run: `node run_all.js Lab06`
-- `configure_lab.js` creates this layout by default (answer "No" when asked about multiple submission sets)
+- Run: `node bin/grade.js Lab06`
+- `configure-lab.js` creates this layout by default (answer "No" when asked about multiple submission sets)
 
 **Multi-step lab** — separate submission sets for different stages of the same project (e.g., TermProject with DevEnvAndStaticSite, ApiDoc, Beta, Production):
 - No top-level config file; each step gets its own subdirectory under `configs/{AssignmentName}/{StepName}/`
 - Each step subdir contains `{stepname_lower}_config.json` and its own rubric template
 - If the labRoot has a matching step subdirectory (e.g. `<labRoot>/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from the lab root directly — the labRoot step layout is optional
-- Run a specific step: `node run_all.js TermProject DevEnvAndStaticSite`
-- Run interactively (step picker shown): `node run_all.js TermProject`
-- `configure_lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step
+- Run a specific step: `node bin/grade.js TermProject DevEnvAndStaticSite`
+- Run interactively (step picker shown): `node bin/grade.js TermProject`
+- `configure-lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step
 
 **Converting a flat lab to multi-step** (e.g., you want to add a Beta step to a lab that currently only has a Production config):
 ```bash
@@ -135,7 +180,7 @@ You only need to enter these once — they're saved for future runs.
 ### Interactive mode
 
 ```bash
-node run_all.js
+node bin/grade.js
 ```
 
 Shows a menu of available labs and grading modes:
@@ -154,14 +199,14 @@ npm run test:watch      # re-run tests on file changes
 ### Command-line mode
 
 ```bash
-node run_all.js Lab04                        # grade Lab04 (normal mode)
-node run_all.js Lab04 --regrade              # re-grade without re-cloning
-node run_all.js Lab04 --reclone              # fresh clone + full grade
-node run_all.js Lab04 --ai-comments          # grade with AI summary comments
-node run_all.js Lab04 --ai-model=qwen3-coder # use a specific Ollama model
-node run_all.js Lab04 --text-report          # generate .txt reports instead of spreadsheets
-node run_all.js TermProject ApiDoc           # grade one step of a multi-step lab
-node run_all.js TermProject                  # interactive step picker for multi-step lab
+node bin/grade.js Lab04                        # grade Lab04 (normal mode)
+node bin/grade.js Lab04 --regrade              # re-grade without re-cloning
+node bin/grade.js Lab04 --reclone              # fresh clone + full grade
+node bin/grade.js Lab04 --ai-comments          # grade with AI summary comments
+node bin/grade.js Lab04 --ai-model=qwen3-coder # use a specific Ollama model
+node bin/grade.js Lab04 --text-report          # generate .txt reports instead of spreadsheets
+node bin/grade.js TermProject ApiDoc           # grade one step of a multi-step lab
+node bin/grade.js TermProject                  # interactive step picker for multi-step lab
 ```
 
 ### Flags

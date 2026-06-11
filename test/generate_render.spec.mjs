@@ -16,7 +16,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import * as fs from 'fs';
 import xlsx from 'xlsx';
-import generateGrades, { computeResults } from '../pipeline/generate_grades.js';
+import generateGrades, { computeResults } from '../src/pipeline/generate_grades.js';
 
 // The xlsx ESM build (0.20.x) does not auto-wire Node's fs; writeFile/readFile
 // throw "cannot save file" until set_fs() is called.

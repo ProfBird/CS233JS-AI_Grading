@@ -1,5 +1,6 @@
+#!/usr/bin/env node
 /**
- * run_all.js
+ * grade.js (formerly run_all.js)
  *
  * Master orchestrator script for CS233JS lab grading.
  * Each pipeline phase attaches results directly to student objects.
@@ -17,17 +18,20 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { spawnSync } from 'child_process';
-import extractCode, { CODE_DIR, REPO_DIR } from './pipeline/extract_code.js';
-import analyzeCode from './pipeline/analyze_code.js';
-import lintCode from './pipeline/lint_code.js';
-import validateHtml from './pipeline/validate_html.js';
-import validateCss from './pipeline/validate_css.js';
-import checkNames from './pipeline/check_names.js';
-import runtimeCheck from './pipeline/runtime_check.js';
-import generateGrades, { VALID_MAPPING_TYPES } from './pipeline/generate_grades.js';
-import readCodeReview from './pipeline/read_code_review.js';
+import extractCode, { CODE_DIR, REPO_DIR } from '../src/pipeline/extract_code.js';
+import analyzeCode from '../src/pipeline/analyze_code.js';
+import lintCode from '../src/pipeline/lint_code.js';
+import validateHtml from '../src/pipeline/validate_html.js';
+import validateCss from '../src/pipeline/validate_css.js';
+import checkNames from '../src/pipeline/check_names.js';
+import runtimeCheck from '../src/pipeline/runtime_check.js';
+import generateGrades, { VALID_MAPPING_TYPES } from '../src/pipeline/generate_grades.js';
+import readCodeReview from '../src/pipeline/read_code_review.js';
 
-import { getExistingSteps } from './lib/lab_config.js';
+import { getExistingSteps } from '../src/lib/lab_config.js';
+
+// This file lives in bin/; course config + the default-config template live at the repo root.
+const REPO_ROOT = path.join(import.meta.dirname, '..');
 
 const ARTIFACTS_DIR = 'Artifacts';
 const SUBMISSIONS_DIR = 'SubmissionsAndAssessment';
@@ -200,7 +204,7 @@ function validateConfig(config, labName) {
 
 // --- Helpers ---
 
-const localConfigPath = path.join(import.meta.dirname, 'configs', 'local-config.json');
+const localConfigPath = path.join(REPO_ROOT, 'configs', 'local-config.json');
 
 function readLocalConfig() {
     try {
@@ -208,7 +212,7 @@ function readLocalConfig() {
     } catch (e) {}
     // Fall back to default-config.json (shipped with the repo) as a starting point
     try {
-        return JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'default-config.json'), 'utf8'));
+        return JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'default-config.json'), 'utf8'));
     } catch (e) {}
     return {};
 }
@@ -291,7 +295,7 @@ async function main() {
             console.log(`  Saved lab root and code storage root to local-config.json`);
         }
 
-        const configsDir = path.join(import.meta.dirname, 'configs');
+        const configsDir = path.join(REPO_ROOT, 'configs');
         const labs = fs.readdirSync(configsDir)
             .filter(f => {
                 const subdir = path.join(configsDir, f);
@@ -373,8 +377,8 @@ async function main() {
         }
 
         labConfigDir = stepName
-            ? path.join(import.meta.dirname, 'configs', labName, stepName)
-            : path.join(import.meta.dirname, 'configs', labName);
+            ? path.join(REPO_ROOT, 'configs', labName, stepName)
+            : path.join(REPO_ROOT, 'configs', labName);
         const configPath = path.join(labConfigDir, `${path.basename(labConfigDir).toLowerCase()}_config.json`);
         if (!fs.existsSync(configPath)) {
             console.error(`ERROR: Config file not found at ${configPath}`);

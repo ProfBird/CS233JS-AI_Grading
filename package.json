@@ -2,8 +2,19 @@
   "name": "ai_grading",
   "version": "1.0.0",
   "description": "",
-  "main": "run_all.js",
+  "main": "bin/grade.js",
   "type": "module",
+  "bin": {
+    "cs233-grade": "bin/grade.js",
+    "cs233-configure-lab": "bin/configure-lab.js",
+    "cs233-rubric-to-md": "bin/rubric-to-md.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "eslint/",
+    "examples/"
+  ],
   "scripts": {
     "prepare": "git config core.hooksPath githooks || exit 0",
     "lint": "eslint .",

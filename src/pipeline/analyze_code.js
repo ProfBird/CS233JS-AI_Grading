@@ -541,7 +541,12 @@ export default async function(students, config, labDir, configDir = null) {
     // Load custom analyzer if configured
     let customAnalyzer = null;
     if (config.analysis && config.analysis.customAnalyzer) {
-        const analyzerPath = path.resolve(configDir || path.join(import.meta.dirname, 'configs'), config.analysis.customAnalyzer);
+        // Resolve repo-shipped analyzers (src/analyzers/) first — these are canonical
+        // and unit-tested — then fall back to one supplied beside the external lab config.
+        const repoAnalyzerPath = path.join(import.meta.dirname, '..', 'analyzers', config.analysis.customAnalyzer);
+        const analyzerPath = fs.existsSync(repoAnalyzerPath)
+            ? repoAnalyzerPath
+            : path.resolve(configDir || labDir, config.analysis.customAnalyzer);
         if (fs.existsSync(analyzerPath)) {
             try {
                 customAnalyzer = (await import(pathToFileURL(analyzerPath).href)).default;

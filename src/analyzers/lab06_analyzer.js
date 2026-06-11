@@ -49,7 +49,6 @@ const VERSIONS = {
 };
 
 // Generic code patterns
-const FETCH_CALL = /fetch\s*\(/;
 const FETCH_URL = /fetch\s*\(\s*["'`][^"'`]*(?:api\.|\.com\/|\.org\/|\.net\/|\.io\/)[^"'`]*["'`]/i;
 const JSON_PARSE = /\.json\s*\(\s*\)/;
 const LOCAL_STORAGE = /localStorage/;

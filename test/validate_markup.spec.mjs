@@ -7,9 +7,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { getAllFilesByExt } from '../lib/file_walker.js';
-import validateHtmlPhase, { validateHtmlFiles } from '../pipeline/validate_html.js';
-import validateCssPhase, { validateCssFiles } from '../pipeline/validate_css.js';
+import { getAllFilesByExt } from '../src/lib/file_walker.js';
+import validateHtmlPhase, { validateHtmlFiles } from '../src/pipeline/validate_html.js';
+import validateCssPhase, { validateCssFiles } from '../src/pipeline/validate_css.js';
 
 // ── getAllFilesByExt ─────────────────────────────────────────────────────
 describe('getAllFilesByExt', () => {

@@ -31,10 +31,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'fs';
 import { join, relative, sep } from 'path';
 import { tmpdir } from 'os';
 
-import { getAllFiles, getSubdirs, checkRepoHygiene } from '../pipeline/analyze_code.js';
-import { getAllJsFiles } from '../pipeline/lint_code.js';
-import { findAllIndexHtmlDirs, findDistIndexHtmlDirs, findPackageJsonDirs } from '../pipeline/runtime_check.js';
-import { walk, toPosix } from '../lib/file_walker.js';
+import { getAllFiles, getSubdirs, checkRepoHygiene } from '../src/pipeline/analyze_code.js';
+import { getAllJsFiles } from '../src/pipeline/lint_code.js';
+import { findAllIndexHtmlDirs, findDistIndexHtmlDirs, findPackageJsonDirs } from '../src/pipeline/runtime_check.js';
+import { walk, toPosix } from '../src/lib/file_walker.js';
 
 let root;
 let symlinksCreated = false;

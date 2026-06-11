@@ -17,20 +17,17 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { spawnSync } from 'child_process';
-import extractCode from './pipeline/extract_code.js';
+import extractCode, { CODE_DIR, REPO_DIR } from './pipeline/extract_code.js';
 import analyzeCode from './pipeline/analyze_code.js';
 import lintCode from './pipeline/lint_code.js';
 import validateHtml from './pipeline/validate_html.js';
 import validateCss from './pipeline/validate_css.js';
 import checkNames from './pipeline/check_names.js';
 import runtimeCheck from './pipeline/runtime_check.js';
-import generateGrades from './pipeline/generate_grades.js';
+import generateGrades, { VALID_MAPPING_TYPES } from './pipeline/generate_grades.js';
 import readCodeReview from './pipeline/read_code_review.js';
 
 import { getExistingSteps } from './lib/lab_config.js';
-
-const { VALID_MAPPING_TYPES } = generateGrades;
-const { CODE_DIR, REPO_DIR } = extractCode;
 
 const ARTIFACTS_DIR = 'Artifacts';
 const SUBMISSIONS_DIR = 'SubmissionsAndAssessment';

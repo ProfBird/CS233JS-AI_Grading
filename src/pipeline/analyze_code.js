@@ -51,6 +51,24 @@ function getAllFiles(dirPath, exclusions = []) {
     return results;
 }
 
+// Evaluate a nested match node against the already-read file contents, codebase-wide.
+// A leaf { regex, flags? } is true if it matches in ANY of the files; allOf/anyOf combine
+// leaf results. This lets a feature require AND/OR of patterns (e.g. "import AND export",
+// or "scale() OR (lineTo() AND a mouse handler)") — the cases that previously needed a
+// per-lab custom analyzer. Combination is at the leaf level (each pattern's presence is
+// computed across all files first), so "lineTo in file A AND mousedown in file B" matches.
+function evalMatchNode(node, contents, featId) {
+    if (node.allOf) return node.allOf.every(n => evalMatchNode(n, contents, featId));
+    if (node.anyOf) return node.anyOf.some(n => evalMatchNode(n, contents, featId));
+    let re;
+    try { re = new RegExp(node.regex, node.flags || ''); }
+    catch (e) {
+        console.warn(`  Warning: Invalid match regex for feature "${featId}": ${node.regex}`);
+        return false;
+    }
+    return contents.some(c => re.test(c));
+}
+
 function countFeatures(allFiles, configFeatures) {
     const counts = {};
     if (!configFeatures) return counts;
@@ -63,16 +81,28 @@ function countFeatures(allFiles, configFeatures) {
             ? f => new RegExp(feat.fileRegex).test(toPosix(f))
             : f => f.toLowerCase().endsWith('.js');
         const filesToSearch = allFiles.filter(fileFilter);
+
+        // Read each searched file once; strip comments from .js so neither match counting
+        // nor boolean match-evaluation sees commented-out code.
+        const contents = [];
         for (const file of filesToSearch) {
             let content;
             try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
-            const searchable = file.toLowerCase().endsWith('.js') ? stripComments(content) : content;
-            try {
-                const regex = new RegExp(feat.regex, 'g');
-                const matches = searchable.match(regex);
-                if (matches) counts[feat.id] += matches.length;
-            } catch (e) {
-                console.warn(`  Warning: Invalid regex for feature "${feat.id}": ${feat.regex}`);
+            contents.push(file.toLowerCase().endsWith('.js') ? stripComments(content) : content);
+        }
+
+        if (feat.match) {
+            // Boolean feature: 1 if the nested allOf/anyOf/regex tree is satisfied across
+            // the searched files, else 0. (Replaces lab-specific analyzers.)
+            counts[feat.id] = evalMatchNode(feat.match, contents, feat.id) ? 1 : 0;
+        } else if (feat.regex) {
+            for (const searchable of contents) {
+                try {
+                    const matches = searchable.match(new RegExp(feat.regex, 'g'));
+                    if (matches) counts[feat.id] += matches.length;
+                } catch (e) {
+                    console.warn(`  Warning: Invalid regex for feature "${feat.id}": ${feat.regex}`);
+                }
             }
         }
     }
@@ -700,4 +730,4 @@ export default async function(students, config, labDir, configDir = null) {
     console.log(`Created ${ANALYSIS_REPORT} for ${report.length} students.`);
 };
 
-export { stripComments, normalizeDirName, getAllFiles, getSubdirs, checkRepoHygiene, detectPartsPresent, applyCustomAnalyzer };
+export { stripComments, normalizeDirName, getAllFiles, getSubdirs, checkRepoHygiene, detectPartsPresent, applyCustomAnalyzer, countFeatures };

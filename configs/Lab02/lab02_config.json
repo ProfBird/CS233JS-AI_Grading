@@ -15,9 +15,8 @@
     "exclude": ["part1", "part_1", "node_modules", "dist"]
   },
   "analysis": {
-    "customAnalyzer": "lab02_analyzer.js",
     "features": [
-      { "id": "modules", "regex": "import\\s+.*from", "fileRegex": "\\.js$" },
+      { "id": "modules", "match": { "allOf": [ { "regex": "import\\s+.*from" }, { "regex": "export\\s+" } ] }, "fileRegex": "\\.m?js$" },
       { "id": "arrowFunctions", "regex": "=>", "fileRegex": "\\.js$" },
       { "id": "defaultParams", "regex": "\\([^\\)]*?[a-zA-Z0-9_$]+\\s*=[^=].*?\\)", "fileRegex": "\\.js$" },
       { "id": "destructuring", "regex": "(const|let|var)\\s*(\\{.*?\\}|\\[.*?\\])\\s*=", "fileRegex": "\\.js$" },

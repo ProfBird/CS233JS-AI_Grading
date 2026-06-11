@@ -150,7 +150,9 @@ function validateConfig(config, labName) {
         config.analysis.features.forEach((feat, i) => {
             const prefix = `analysis.features[${i}]`;
             if (!feat.id) errors.push(`${prefix}: missing "id"`);
-            if (!feat.regex) errors.push(`${prefix}: missing "regex"`);
+            // A feature needs either a single "regex" (counted) or a nested "match"
+            // tree of allOf/anyOf/regex (boolean) — see analyze_code.js evalMatchNode.
+            if (!feat.regex && !feat.match) errors.push(`${prefix}: needs "regex" or "match"`);
         });
     }
 

@@ -20,7 +20,6 @@
     ]
   },
   "analysis": {
-    "customAnalyzer": "lab05_analyzer.js",
     "features": [
       {
         "id": "canvas_context",
@@ -71,6 +70,25 @@
         "id": "canvas_styling",
         "regex": "(?:\\.fillStyle|\\.strokeStyle|\\.font)\\s*=",
         "fileRegex": "\\.js$"
+      },
+      {
+        "id": "c12_feature_ok",
+        "fileRegex": "\\.m?js$",
+        "match": { "anyOf": [
+          { "regex": "\\bscale\\(" },
+          { "allOf": [ { "regex": "\\blineTo\\(" }, { "regex": "mousedown|mousemove" } ] },
+          { "allOf": [ { "regex": "sticker", "flags": "i" }, { "regex": "mousedown|mousemove" } ] }
+        ] }
+      },
+      {
+        "id": "c13_feature_ok",
+        "fileRegex": "\\.m?js$",
+        "match": { "anyOf": [
+          { "regex": "this\\.(?:bgColor|backgroundColor|canvasBg)\\s*=" },
+          { "regex": "this\\.#?(?:textColor|fontColor|fillColor|textFill|fontFillColor|fontFill)\\s*=" },
+          { "regex": "ctx\\.fillStyle\\s*=\\s*this\\.#?\\w" },
+          { "regex": "this\\.#?(?:fontSelect|fontFamily|fontStyle|font)\\s*=" }
+        ] }
       }
     ]
   },

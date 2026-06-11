@@ -4,12 +4,15 @@
  * Smoke tests for the analysis module's pure utility functions.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import analyzeCode, { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer } from '../src/pipeline/analyze_code.js';
-import lab02Analyzer from '../src/analyzers/lab02_analyzer.js';
-import lab05Analyzer from '../src/analyzers/lab05_analyzer.js';
+import analyzeCode, { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer, countFeatures } from '../src/pipeline/analyze_code.js';
+
+// Helper: load a shipped config's analysis.features so tests exercise the real config.
+const loadFeatures = lab => JSON.parse(
+    readFileSync(join(import.meta.dirname, '..', 'configs', lab, `${lab.toLowerCase()}_config.json`), 'utf8')
+).analysis.features;
 
 const analyzeStudents = analyzeCode;
 
@@ -231,173 +234,127 @@ describe('hasDeveloperComments', () => {
     });
 });
 
-// ── lab02_analyzer ──────────────────────────────────────────────────────────
+// ── Lab02 'modules' feature (match rule) ─────────────────────────────────────
 
-describe('lab02_analyzer', () => {
+// The `modules` feature uses a nested match rule (import AND export) in
+// lab02_config.json, replacing the former lab02_analyzer. These were that analyzer's
+// characterization tests — now driving the SHIPPED config through countFeatures with
+// the same fixtures and expected values (a fidelity check on the migration).
+describe("Lab02 'modules' feature (match: import AND export)", () => {
     let tmpDir;
+    const features = loadFeatures('Lab02');
 
-    beforeEach(() => {
-        tmpDir = mkdtempSync(join(tmpdir(), 'lab02-test-'));
-    });
+    beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'lab02-test-')); });
+    afterEach(() => { rmSync(tmpDir, { recursive: true }); });
 
-    afterEach(() => {
-        rmSync(tmpDir, { recursive: true });
-    });
-
-    it('sets modules to 1 when both import and export are present', () => {
+    const modules = code => {
         const file = join(tmpDir, 'main.js');
-        writeFileSync(file, 'import foo from "./foo.js";\nexport default bar;');
-        const analysis = { features: { modules: 5 } }; // regex pre-count overridden
-        lab02Analyzer([file], analysis);
-        expect(analysis.features.modules).toBe(1);
-    });
+        writeFileSync(file, code);
+        return countFeatures([file], features).modules;
+    };
 
-    it('sets modules to 0 when export is missing', () => {
-        const file = join(tmpDir, 'main.js');
-        writeFileSync(file, 'import foo from "./foo.js";');
-        const analysis = { features: { modules: 3 } };
-        lab02Analyzer([file], analysis);
-        expect(analysis.features.modules).toBe(0);
+    it('1 when both import and export are present', () => {
+        expect(modules('import foo from "./foo.js";\nexport default bar;')).toBe(1);
     });
-
-    it('sets modules to 0 when import is missing', () => {
-        const file = join(tmpDir, 'main.js');
-        writeFileSync(file, 'export default function foo() {}');
-        const analysis = { features: { modules: 0 } };
-        lab02Analyzer([file], analysis);
-        expect(analysis.features.modules).toBe(0);
+    it('0 when export is missing', () => {
+        expect(modules('import foo from "./foo.js";')).toBe(0);
+    });
+    it('0 when import is missing', () => {
+        expect(modules('export default function foo() {}')).toBe(0);
     });
 });
 
-// ── lab05_analyzer ───────────────────────────────────────────────────────────
+// ── Lab05 c12 / c13 (nested match rules) ──────────────────────────────────────
 
-describe('lab05_analyzer', () => {
+// c12_feature_ok / c13_feature_ok use nested anyOf / OR-of-ANDs match rules in
+// lab05_config.json, replacing the former lab05_analyzer. Same fixtures and expected
+// values as that analyzer's characterization tests, now via the shipped config.
+describe('Lab05 c12/c13 features (nested match rules)', () => {
     let tmpDir;
+    const features = loadFeatures('Lab05');
 
-    beforeEach(() => {
-        tmpDir = mkdtempSync(join(tmpdir(), 'lab05-test-'));
+    beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'lab05-test-')); });
+    afterEach(() => { rmSync(tmpDir, { recursive: true }); });
+
+    // Write one or more { name, content } files and return the feature's value.
+    const feature = (files, id) => {
+        const paths = files.map(f => {
+            const p = join(tmpDir, f.name);
+            writeFileSync(p, f.content);
+            return p;
+        });
+        return countFeatures(paths, features)[id];
+    };
+    const c12 = (...files) => feature(files, 'c12_feature_ok');
+    const c13 = (...files) => feature(files, 'c13_feature_ok');
+
+    // c12: zoom OR (lineTo AND mouse) OR (sticker AND mouse)
+    it('c12=1: zoom via ctx.scale()', () => {
+        expect(c12({ name: 'canvas.js', content: 'ctx.scale(zoomLevel, zoomLevel);\nctx.drawImage(img, 0, 0);' })).toBe(1);
     });
-
-    afterEach(() => {
-        rmSync(tmpDir, { recursive: true });
-    });
-
-    function makeAnalysis() {
-        return { features: {} };
-    }
-
-    it('detects zoom via ctx.scale()', () => {
-        const file = join(tmpDir, 'canvas.js');
-        writeFileSync(file, 'ctx.scale(zoomLevel, zoomLevel);\nctx.drawImage(img, 0, 0);');
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c12_feature_ok).toBe(1);
-    });
-
-    it('detects emoji stickers with mousedown positioning', () => {
-        const file = join(tmpDir, 'canvas.js');
-        writeFileSync(file, [
+    it('c12=1: stickers with mousedown positioning', () => {
+        expect(c12({ name: 'canvas.js', content: [
             'this.stickers = [];',
             'canvas.addEventListener("mousedown", handleMouseDown);',
             'ctx.fillText(sticker.emoji, sticker.x, sticker.y);',
-        ].join('\n'));
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c12_feature_ok).toBe(1);
+        ].join('\n') })).toBe(1);
     });
-
-    it('detects freestyle drawing with lineTo and mousemove', () => {
-        const file = join(tmpDir, 'canvas.js');
-        writeFileSync(file, [
+    it('c12=1: freestyle drawing with lineTo and mousemove', () => {
+        expect(c12({ name: 'canvas.js', content: [
             'canvas.addEventListener("mousemove", draw);',
             'ctx.lineTo(event.offsetX, event.offsetY);',
             'ctx.stroke();',
-        ].join('\n'));
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c12_feature_ok).toBe(1);
+        ].join('\n') })).toBe(1);
+    });
+    it('c12=1: lineTo and mouse handler split across two files (codebase-wide AND)', () => {
+        // The nested allOf combines per-pattern presence computed across ALL files,
+        // so lineTo in one file + a mouse handler in another still matches.
+        expect(c12(
+            { name: 'draw.js', content: 'ctx.lineTo(event.offsetX, event.offsetY);' },
+            { name: 'events.js', content: 'canvas.addEventListener("mousemove", draw);' },
+        )).toBe(1);
+    });
+    it('c12=0: sticker keyword without mouse interaction', () => {
+        expect(c12({ name: 'canvas.js', content: 'this.stickerText = ""; // vestigial, no mouse handler' })).toBe(0);
+    });
+    it('c12=0: lineTo without mouse interaction', () => {
+        expect(c12({ name: 'canvas.js', content: 'ctx.lineTo(10, 10); // single path, no mouse handler' })).toBe(0);
+    });
+    it('c12=0: only background drawImage', () => {
+        expect(c12({ name: 'canvas.js', content: 'ctx.drawImage(this.image, 0, 0, width, height);' })).toBe(0);
+    });
+    it('c12=0: a feature pattern that appears only in a comment is not counted', () => {
+        // Deliberate, documented difference from the old raw-content analyzer: countFeatures
+        // strips comments from .js, so commented-out code never satisfies a match rule.
+        expect(c12({ name: 'canvas.js', content: '// ctx.scale(2, 2) used to be here\nconst x = 1;' })).toBe(0);
     });
 
-    it('rejects sticker keyword without mouse interaction', () => {
-        const file = join(tmpDir, 'canvas.js');
-        writeFileSync(file, 'this.stickerText = ""; // vestigial, no mouse handler');
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c12_feature_ok).toBe(0);
+    // c13: user-controlled bg color OR font color (incl. fillStyle fallback) OR font style
+    it('c13=1: Group A background color via bgColor model property', () => {
+        expect(c13({ name: 'model.js', content: 'this.bgColor = "#ffffff";\nctx.fillStyle = this.bgColor;' })).toBe(1);
     });
-
-    it('rejects lineTo without mouse interaction', () => {
-        const file = join(tmpDir, 'canvas.js');
-        writeFileSync(file, 'ctx.lineTo(10, 10); // single path, no mouse handler');
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c12_feature_ok).toBe(0);
+    it('c13=1: Group B font color via textColor model property', () => {
+        expect(c13({ name: 'model.js', content: 'this.textColor = "#000000";\nctx.fillStyle = this.textColor;' })).toBe(1);
     });
-
-    it('rejects code with only background drawImage', () => {
-        const file = join(tmpDir, 'canvas.js');
-        writeFileSync(file, 'ctx.drawImage(this.image, 0, 0, width, height);');
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c12_feature_ok).toBe(0);
+    it('c13=1: Group C font style via fontSelect model property', () => {
+        expect(c13({ name: 'model.js', content: 'this.fontSelect = "sans-serif";\nctx.font = `bold 40px ${this.fontSelect}`;' })).toBe(1);
     });
-
-    // c13: background / font color / font style (one of three based on group)
-
-    it('c13: detects Group A background color via bgColor model property', () => {
-        const file = join(tmpDir, 'model.js');
-        writeFileSync(file, 'this.bgColor = "#ffffff";\nctx.fillStyle = this.bgColor;');
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c13_feature_ok).toBe(1);
-    });
-
-    it('c13: detects Group B font color via textColor model property', () => {
-        const file = join(tmpDir, 'model.js');
-        writeFileSync(file, 'this.textColor = "#000000";\nctx.fillStyle = this.textColor;');
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c13_feature_ok).toBe(1);
-    });
-
-    it('c13: detects Group C font style via fontSelect model property', () => {
-        const file = join(tmpDir, 'model.js');
-        writeFileSync(file, 'this.fontSelect = "sans-serif";\nctx.font = `bold 40px ${this.fontSelect}`;');
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c13_feature_ok).toBe(1);
-    });
-
-    it('c13: detects font color via private class field (this.#fontFillColor)', () => {
-        const file = join(tmpDir, 'TextSettings.mjs');
-        writeFileSync(file, [
+    it('c13=1: font color via private class field (#fontFillColor) in a .mjs file', () => {
+        expect(c13({ name: 'TextSettings.mjs', content: [
             '#fontFillColor',
             'constructor() { this.#fontFillColor = "White"; }',
             'get fontFillColor() { return this.#fontFillColor; }',
             'set fontFillColor(v) { this.#fontFillColor = v; }',
-        ].join('\n'));
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c13_feature_ok).toBe(1);
+        ].join('\n') })).toBe(1);
     });
-
-    it('c13: detects font color via dynamic fillStyle from nested model property', () => {
-        const file = join(tmpDir, 'canvasModel.js');
-        writeFileSync(file, 'ctx.fillStyle = this.#textSettings.fontFillColor;');
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c13_feature_ok).toBe(1);
+    it('c13=1: dynamic fillStyle from nested model property (fallback branch)', () => {
+        expect(c13({ name: 'canvasModel.js', content: 'ctx.fillStyle = this.#textSettings.fontFillColor;' })).toBe(1);
     });
-
-    it('c13: rejects code with only hardcoded canvas styling (no model property)', () => {
-        const file = join(tmpDir, 'model.js');
-        writeFileSync(file, [
+    it('c13=0: only hardcoded canvas styling (no model property)', () => {
+        expect(c13({ name: 'model.js', content: [
             'ctx.fillStyle = "white";',
             'ctx.strokeStyle = "black";',
             'ctx.font = "bold 40px Impact, sans-serif";',
-        ].join('\n'));
-        const analysis = makeAnalysis();
-        lab05Analyzer([file], analysis);
-        expect(analysis.features.c13_feature_ok).toBe(0);
+        ].join('\n') })).toBe(0);
     });
 });

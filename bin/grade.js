@@ -6,12 +6,12 @@
  * Each pipeline phase attaches results directly to student objects.
  *
  * Usage:
- *   node run_all.js                           -> interactive menu
- *   node run_all.js Lab03                     -> first-time grade (skips existing extractions)
- *   node run_all.js Lab03 --regrade           -> re-run analysis/lint/runtime/generation (keeps cloned code)
- *   node run_all.js Lab03 --reclone           -> delete extracted code, re-clone/unzip, and re-grade
- *   node run_all.js Lab03 --regrade --reclone -> same as --reclone (reclone implies regrade)
- *   node run_all.js --help                    -> show help
+ *   node bin/grade.js                           -> interactive menu
+ *   node bin/grade.js Lab03                     -> first-time grade (skips existing extractions)
+ *   node bin/grade.js Lab03 --regrade           -> re-run analysis/lint/runtime/generation (keeps cloned code)
+ *   node bin/grade.js Lab03 --reclone           -> delete extracted code, re-clone/unzip, and re-grade
+ *   node bin/grade.js Lab03 --regrade --reclone -> same as --reclone (reclone implies regrade)
+ *   node bin/grade.js --help                    -> show help
  */
 
 import fs from 'fs';
@@ -44,7 +44,7 @@ function showHelp() {
 CS233JS AI Grader v1.0
 
 USAGE
-  node run_all.js [labName] [stepName] [options]
+  node bin/grade.js [labName] [stepName] [options]
 
   If no arguments are given, an interactive menu is shown.
   For multi-step labs, stepName selects which submission set to grade.
@@ -76,13 +76,13 @@ OPTIONS
   --help, -h       Show this help message.
 
 EXAMPLES
-  node run_all.js                              Interactive mode
-  node run_all.js Lab03                        First-time grading
-  node run_all.js Lab03 --regrade              Re-grade without re-cloning
-  node run_all.js Lab03 --reclone              Fresh clone + full grade
-  node run_all.js Lab03 --ai-comments          Grade with AI summaries (auto model)
-  node run_all.js Lab03 --ai-model=qwen3-coder Grade with a specific model
-  node run_all.js TermProject ApiDoc           Grade one step of a multi-step lab
+  node bin/grade.js                              Interactive mode
+  node bin/grade.js Lab03                        First-time grading
+  node bin/grade.js Lab03 --regrade              Re-grade without re-cloning
+  node bin/grade.js Lab03 --reclone              Fresh clone + full grade
+  node bin/grade.js Lab03 --ai-comments          Grade with AI summaries (auto model)
+  node bin/grade.js Lab03 --ai-model=qwen3-coder Grade with a specific model
+  node bin/grade.js TermProject ApiDoc           Grade one step of a multi-step lab
 `);
 }
 
@@ -242,7 +242,7 @@ async function main() {
     const hasAnyFlag = hasRegradeFlag || hasRecloneFlag;
 
     let labName = positional[0];
-    let stepName = null;     // set for multi-step labs (e.g. node run_all.js TermProject ApiDoc)
+    let stepName = null;     // set for multi-step labs (e.g. node bin/grade.js TermProject ApiDoc)
     let reclone = hasRecloneFlag;
     let regrade = hasRegradeFlag || hasRecloneFlag;
     let config, labDir, labConfigDir, artifactsDir, submissionsDir;
@@ -347,7 +347,7 @@ async function main() {
         {
             const existingSteps = getExistingSteps(labName);
             if (existingSteps.length > 0) {
-                const stepArg = positional[1]; // e.g. node run_all.js TermProject ApiDoc
+                const stepArg = positional[1]; // e.g. node bin/grade.js TermProject ApiDoc
                 if (stepArg) {
                     const match = existingSteps.find(s => s.toLowerCase() === stepArg.toLowerCase());
                     if (!match) {
@@ -488,6 +488,14 @@ async function main() {
                     }
                 }
                 console.log(`  Using: ${labDir}\n`);
+                // If this is a multi-step lab and the chosen folder doesn't match the step
+                // name, the only reason we had to ask is the folder naming. Point the fix out.
+                if (stepName) {
+                    const chosenName = path.basename(labDir);
+                    if (chosenName.toLowerCase() !== stepName.toLowerCase()) {
+                        console.log(`  Tip: rename "${chosenName}" to "${stepName}" under your lab root to skip this prompt next time.\n`);
+                    }
+                }
             }
         }
 

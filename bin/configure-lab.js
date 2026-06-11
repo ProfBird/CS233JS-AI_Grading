@@ -437,6 +437,21 @@ async function main() {
             tui.print(`  Created: ${labDir}`);
         }
 
+        // For multi-step labs, the Moodle submissions for this step must live in a labRoot
+        // folder named exactly like the step — otherwise grade.js can't match it and falls
+        // back to a manual group picker. Build a reminder to include in the final summary.
+        let stepHint = [];
+        if (stepName) {
+            let labRoot = '';
+            try { labRoot = JSON.parse(fs.readFileSync(LOCAL_CONFIG_PATH, 'utf8')).labRoot || ''; } catch (_) { /* optional */ }
+            const where = labRoot ? path.join(labRoot, labName, stepName) : `<labRoot>/${labName}/${stepName}`;
+            stepHint = [
+                `  Submissions: download this step's Moodle files into a folder named "${stepName}":`,
+                `    ${where}`,
+                `    (the labRoot folder name must match the step name, or the grader will make you pick it manually)`,
+            ];
+        }
+
         // configPath is needed both for the normal path and the extract-only early exit.
         // writeLab uses path.basename(labDir) for the filename, so we match that here.
         const configPath = path.join(labDir, `${path.basename(labDir).toLowerCase()}_config.json`);
@@ -495,7 +510,8 @@ async function main() {
                         `\n=== Done! ===`,
                         `  Extract-only config written — repos will be cloned, no grading.`,
                         `  Config: ${configPath}`,
-                        `  Run: node run_all.js ${labName}${stepName ? ' ' + stepName : ''}`,
+                        ...stepHint,
+                        `  Run: node bin/grade.js ${labName}${stepName ? ' ' + stepName : ''}`,
                     ];
                     return;   // skip rubric read, draft, review, and settings steps
                 }
@@ -593,6 +609,7 @@ async function main() {
             `\n=== Done! ===`,
             `  ${mappings.length} mappings configured${featureNote}.`,
             `  Config: ${configPath}`,
+            ...stepHint,
             `  To verify: node bin/rubric-to-md.js ${JSON.stringify(rubricPath)}`,
         ];
 

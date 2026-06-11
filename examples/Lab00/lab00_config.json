@@ -1,0 +1,16 @@
+{
+  "rubricName": "CS233JS_Lab00_Rubric.xlsx",
+  "runtimeCheck": "build",
+  "titleCell": "A1",
+  "titleText": "Lab 0: Example Lab",
+  "analysis": {
+    "customAnalyzer": "lab00_analyzer.js",
+    "features": [
+      { "id": "usesConst", "regex": "\\bconst\\b", "fileRegex": "\\.js$" }
+    ]
+  },
+  "mappings": [
+    { "cell": "C5", "commentCell": "E5", "type": "feature", "featureId": "usesConst", "maxScore": 5 },
+    { "cell": "C6", "commentCell": "E6", "type": "lint", "maxScore": 5 }
+  ]
+}

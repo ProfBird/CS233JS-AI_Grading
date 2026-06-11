@@ -134,12 +134,13 @@ export default async function(students, config, labDir) {
     // For multi-step labs labRoot is <codeRoot>/{AssignmentName}/{StepName}; parentName = AssignmentName.
     const parentName = path.basename(path.dirname(labRoot));
 
-    // Grader uses config from inside AI_Grading/ so that node_modules (globals, etc.) resolve correctly.
-    // Priority: configs/{Parent}/{Step}/ > configs/{Lab}/ > configs/ (default)
-    const configsDir = path.join(import.meta.dirname, '..', 'configs');
+    // Grader uses a config from inside this repo so that node_modules (globals, etc.) resolve correctly.
+    // Priority: per-lab override in configs/{Parent}/{Step}/ or configs/{Lab}/ > the shipped student ruleset.
+    const repoRoot = path.join(import.meta.dirname, '..', '..');
+    const configsDir = path.join(repoRoot, 'configs');
     const stepSpecific  = path.join(configsDir, parentName, labName, 'eslint.config.mjs');
     const labSpecific   = path.join(configsDir, labName, 'eslint.config.mjs');
-    const defaultConfig = path.join(configsDir, 'eslint.config.mjs');
+    const defaultConfig = path.join(repoRoot, 'eslint', 'student.eslint.config.mjs');
     const eslintConfigFile = fs.existsSync(stepSpecific)  ? stepSpecific
                            : fs.existsSync(labSpecific)   ? labSpecific
                            : fs.existsSync(defaultConfig) ? defaultConfig

@@ -13,7 +13,7 @@
 ```mermaid
 graph TD
     subgraph "Entry Points"
-        run_all[bin/grade.js]
+        grade[bin/grade.js]
         rubric_to_md[bin/rubric-to-md.js]
         configure_lab[bin/configure-lab.js]
     end
@@ -54,19 +54,19 @@ graph TD
     end
 
     %% Entry → Pipeline
-    run_all --> extract
-    run_all --> runtime
-    run_all --> code_review
-    run_all --> analyze
-    run_all --> lint
-    run_all --> val_html
-    run_all --> val_css
-    run_all --> check_names
-    run_all --> grades
+    grade --> extract
+    grade --> runtime
+    grade --> code_review
+    grade --> analyze
+    grade --> lint
+    grade --> val_html
+    grade --> val_css
+    grade --> check_names
+    grade --> grades
 
     %% Config loading
-    run_all -.-> local_config
-    run_all -.-> lab_configs
+    grade -.-> local_config
+    grade -.-> lab_configs
 
     %% Module internal deps
     grades --> ollama
@@ -98,7 +98,7 @@ graph TD
     val_css --> grades
     check_names --> grades
 
-    style run_all fill:#4a90d9,color:#fff
+    style grade fill:#4a90d9,color:#fff
     style rubric_to_md fill:#4a90d9,color:#fff
     style configure_lab fill:#4a90d9,color:#fff
     style extract fill:#50b86c,color:#fff
@@ -119,36 +119,36 @@ graph TD
 ```mermaid
 sequenceDiagram
     participant User
-    participant run_all as bin/grade.js
+    participant grade as bin/grade.js
     participant lc as configs/local-config.json
     participant config as configs/{AssignmentName}/{assignmentname}_config.json
 
-    User->>run_all: node bin/grade.js [AssignmentName] [flags]
+    User->>grade: node bin/grade.js [AssignmentName] [flags]
 
-    Note over run_all: === Startup ===
-    run_all->>lc: read labRoot + codeRoot
+    Note over grade: === Startup ===
+    grade->>lc: read labRoot + codeRoot
     alt labRoot or codeRoot missing
-        User->>run_all: enter path(s) interactively
-        run_all->>lc: save for next run
+        User->>grade: enter path(s) interactively
+        grade->>lc: save for next run
     end
 
-    Note over run_all: === Assignment Selection ===
-    run_all->>run_all: scan configs/ subdirs for matching {assignmentname}_config.json
+    Note over grade: === Assignment Selection ===
+    grade->>grade: scan configs/ subdirs for matching {assignmentname}_config.json
 
     alt no assignment name arg
-        User->>run_all: select assignment from menu
+        User->>grade: select assignment from menu
     end
 
-    run_all->>config: read lab config
-    run_all->>run_all: repoClonePath = codeRoot/labName
+    grade->>config: read lab config
+    grade->>grade: repoClonePath = codeRoot/labName
 
     alt labDir has no direct Moodle submissions
-        run_all->>User: prompt to pick submission group (e.g. Beta/Production)
+        grade->>User: prompt to pick submission group (e.g. Beta/Production)
     end
 
     alt --reclone flag
-        run_all->>run_all: delete all extracted_code/ and repo/ dirs
-        run_all->>run_all: delete repoClonePath (codeRoot/labName) tree
+        grade->>grade: delete all extracted_code/ and repo/ dirs
+        grade->>grade: delete repoClonePath (codeRoot/labName) tree
     end
 ```
 
@@ -156,12 +156,12 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant run_all as bin/grade.js
+    participant grade as bin/grade.js
     participant extract as extract_code.js
     participant runtime as runtime_check.js
 
-    Note over run_all: === Phase 1: Code Acquisition ===
-    run_all->>extract: extractCode(labDir, submissionsDir)
+    Note over grade: === Phase 1: Code Acquisition ===
+    grade->>extract: extractCode(labDir, submissionsDir)
     extract->>extract: getStudents() — scan Moodle submission dirs
     par for each student
         extract->>extract: extractUrls() — read onlinetext.html
@@ -171,10 +171,10 @@ sequenceDiagram
             extract->>extract: git clone --depth 1 to submissionsDir/Student/repo/
         end
     end
-    extract-->>run_all: return students[] array
+    extract-->>grade: return students[] array
 
-    Note over run_all: === Phase 2: Runtime Check ===
-    run_all->>runtime: runtimeCheck(students, config, artifactsDir)
+    Note over grade: === Phase 2: Runtime Check ===
+    grade->>runtime: runtimeCheck(students, config, artifactsDir)
     alt config.runtimeCheck == "build"
         runtime->>runtime: find package.json dirs
         runtime->>runtime: delete node_modules/ (ensures clean install)
@@ -190,16 +190,16 @@ sequenceDiagram
     end
     alt scripts_check mappings present
         runtime->>runtime: run npm run dev/build/preview for each student
-        runtime-->>run_all: attaches student.scriptsCheck
+        runtime-->>grade: attaches student.scriptsCheck
     end
-    runtime-->>run_all: (attaches to student.runtimeCheck)
+    runtime-->>grade: (attaches to student.runtimeCheck)
 ```
 
 ## Pipeline Phases 3–6: Analysis, Validation & Grading
 
 ```mermaid
 sequenceDiagram
-    participant run_all as bin/grade.js
+    participant grade as bin/grade.js
     participant code_review as read_code_review.js
     participant analyze as analyze_code.js
     participant lint as lint_code.js
@@ -208,15 +208,15 @@ sequenceDiagram
     participant check_names as check_names.js
     participant grades as generate_grades.js
 
-    Note over run_all: === Phase 3: Code Review Reading ===
-    run_all->>code_review: readCodeReview(students, config)
+    Note over grade: === Phase 3: Code Review Reading ===
+    grade->>code_review: readCodeReview(students, config)
     code_review->>code_review: find .docx review forms in student dirs
     code_review->>code_review: mammoth → HTML table parse
     code_review->>code_review: extract betaScore, prodScore per item, group letter
-    code_review-->>run_all: (attaches student.codeReview)
+    code_review-->>grade: (attaches student.codeReview)
 
-    Note over run_all: === Phase 4: Analysis ===
-    run_all->>analyze: analyzeCode(students, config, artifactsDir, labConfigDir)
+    Note over grade: === Phase 4: Analysis ===
+    grade->>analyze: analyzeCode(students, config, artifactsDir, labConfigDir)
     analyze->>analyze: getAllFiles() — recursive directory walk
     analyze->>analyze: countFeatures() — regex matching per feature
     alt config has parts[]
@@ -226,37 +226,37 @@ sequenceDiagram
     analyze->>analyze: check for developer comments, code review docs
     analyze->>analyze: detectPartsPresent() — iterate config.parts
     analyze->>analyze: write analysis_report.json
-    analyze-->>run_all: (attaches to student.analysis)
+    analyze-->>grade: (attaches to student.analysis)
 
-    Note over run_all: === Phase 5: Linting ===
-    run_all->>lint: lintCode(students, config, artifactsDir)
+    Note over grade: === Phase 5: Linting ===
+    grade->>lint: lintCode(students, config, artifactsDir)
     lint->>lint: getAllJsFiles() — recursive .js file collection
     lint->>lint: ESLint.lintFiles() against ~/.eslint/eslint.config.mjs
     lint->>lint: write lint_report.json
-    lint-->>run_all: (attaches to student.lint)
+    lint-->>grade: (attaches to student.lint)
 
-    Note over run_all: === Phase 5b: HTML Validation ===
-    run_all->>val_html: validateHtml(students, config, artifactsDir)
+    Note over grade: === Phase 5b: HTML Validation ===
+    grade->>val_html: validateHtml(students, config, artifactsDir)
     val_html->>val_html: getAllFilesByExt(..., ['.html', '.htm'], exclusions)
     val_html->>val_html: html-validate per file (offline, pure JS)
     val_html->>val_html: write html_validation_report.json
-    val_html-->>run_all: (attaches student.htmlValidation)
+    val_html-->>grade: (attaches student.htmlValidation)
 
-    Note over run_all: === Phase 5c: CSS Validation ===
-    run_all->>val_css: validateCss(students, config, artifactsDir)
+    Note over grade: === Phase 5c: CSS Validation ===
+    grade->>val_css: validateCss(students, config, artifactsDir)
     val_css->>val_css: getAllFilesByExt(..., '.css', exclusions)
     val_css->>val_css: csstree-validator per file (offline, pure JS)
     val_css->>val_css: write css_validation_report.json
-    val_css-->>run_all: (attaches student.cssValidation)
+    val_css-->>grade: (attaches student.cssValidation)
 
-    Note over run_all: === Phase 5d: File/Folder Name Check ===
-    run_all->>check_names: checkNames(students, config, artifactsDir)
+    Note over grade: === Phase 5d: File/Folder Name Check ===
+    grade->>check_names: checkNames(students, config, artifactsDir)
     check_names->>check_names: walk submission dir, test each name against [A-Za-z0-9._-]
     check_names->>check_names: write name_check_report.json
-    check_names-->>run_all: (attaches student.nameCheck)
+    check_names-->>grade: (attaches student.nameCheck)
 
-    Note over run_all: === Phase 6: Grade Generation ===
-    run_all->>grades: generateGrades(students, config, artifactsDir, opts)
+    Note over grade: === Phase 6: Grade Generation ===
+    grade->>grades: generateGrades(students, config, artifactsDir, opts)
     grades->>xlsx: read rubric spreadsheet
     par for each student
         grades->>grades: compute scores per mapping type
@@ -271,11 +271,11 @@ sequenceDiagram
         end
         grades->>grades: write StudentName_Grade.xlsx/.xlsm
     end
-    grades-->>run_all: return { successful, errors }
+    grades-->>grade: return { successful, errors }
 
-    Note over run_all: === Log ===
-    run_all->>run_all: write grading_log.txt to artifactsDir
-    run_all-->>User: All Done!
+    Note over grade: === Log ===
+    grade->>grade: write grading_log.txt to artifactsDir
+    grade-->>User: All Done!
 ```
 
 ---

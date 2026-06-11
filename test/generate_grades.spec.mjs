@@ -121,6 +121,30 @@ describe('name_check handler', () => {
     });
 });
 
+// ── manual handler: ambiguous-but-filled prod cell must not auto-score 0 ──────
+describe('manual handler — prod cell filled but not affirmative', () => {
+    const handler = getHandler('manual');
+    const itemStudent = item => ({ codeReview: { found: true, items: [item] } });
+    const map = { type: 'manual', maxScore: 5, msg: 'CHECK', _reviewIndex: 0 };
+
+    it('falls through to the beta score (not 0) when prod is filled with "-"/"NA" (affirmative null)', () => {
+        const r = handler(map, itemStudent({ betaScore: 4, prodScore: null, prodFilled: true, prodAffirmative: null }));
+        expect(r.score).toBe(4);
+        expect(r.comment).toContain('Beta score: 4');
+    });
+
+    it('flags for manual review when prod is ambiguous and there is no beta score', () => {
+        const r = handler(map, itemStudent({ betaScore: null, prodScore: null, prodFilled: true, prodAffirmative: null }));
+        expect(r.score).toBe(5);          // maxScore fallback (NEEDS MANUAL CHECK path)
+        expect(r.comment).toBe('CHECK');
+    });
+
+    it('still auto-scores an affirmative prod cell (regression guard for the gate)', () => {
+        expect(handler(map, itemStudent({ betaScore: null, prodScore: null, prodFilled: true, prodAffirmative: true })).score).toBe(5);
+        expect(handler(map, itemStudent({ betaScore: null, prodScore: null, prodFilled: true, prodAffirmative: false })).score).toBe(0);
+    });
+});
+
 // ── stock comments wired into computeResults ─────────────────────────────────
 describe('computeResults — stock comment override', () => {
     const sc = { full: 'Good', partial: 'Errors', zero: 'Missing' };

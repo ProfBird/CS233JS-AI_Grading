@@ -81,12 +81,17 @@ function parseGroupFromTable(html) {
  *   - affirmative: true for fraction/Y/Yes, false for N/No, null if empty
  */
 function parseCellValue(text) {
-    if (!text || !text.trim()) return { score: null, filled: false, affirmative: null };
-    const fractionMatch = text.match(/(\d+)\s*\/\s*\d+/);
+    const trimmed = (text || '').trim();
+    if (!trimmed) return { score: null, filled: false, affirmative: null };
+    const fractionMatch = trimmed.match(/(\d+)\s*\/\s*\d+/);
     if (fractionMatch) return { score: parseInt(fractionMatch[1], 10), filled: true, affirmative: true };
-    if (/^(y|yes)$/i.test(text.trim())) return { score: null, filled: true, affirmative: true };
-    if (/^(n|no)$/i.test(text.trim())) return { score: null, filled: true, affirmative: false };
-    return { score: null, filled: false, affirmative: null };
+    if (/^(y|yes)$/i.test(trimmed)) return { score: null, filled: true, affirmative: true };
+    if (/^(n|no)$/i.test(trimmed)) return { score: null, filled: true, affirmative: false };
+    // Any other non-empty content (e.g. "-", "NA", a note) counts as the student having
+    // addressed the cell — so it marks the production column as filled — but it is NOT
+    // auto-interpretable as a score or yes/no (affirmative: null). The manual handler must
+    // only auto-score when affirmative is known; otherwise such a cell falls to manual review.
+    return { score: null, filled: true, affirmative: null };
 }
 
 const parseScoreFromCell = text => parseCellValue(text).score;
@@ -120,15 +125,8 @@ function findScoresTable(html) {
     return bestTable;
 }
 
-/**
- * Parse the HTML scores table to extract per-item beta and production scores.
- * Returns null if no suitable table is found.
- */
-function parseTableScores(html) {
-    const tableHtml = findScoresTable(html);
-    if (!tableHtml) return null;
-
-    // Extract rows
+// Extract a table's rows as arrays of cell text (handles <td> and <th>, strips inner tags).
+function extractRows(tableHtml) {
     const rows = [];
     const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let rowMatch;
@@ -137,12 +135,47 @@ function parseTableScores(html) {
         const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
         let cellMatch;
         while ((cellMatch = cellRe.exec(rowMatch[1])) !== null) {
-            const text = cellMatch[1].replace(/<[^>]+>/g, '').trim();
-            cells.push(text);
+            cells.push(cellMatch[1].replace(/<[^>]+>/g, '').trim());
         }
         if (cells.length > 0) rows.push(cells);
     }
+    return rows;
+}
 
+// True if any table OTHER than `primaryHtml` has an explicit "prod" header column with at
+// least one filled cell. Requiring a Prod header skips non-score tables (e.g. the metadata
+// table, whose date cells like "6/5/2026" would otherwise look like fractions). This lets
+// productionCompleted reflect a prod-filled second score table that isn't the primary one.
+function anyOtherProdTableFilled(html, primaryHtml) {
+    const tableRe = /<table[^>]*>[\s\S]*?<\/table>/gi;
+    let tableMatch;
+    while ((tableMatch = tableRe.exec(html)) !== null) {
+        if (tableMatch[0] === primaryHtml) continue;
+        const rows = extractRows(tableMatch[0]);
+        if (rows.length < 2) continue;
+        const prodCol = rows[0].findIndex(h => /prod/i.test(h));
+        if (prodCol < 0) continue;
+        for (let r = 1; r < rows.length; r++) {
+            if (parseCellValue(rows[r][prodCol] || '').filled) return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Parse the HTML scores table to extract per-item beta and production scores.
+ * Returns null if no suitable table is found.
+ *
+ * `items` come from the single primary (densest) score table, preserving the positional
+ * alignment that generate_grades' `manual` mappings rely on (item[_reviewIndex]).
+ * `productionCompleted`, however, is OR'd across ALL prod-headed score tables, so a
+ * prod-filled second table is not missed when the primary table's prod column is empty.
+ */
+function parseTableScores(html) {
+    const tableHtml = findScoresTable(html);
+    if (!tableHtml) return null;
+
+    const rows = extractRows(tableHtml);
     if (rows.length < 2) return null;
 
     // Identify beta and production columns from header
@@ -186,7 +219,7 @@ function parseTableScores(html) {
 
     return {
         items,
-        productionCompleted: anyProdFilled
+        productionCompleted: anyProdFilled || anyOtherProdTableFilled(html, tableHtml)
     };
 }
 

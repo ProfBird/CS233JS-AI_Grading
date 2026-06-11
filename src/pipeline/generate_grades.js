@@ -411,8 +411,10 @@ registerHandler('manual', (map, student) => {
             const comment = (map.msg || 'NEEDS MANUAL CHECK') + ` [Production score: ${item.prodScore}]`;
             return { score, comment };
         }
-        // Production cell filled with Y/N/Yes/No
-        if (item.prodFilled) {
+        // Production cell filled with an interpretable Y/N/Yes/No. A cell filled with
+        // something ambiguous (e.g. "-", "NA", a note) has affirmative === null — don't
+        // auto-score it 0; fall through to the beta score / manual-review path below.
+        if (item.prodFilled && item.prodAffirmative !== null) {
             const score = item.prodAffirmative ? map.maxScore : 0;
             const label = item.prodAffirmative ? 'Production: Yes' : 'Production: No';
             const comment = (map.msg || 'NEEDS MANUAL CHECK') + ` [${label}]`;

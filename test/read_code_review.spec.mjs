@@ -28,6 +28,12 @@ describe('parseCellValue', () => {
     it('treats blank as not filled', () => {
         expect(parseCellValue('')).toEqual({ score: null, filled: false, affirmative: null });
     });
+    it('treats "-" / "NA" as filled but not affirmative (addressed, not interpretable)', () => {
+        // Real data: prod cells are sometimes marked "-" or "NA" (not applicable). These
+        // count as the student having addressed the cell, but aren't a yes/no/score.
+        expect(parseCellValue('-')).toEqual({ score: null, filled: true, affirmative: null });
+        expect(parseCellValue('NA')).toEqual({ score: null, filled: true, affirmative: null });
+    });
 });
 
 describe('parseTableScores — <th> cells (the mammoth reality)', () => {
@@ -61,6 +67,46 @@ describe('parseTableScores — <th> cells (the mammoth reality)', () => {
             '<tr><th>Q1</th><th>y</th><th>y</th></tr>' +
             '</thead></table>';
         expect(parseTableScores(html).productionCompleted).toBe(true);
+    });
+
+    it('counts "-"/"NA" prod cells as a completed production column', () => {
+        const html = thTable(
+            thRow('Criteria', 'Beta', 'Prod.'),
+            thRow('q1', 'y', '-'),
+            thRow('q2', 'n', 'NA'),
+        );
+        expect(parseTableScores(html).productionCompleted).toBe(true);
+    });
+});
+
+describe('parseTableScores — productionCompleted across multiple score tables', () => {
+    it('detects a filled prod column in a SECOND table even when the primary table prod is empty', () => {
+        // Primary (densest) table: 5 beta y/n, prod all empty. Second table: prod filled.
+        const primary = thTable(
+            thRow('Criteria', 'Beta', 'Prod.'),
+            ...['q1', 'q2', 'q3', 'q4', 'q5'].map(q => `<tr>${th(q)}${th('y')}<th></th></tr>`),
+        );
+        const second = thTable(
+            thRow('Programming Style', 'Beta', 'Prod.'),
+            thRow('s1', 'y', 'y'),
+            thRow('s2', 'n', 'n'),
+        );
+        const result = parseTableScores(primary + second);
+        expect(result.productionCompleted).toBe(true);
+        // items stay sourced from the PRIMARY table only — preserves _reviewIndex alignment.
+        expect(result.items).toHaveLength(5);
+        expect(result.items.every(i => !i.prodFilled)).toBe(true);
+    });
+
+    it('does not treat a metadata table date (6/5/2026) as a filled prod column', () => {
+        const meta = '<table><tr><th>Date</th><th>6/5/2026</th></tr></table>';
+        const scores = thTable(
+            thRow('Criteria', 'Beta', 'Prod.'),
+            `<tr>${th('q1')}${th('y')}<th></th></tr>`,
+            `<tr>${th('q2')}${th('y')}<th></th></tr>`,
+        );
+        const result = parseTableScores(meta + scores);
+        expect(result.productionCompleted).toBe(false);  // prod genuinely empty; the date is ignored
     });
 });
 

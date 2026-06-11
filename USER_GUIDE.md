@@ -48,7 +48,7 @@ The wizard will:
 4. Let you **review and edit** the drafted checks before saving: a navigable table where you can change a row's check type, adjust its fields (max score, etc.), or mark a row "graded by hand."
 5. Prompt for the lab title, runtime-check mode (`browser` / `build` / `both`), and the optional summary / grader / title cells, then write `{assignmentname}_config.json`.
 
-> **The wizard does not configure `feature` / `match` checks.** Those need a code pattern (a regex, or a nested AND/OR rule) that you supply, so the wizard leaves them out — add or edit them directly in the generated `{assignmentname}_config.json`. See [Available checks](#available-checks-rubric-mapping-types). (Custom JS analyzers are **deprecated**; use a `match` check instead.)
+> **`feature` / `match` checks in the wizard:** the AI/heuristic draft won't auto-pick `feature` (a code pattern can't be guessed from a rubric label), but you can choose `feature` for any row during the review/edit step. The wizard then guides you through the detection rule — a **single regex**, or a simple **all-of** (AND) / **any-of** (OR) set of patterns — and writes both the rubric mapping and its `analysis.features[]` definition for you. (Nested OR-of-ANDs rules aren't generated — hand-edit the config for those; custom JS analyzers are **deprecated**, use a `match` check instead.) See [Available checks](#available-checks-rubric-mapping-types).
 
 ### Available checks (rubric mapping types)
 

@@ -11,7 +11,7 @@ import {
     normalizeAssignmentName,
     findSpreadsheets,
     getExistingAssignments, getExistingSteps,
-    assembleConfig, writeLab,
+    assembleConfig, mergeFeatureDefs, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
 } from '../src/lib/lab_config.js';
 
@@ -561,9 +561,14 @@ async function main() {
         const titleCell    = await tui.ask('Title cell (e.g. A1, or blank)',   ex.titleCell   || '');
 
         // 9. Build and write
+        // Feature mappings carry a `_featureDef` (their analysis.features[] definition);
+        // collect those, then strip the wizard-only fields from the mappings themselves.
+        const featureDefs = draft
+            .filter(e => !e._skip && e._featureDef)
+            .map(e => e._featureDef);
         const mappings = draft
             .filter(e => !e._skip)
-            .map(({ _label, _skip, ...rest }) => rest);
+            .map(({ _label, _skip, _featureDef, ...rest }) => rest);
 
         // assembleConfig deep-clones existingConfig and overwrites only the keys the
         // wizard owns, so a re-run preserves customAnalyzer, validate, nameCheck,
@@ -576,15 +581,19 @@ async function main() {
             mappings,
             optional: { titleCell, summaryCell, graderCell },
         });
+        // Merge any feature definitions the user built (creates analysis.features if needed,
+        // replaces same-id entries, preserves the rest).
+        mergeFeatureDefs(config, featureDefs);
 
         tui.print('\n--- Writing Config ---');
         writeLab(labDir, config, null, null);
 
+        const featureNote = featureDefs.length ? `, ${featureDefs.length} feature definition(s)` : '';
         summary = [
             `\n=== Done! ===`,
-            `  ${mappings.length} mappings configured.`,
+            `  ${mappings.length} mappings configured${featureNote}.`,
             `  Config: ${configPath}`,
-            `  To verify: node bin/rubric_to_md.js ${JSON.stringify(rubricPath)}`,
+            `  To verify: node bin/rubric-to-md.js ${JSON.stringify(rubricPath)}`,
         ];
 
     } finally {

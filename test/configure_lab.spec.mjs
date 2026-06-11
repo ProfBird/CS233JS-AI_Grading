@@ -13,10 +13,12 @@ import { tmpdir } from 'os';
 
 const {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
-    readRubricRows, readRubricCriteria, assembleConfig, writeLab,
+    readRubricRows, readRubricCriteria, assembleConfig, mergeFeatureDefs, writeLab,
     findSpreadsheets, keywordsToFolderPattern, guessMappingType,
     getExistingSteps,
 } = await import('../src/lib/lab_config.js');
+
+const { countFeatures } = await import('../src/pipeline/analyze_code.js');
 
 const {
     buildMappingEntry, copyRubric, promptRubricRows,
@@ -395,6 +397,35 @@ describe('assembleConfig', () => {
     });
 });
 
+// ── mergeFeatureDefs ──────────────────────────────────────────────────────
+
+describe('mergeFeatureDefs', () => {
+    it('creates analysis.features on a brand-new config (no analysis block)', () => {
+        const config = { rubricName: 'r.xlsm', runtimeCheck: 'browser', mappings: [] };
+        mergeFeatureDefs(config, [{ id: 'foo', regex: 'x', fileRegex: '\\.js$' }]);
+        expect(config.analysis.features).toEqual([{ id: 'foo', regex: 'x', fileRegex: '\\.js$' }]);
+    });
+
+    it('appends a new feature while preserving existing ones', () => {
+        const config = { analysis: { features: [{ id: 'foo', regex: 'a' }], customAnalyzer: 'keep.js' } };
+        mergeFeatureDefs(config, [{ id: 'bar', regex: 'b' }]);
+        expect(config.analysis.features.map(f => f.id)).toEqual(['foo', 'bar']);
+        expect(config.analysis.customAnalyzer).toBe('keep.js');  // unrelated analysis keys untouched
+    });
+
+    it('replaces an existing feature with the same id (new wins)', () => {
+        const config = { analysis: { features: [{ id: 'foo', regex: 'old' }] } };
+        mergeFeatureDefs(config, [{ id: 'foo', match: { allOf: [{ regex: 'new' }] } }]);
+        expect(config.analysis.features).toEqual([{ id: 'foo', match: { allOf: [{ regex: 'new' }] } }]);
+    });
+
+    it('is a no-op for an empty/absent feature-def list', () => {
+        const config = { rubricName: 'r.xlsm' };
+        mergeFeatureDefs(config, []);
+        expect(config).toEqual({ rubricName: 'r.xlsm' });
+    });
+});
+
 // ── getExistingSteps ────────────────────────────────────────────────────
 
 describe('getExistingSteps', () => {
@@ -456,19 +487,21 @@ describe('buildMappingEntry', () => {
     const rubricRow = { scoreCell: 'C8', commentCell: 'E8', label: 'Test' };
     const rubricRowNoComment = { scoreCell: 'C10', commentCell: '', label: 'No Comment' };
 
-    it('builds a feature mapping entry', async () => {
-        const rl = mockDriver(['my_feature', '5', '2', 'Found', 'Not found']);
+    // feature flow: ask(featureId), askOptions(combinator), ask(fileRegex),
+    //   single → ask(regex), askInt(minCount), askInt(maxScore)
+    //   allOf/anyOf → ask(pattern…), ask('') to finish, askInt(maxScore)
+    it('builds a single-regex feature mapping + feature definition', async () => {
+        const rl = mockDriver(['my_feature', 'single', '\\.js$', 'fetch\\(', '2', '5']);
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
 
         expect(result).toEqual({
             type: 'feature',
             cell: 'C8',
             commentCell: 'E8',
-            maxScore: 5,
             featureId: 'my_feature',
             minCount: 2,
-            successMsg: 'Found',
-            failMsg: 'Not found'
+            maxScore: 5,
+            _featureDef: { id: 'my_feature', regex: 'fetch\\(', fileRegex: '\\.js$' },
         });
     });
 
@@ -478,13 +511,52 @@ describe('buildMappingEntry', () => {
         expect(result).toBeNull();
     });
 
-    it('uses defaults for feature minCount/successMsg/failMsg', async () => {
-        const rl = mockDriver(['feat', '3', '', '', '']);
+    it('builds an allOf feature and forces minCount to 1 (boolean match)', async () => {
+        // featureId, combinator, fileRegex, pattern1, pattern2, '' (end list), maxScore
+        const rl = mockDriver(['modules', 'allOf', '\\.js$', 'import\\s+.*from', 'export\\s+', '', '6']);
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
 
-        expect(result.minCount).toBe(1);
-        expect(result.successMsg).toBe('Yes');
-        expect(result.failMsg).toBe('Missing');
+        expect(result.type).toBe('feature');
+        expect(result.featureId).toBe('modules');
+        expect(result.minCount).toBe(1);               // boolean match → never prompt > 1
+        expect(result.maxScore).toBe(6);
+        expect(result._featureDef).toEqual({
+            id: 'modules',
+            match: { allOf: [{ regex: 'import\\s+.*from' }, { regex: 'export\\s+' }] },
+            fileRegex: '\\.js$',
+        });
+    });
+
+    it('builds an anyOf feature', async () => {
+        const rl = mockDriver(['styling', 'anyOf', '\\.js$', '\\.fillStyle', '\\.font\\s*=', '', '3']);
+        const result = await buildMappingEntry(rl, 'feature', rubricRow);
+        expect(result._featureDef.match.anyOf).toEqual([{ regex: '\\.fillStyle' }, { regex: '\\.font\\s*=' }]);
+    });
+
+    it('returns null when an allOf rule has no patterns', async () => {
+        const rl = mockDriver(['f', 'allOf', '\\.js$', '']);  // immediately blank → no patterns
+        const result = await buildMappingEntry(rl, 'feature', rubricRow);
+        expect(result).toBeNull();
+    });
+
+    // Integration gate: the produced _featureDef must actually detect/reject via countFeatures,
+    // not just have the right shape.
+    it('produced allOf def detects only when BOTH patterns are present (via countFeatures)', async () => {
+        const rl = mockDriver(['modules', 'allOf', '\\.js$', 'import\\s+.*from', 'export\\s+', '', '6']);
+        const { _featureDef } = await buildMappingEntry(rl, 'feature', rubricRow);
+
+        const dir = mkdtempSync(join(tmpdir(), 'featdef-'));
+        try {
+            const both = join(dir, 'both.js');
+            writeFileSync(both, 'import x from "./x.js";\nexport default y;');
+            expect(countFeatures([both], [_featureDef]).modules).toBe(1);
+
+            const importOnly = join(dir, 'imp.js');
+            writeFileSync(importOnly, 'import x from "./x.js";');
+            expect(countFeatures([importOnly], [_featureDef]).modules).toBe(0);
+        } finally {
+            rmSync(dir, { recursive: true });
+        }
     });
 
     it('builds a manual mapping entry', async () => {

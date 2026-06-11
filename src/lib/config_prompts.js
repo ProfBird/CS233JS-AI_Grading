@@ -157,11 +157,80 @@ async function promptFields(driver, fields, currentValues = {}) {
     return result;
 }
 
+// ── Feature detection-rule prompts ─────────────────────────────────────────
+// A `feature` mapping needs a matching analysis.features[] definition describing
+// how to detect it. These guide the user through either a single regex (counted)
+// or a simple flat allOf/anyOf set of regexes (boolean). Nested OR-of-ANDs trees
+// are left to hand-editing — see the USER_GUIDE "Available checks" notes.
+
+// Ask for one regex; re-prompt on invalid syntax. Returns the pattern, or null if blank.
+async function promptRegex(driver, label) {
+    while (true) {
+        const raw = (await driver.ask(label)).trim();
+        if (!raw) return null;
+        try { new RegExp(raw); return raw; }
+        catch (e) { driver.print(`  Invalid regex (${e.message}); try again or leave blank to cancel.`); }
+    }
+}
+
+// Collect a list of regexes for an allOf/anyOf rule (blank line ends the list).
+// Invalid patterns are reported and skipped rather than written into the config.
+async function promptRegexList(driver, combinator) {
+    const verb = combinator === 'allOf' ? 'ALL must be present (AND)' : 'ANY may be present (OR)';
+    driver.print(`  Enter patterns — ${verb}. Blank line to finish.`);
+    const patterns = [];
+    while (true) {
+        const raw = (await driver.ask(`Pattern ${patterns.length + 1} (blank to finish)`)).trim();
+        if (!raw) break;
+        try { new RegExp(raw); patterns.push(raw); }
+        catch (e) { driver.print(`  Invalid regex (${e.message}); not added.`); }
+    }
+    return patterns;
+}
+
+// Builds a `feature` mapping AND its analysis.features[] definition, attaching the
+// definition as `_featureDef` for the wizard to merge into config.analysis.features.
+async function buildFeatureEntry(driver, rubricRow, currentValues = {}) {
+    const featureId = (await driver.ask('Feature ID (e.g. fetch_api)', currentValues.featureId || '')).trim();
+    if (!featureId) { driver.print('  Feature ID is required — skipping this entry.'); return null; }
+
+    const combinator = await driver.askOptions('How is this feature detected?', [
+        { label: 'A single pattern',        value: 'single', desc: 'One regex; counts matches' },
+        { label: 'ALL of several patterns', value: 'allOf',  desc: 'Every pattern must appear (AND)' },
+        { label: 'ANY of several patterns', value: 'anyOf',  desc: 'At least one pattern appears (OR)' },
+    ]);
+
+    const fileRegex = (await driver.ask('Files to search (regex)', currentValues.fileRegex || '\\.js$')).trim() || '\\.js$';
+
+    let featureDef, minCount;
+    if (combinator === 'single') {
+        const regex = await promptRegex(driver, 'Regex pattern');
+        if (regex === null) { driver.print('  No pattern entered — skipping this entry.'); return null; }
+        minCount = await driver.askInt('Min matches for full credit', currentValues.minCount ?? 1);
+        featureDef = { id: featureId, regex, fileRegex };
+    } else {
+        const patterns = await promptRegexList(driver, combinator);
+        if (patterns.length === 0) { driver.print('  No patterns entered — skipping this entry.'); return null; }
+        // A `match` feature is boolean (0/1); minCount must be 1 — a higher value could never pass.
+        minCount = 1;
+        featureDef = { id: featureId, match: { [combinator]: patterns.map(regex => ({ regex })) }, fileRegex };
+    }
+
+    const maxScore = await driver.askInt('Max score', currentValues.maxScore ?? 0);
+
+    const m = { type: 'feature', cell: rubricRow.scoreCell, featureId, minCount, maxScore, _featureDef: featureDef };
+    if (rubricRow.commentCell) m.commentCell = rubricRow.commentCell;
+    return m;
+}
+
 // ── buildMappingEntry ─────────────────────────────────────────────────────
 // Prompts for the type-specific fields of one rubric row and returns a
 // mapping entry object, or null if a required field was empty.
 
 async function buildMappingEntry(driver, type, rubricRow, currentValues = {}) {
+    // `feature` needs an analysis.features[] definition (regex or match), built interactively.
+    if (type === 'feature') return buildFeatureEntry(driver, rubricRow, currentValues);
+
     const schema = MAPPING_TYPE_SCHEMA[type] ?? GENERIC_MAPPING_SCHEMA;
     const fields = await promptFields(driver, schema.fields, currentValues);
     if (fields === null) return null;
@@ -170,4 +239,4 @@ async function buildMappingEntry(driver, type, rubricRow, currentValues = {}) {
     return m;
 }
 
-export { promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry };
+export { promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry, buildFeatureEntry };

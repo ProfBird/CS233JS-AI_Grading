@@ -495,6 +495,19 @@ function assembleConfig(existingConfig, responses) {
     return config;
 }
 
+// Merge wizard-created feature definitions into config.analysis.features: replace any
+// existing entry with the same id, keep all others, and create analysis/features if absent
+// (e.g. a brand-new lab). Returns the same config object. Without this, a wizard-created
+// `feature` mapping would reference an id that nothing produces → a silent 0.
+function mergeFeatureDefs(config, featureDefs) {
+    if (!featureDefs || featureDefs.length === 0) return config;
+    if (!config.analysis) config.analysis = {};
+    const newIds = new Set(featureDefs.map(d => d.id));
+    const kept = (config.analysis.features || []).filter(f => !newIds.has(f.id));
+    config.analysis.features = [...kept, ...featureDefs];
+    return config;
+}
+
 function writeLab(labDir, config, analyzerContent, analyzerName) {
     const configPath = path.join(labDir, `${path.basename(labDir).toLowerCase()}_config.json`);
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
@@ -517,5 +530,5 @@ export {
     findSpreadsheets, getExistingAssignments, getExistingSteps, keywordsToFolderPattern,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA,
     guessMappingType,
-    assembleConfig, writeLab,
+    assembleConfig, mergeFeatureDefs, writeLab,
 };

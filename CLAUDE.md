@@ -17,7 +17,7 @@ npx eslint --format json path/to/files/*.js
 
 node bin/rubric_to_md.js path/to/Rubric.xlsm   # dump Grade sheet as Markdown (output alongside spreadsheet)
 node bin/configure_lab.js [AssignmentName]    # interactive wizard to create a new lab/assignment config + copy rubric
-node archive/update_lab04_rubric.js            # one-time: rewrites Lab04 rubric cells to match Lab04 point design
+node docs/archive/update_lab04_rubric.js       # one-time: rewrites Lab04 rubric cells to match Lab04 point design
 ```
 
 ```bash

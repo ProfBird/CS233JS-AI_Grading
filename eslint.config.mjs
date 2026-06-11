@@ -43,7 +43,7 @@ export default [
         // ESLint flat config resolves the nearest config per file, so files there are linted
         // with the student rules, not this gate — exclude them so the gate covers only the
         // grader engine (pipeline/lib/bin/run_all.js) and its tests.
-        ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', 'coverage/**', 'archive/**', 'configs/**'],
+        ignores: ['**/node_modules/**', '**/dist/**', '**/build/**', 'coverage/**', 'docs/archive/**', 'configs/**'],
     },
     {
         // The whole project is ES modules ("type": "module"): .js and .mjs alike.

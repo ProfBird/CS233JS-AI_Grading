@@ -132,5 +132,8 @@ dist
 #Claude
 .claude
 
+# JetBrains IDE
+.idea/
+
 # Machine-specific config (see default-config.json for the template)
 configs/local-config.json

@@ -210,10 +210,6 @@ function readLocalConfig() {
     try {
         return JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'default-config.json'), 'utf8'));
     } catch (e) {}
-    // Migrate from old env.json
-    try {
-        return JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'env.json'), 'utf8'));
-    } catch (e) {}
     return {};
 }
 

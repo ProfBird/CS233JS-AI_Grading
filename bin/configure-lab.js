@@ -13,13 +13,13 @@ import {
     getExistingAssignments, getExistingSteps,
     assembleConfig, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
-} from '../lib/lab_config.js';
+} from '../src/lib/lab_config.js';
 
 import { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry }
-    from '../lib/config_prompts.js';
+    from '../src/lib/config_prompts.js';
 
-import { selectModel } from '../lib/llm_client.js';
-import { TUI } from '../lib/tui.js';
+import { selectModel } from '../src/lib/llm_client.js';
+import { TUI } from '../src/lib/tui.js';
 
 const CONFIGS_DIR       = path.join(import.meta.dirname, '..', 'configs');
 const LOCAL_CONFIG_PATH = path.join(CONFIGS_DIR, 'local-config.json');

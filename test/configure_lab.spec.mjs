@@ -16,15 +16,15 @@ const {
     readRubricRows, readRubricCriteria, assembleConfig, writeLab,
     findSpreadsheets, keywordsToFolderPattern, guessMappingType,
     getExistingSteps,
-} = await import('../lib/lab_config.js');
+} = await import('../src/lib/lab_config.js');
 
 const {
     buildMappingEntry, copyRubric, promptRubricRows,
-} = await import('../lib/config_prompts.js');
+} = await import('../src/lib/config_prompts.js');
 
 const {
     heuristicDraft, mergeLLMResponse, guardFeatureType, findCriteria, printDraftTable,
-} = await import('../bin/configure_lab.js');
+} = await import('../bin/configure-lab.js');
 
 const TERM_RUBRIC = join(import.meta.dirname, '..', 'configs', 'TermProject',
     'DevEnvAndStaticSite', 'CS233JS_TermProjectDevEnv_Rubric.xlsm');

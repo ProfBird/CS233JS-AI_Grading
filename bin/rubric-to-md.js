@@ -2,7 +2,7 @@
 // Usage: node rubric_to_md.js <path/to/Rubric.xlsm> [output.md]
 // Writes a .md version of the Grade sheet table alongside the spreadsheet if no output path given.
 
-import XLSX from '../lib/xlsx.js';
+import XLSX from '../src/lib/xlsx.js';
 import fs from 'fs';
 import path from 'path';
 

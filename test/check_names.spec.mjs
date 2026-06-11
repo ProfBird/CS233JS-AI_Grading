@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import checkNamesPhase, { validateName, findInvalidNames } from '../pipeline/check_names.js';
+import checkNamesPhase, { validateName, findInvalidNames } from '../src/pipeline/check_names.js';
 
 // ── validateName ───────────────────────────────────────────────────────────
 describe('validateName', () => {

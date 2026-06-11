@@ -9,7 +9,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import * as fs from 'fs';
 import * as XLSX from 'xlsx';
-import { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType, resolveOutputPath, stockCommentFor, computeResults } from '../pipeline/generate_grades.js';
+import { getHandler, registerHandler, VALID_MAPPING_TYPES, isCodeSourceType, resolveOutputPath, stockCommentFor, computeResults } from '../src/pipeline/generate_grades.js';
 
 // The xlsx ESM build does not auto-wire Node's fs; writeFile needs set_fs() first.
 XLSX.set_fs(fs);
@@ -252,7 +252,7 @@ describe('handler registry', () => {
         // gets a fresh instance — isolated from the shared registry the other
         // tests depend on. The top-level `import` bindings are unaffected.
         vi.resetModules();
-        const fresh = await import('../pipeline/generate_grades.js');
+        const fresh = await import('../src/pipeline/generate_grades.js');
         const { getHandler: gh, registerHandler: rh, VALID_MAPPING_TYPES: vmt } = fresh;
         const custom = () => ({ score: 42, comment: 'custom' });
         rh('test_isolated', custom);
@@ -623,7 +623,7 @@ describe('path_exists handler', () => {
 
 describe('type-set consistency', () => {
     it('every type in lab_config MAPPING_TYPES has a registered handler', async () => {
-        const { MAPPING_TYPES } = await import('../lib/lab_config.js');
+        const { MAPPING_TYPES } = await import('../src/lib/lab_config.js');
         for (const { value: type } of MAPPING_TYPES) {
             // 'feature' and 'part_feature' use the same handler pool but
             // need a featureId at runtime — skip the schema-only ones.

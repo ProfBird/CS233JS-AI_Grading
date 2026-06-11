@@ -578,12 +578,16 @@ Machine-specific. Gitignored. Created on first run. Both paths are prompted for 
   "analysis": {
     "features": [
       {
-        "id": "feature_name",
-        "regex": "regex pattern",
+        "id": "counted_feature",
+        "regex": "fetch\\s*\\(",
+        "fileRegex": "\\.js$"
+      },
+      {
+        "id": "boolean_feature",
+        "match": { "anyOf": [ { "regex": "=>" }, { "regex": "localStorage" } ] },
         "fileRegex": "\\.js$"
       }
-    ],
-    "customAnalyzer": "{assignmentname}_analyzer.js"
+    ]
   },
   "parts": [
     {

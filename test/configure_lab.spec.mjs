@@ -487,11 +487,12 @@ describe('buildMappingEntry', () => {
     const rubricRow = { scoreCell: 'C8', commentCell: 'E8', label: 'Test' };
     const rubricRowNoComment = { scoreCell: 'C10', commentCell: '', label: 'No Comment' };
 
-    // feature flow: ask(featureId), askOptions(combinator), ask(fileRegex),
-    //   single → ask(regex), askInt(minCount), askInt(maxScore)
-    //   allOf/anyOf → ask(pattern…), ask('') to finish, askInt(maxScore)
+    // feature flow: ask(featureId), askOptions(combinator), then pattern(s), then fileRegex
+    // (asked AFTER patterns so a code pattern isn't mistyped into the file prompt):
+    //   single → ask(regex), ask(fileRegex), askInt(minCount), askInt(maxScore)
+    //   allOf/anyOf → ask(pattern…), ask('') to finish, ask(fileRegex), askInt(maxScore)
     it('builds a single-regex feature mapping + feature definition', async () => {
-        const rl = mockDriver(['my_feature', 'single', '\\.js$', 'fetch\\(', '2', '5']);
+        const rl = mockDriver(['my_feature', 'single', 'fetch\\(', '\\.js$', '2', '5']);
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
 
         expect(result).toEqual({
@@ -512,8 +513,8 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds an allOf feature and forces minCount to 1 (boolean match)', async () => {
-        // featureId, combinator, fileRegex, pattern1, pattern2, '' (end list), maxScore
-        const rl = mockDriver(['modules', 'allOf', '\\.js$', 'import\\s+.*from', 'export\\s+', '', '6']);
+        // featureId, combinator, pattern1, pattern2, '' (end list), fileRegex, maxScore
+        const rl = mockDriver(['modules', 'allOf', 'import\\s+.*from', 'export\\s+', '', '\\.js$', '6']);
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
 
         expect(result.type).toBe('feature');
@@ -528,13 +529,13 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds an anyOf feature', async () => {
-        const rl = mockDriver(['styling', 'anyOf', '\\.js$', '\\.fillStyle', '\\.font\\s*=', '', '3']);
+        const rl = mockDriver(['styling', 'anyOf', '\\.fillStyle', '\\.font\\s*=', '', '\\.js$', '3']);
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
         expect(result._featureDef.match.anyOf).toEqual([{ regex: '\\.fillStyle' }, { regex: '\\.font\\s*=' }]);
     });
 
     it('returns null when an allOf rule has no patterns', async () => {
-        const rl = mockDriver(['f', 'allOf', '\\.js$', '']);  // immediately blank → no patterns
+        const rl = mockDriver(['f', 'allOf', '']);  // immediately blank → no patterns (returns before fileRegex)
         const result = await buildMappingEntry(rl, 'feature', rubricRow);
         expect(result).toBeNull();
     });
@@ -542,7 +543,7 @@ describe('buildMappingEntry', () => {
     // Integration gate: the produced _featureDef must actually detect/reject via countFeatures,
     // not just have the right shape.
     it('produced allOf def detects only when BOTH patterns are present (via countFeatures)', async () => {
-        const rl = mockDriver(['modules', 'allOf', '\\.js$', 'import\\s+.*from', 'export\\s+', '', '6']);
+        const rl = mockDriver(['modules', 'allOf', 'import\\s+.*from', 'export\\s+', '', '\\.js$', '6']);
         const { _featureDef } = await buildMappingEntry(rl, 'feature', rubricRow);
 
         const dir = mkdtempSync(join(tmpdir(), 'featdef-'));

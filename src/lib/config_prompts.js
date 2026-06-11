@@ -188,6 +188,13 @@ async function promptRegexList(driver, combinator) {
     return patterns;
 }
 
+// Ask which files to search (a regex over file paths). Asked AFTER the code pattern(s) so a
+// code pattern isn't accidentally typed into this prompt; defaults to .js files.
+async function askFileRegex(driver, currentValues) {
+    const def = currentValues.fileRegex || '\\.js$';
+    return (await driver.ask('Which files to search? (regex over file paths, e.g. \\.js$)', def)).trim() || def;
+}
+
 // Builds a `feature` mapping AND its analysis.features[] definition, attaching the
 // definition as `_featureDef` for the wizard to merge into config.analysis.features.
 async function buildFeatureEntry(driver, rubricRow, currentValues = {}) {
@@ -200,19 +207,20 @@ async function buildFeatureEntry(driver, rubricRow, currentValues = {}) {
         { label: 'ANY of several patterns', value: 'anyOf',  desc: 'At least one pattern appears (OR)' },
     ]);
 
-    const fileRegex = (await driver.ask('Files to search (regex)', currentValues.fileRegex || '\\.js$')).trim() || '\\.js$';
-
-    let featureDef, minCount;
+    // Collect the detection pattern(s) FIRST; the file-path regex is asked afterward, so a
+    // code pattern isn't mistyped into the file prompt (which produced a bad fileRegex before).
+    let featureDef, minCount = 1;
     if (combinator === 'single') {
-        const regex = await promptRegex(driver, 'Regex pattern');
+        const regex = await promptRegex(driver, 'Code regex to match');
         if (regex === null) { driver.print('  No pattern entered — skipping this entry.'); return null; }
+        const fileRegex = await askFileRegex(driver, currentValues);
         minCount = await driver.askInt('Min matches for full credit', currentValues.minCount ?? 1);
         featureDef = { id: featureId, regex, fileRegex };
     } else {
         const patterns = await promptRegexList(driver, combinator);
         if (patterns.length === 0) { driver.print('  No patterns entered — skipping this entry.'); return null; }
-        // A `match` feature is boolean (0/1); minCount must be 1 — a higher value could never pass.
-        minCount = 1;
+        const fileRegex = await askFileRegex(driver, currentValues);
+        // A `match` feature is boolean (0/1); minCount stays 1 — a higher value could never pass.
         featureDef = { id: featureId, match: { [combinator]: patterns.map(regex => ({ regex })) }, fileRegex };
     }
 

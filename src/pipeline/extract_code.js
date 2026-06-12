@@ -111,9 +111,25 @@ async function extractUrls(textDir) {
     return urls;
 }
 
+// Extracts student.zipFile into codeDir, sets student.extractedDir on success, and returns
+// whether it worked. Uses adm-zip (in-process) rather than shelling out to `unzip`, which is
+// not installed on stock Windows. true = overwrite existing files (-o).
+function extractZip(student, codeDir) {
+    try {
+        new AdmZip(student.zipFile).extractAllTo(codeDir, true);
+        student.extractedDir = codeDir;
+        return true;
+    } catch (e) {
+        console.log(`  Failed to unzip for ${student.name}`);
+        return false;
+    }
+}
+
 async function extractStudentCode(student, labDir, repoClonePath) {
     const urls = await extractUrls(student.textDir);
-    const codeDirName = student.zipFile ? CODE_DIR : (urls.github ? REPO_DIR : CODE_DIR);
+    // Prefer the GitHub repository over a submitted zip when both are present, so the dir is
+    // named for the repo (the zip is only used as a fallback if the clone fails).
+    const codeDirName = urls.github ? REPO_DIR : CODE_DIR;
 
     // Determine where to put the code: repoClonePath (SubmissionsAndAssessment) or fallback to filesDir
     let codeDir;
@@ -156,34 +172,40 @@ async function extractStudentCode(student, labDir, repoClonePath) {
 
     fs.mkdirSync(codeDir, { recursive: true });
 
-    if (student.zipFile) {
-        console.log(`  Extracting zip for ${student.name}...`);
-        try {
-            // Extract in-process with adm-zip rather than shelling out to `unzip`,
-            // which is not installed on stock Windows. true = overwrite existing files (-o).
-            new AdmZip(student.zipFile).extractAllTo(codeDir, true);
-            student.extractedDir = codeDir;
-        } catch (e) {
-            console.log(`  Failed to unzip for ${student.name}`);
-            student.error = 'Failed to unzip ZIP file';
-        }
-    } else if (urls.github) {
+    // When a student submits BOTH a GitHub repo link and a zip, prefer the repository (the zip
+    // is usually a stale or accidental extra) and alert the grader that both were present.
+    if (urls.github && student.zipFile) {
+        console.log(`  NOTE: ${student.name} submitted BOTH a GitHub repo link AND a zip — using the repository (the zip is a fallback only if the clone fails).`);
+    }
+
+    if (urls.github) {
         const normalizedUrl = normalizeGithubUrl(urls.github);
-        if (!normalizedUrl) {
+        if (normalizedUrl) {
+            console.log(`  Cloning repo for ${student.name}...`);
+            try {
+                // --depth 1 to make cloning faster; SIGKILL ensures hung processes don't freeze the pipeline
+                execFileSync('git', ['clone', '--depth', '1', normalizedUrl, codeDir], { stdio: 'ignore', timeout: 60_000, killSignal: 'SIGKILL' });
+                student.extractedDir = codeDir;
+            } catch (e) {
+                const reason = e.killed ? '(timed out after 60s)' : e.stderr ? e.stderr.toString().trim() : e.message;
+                console.log(`  Failed to clone repo for ${student.name} ${reason}`);
+            }
+        } else {
             console.log(`  Invalid GitHub URL for ${student.name}: ${urls.github}`);
-            student.error = 'Invalid GitHub URL format';
-            return urls;
         }
-        console.log(`  Cloning repo for ${student.name}...`);
-        try {
-            // --depth 1 to make cloning faster; SIGKILL ensures hung processes don't freeze the pipeline
-            execFileSync('git', ['clone', '--depth', '1', normalizedUrl, codeDir], { stdio: 'ignore', timeout: 60_000, killSignal: 'SIGKILL' });
-            student.extractedDir = codeDir;
-        } catch (e) {
-            const reason = e.killed ? '(timed out after 60s)' : e.stderr ? e.stderr.toString().trim() : e.message;
-            console.log(`  Failed to clone repo for ${student.name} ${reason}`);
-            student.error = 'Failed to clone GitHub repository';
+
+        // Repository is preferred, but if it couldn't be obtained and a zip was also submitted,
+        // fall back to extracting the zip rather than losing the submission.
+        if (!student.extractedDir && student.zipFile) {
+            console.log(`  Repository unavailable — falling back to the submitted zip for ${student.name}.`);
+            extractZip(student, codeDir);
         }
+        if (!student.extractedDir) {
+            student.error = normalizedUrl ? 'Failed to clone GitHub repository' : 'Invalid GitHub URL format';
+        }
+    } else if (student.zipFile) {
+        console.log(`  Extracting zip for ${student.name}...`);
+        if (!extractZip(student, codeDir)) student.error = 'Failed to unzip ZIP file';
     } else {
         console.log(`  No code source found for ${student.name}`);
         student.error = 'No ZIP file or GitHub URL found';

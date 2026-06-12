@@ -4,18 +4,18 @@
   "titleCell": "A1",
   "summaryCell": "A2",
   "graderCell": "G1",
-  "runtimeCheck": "build",
+  "runtimeCheck": "both",
   "mappings": [
     {
       "cell": "D6",
       "commentCell": "F6",
       "type": "manual",
       "maxScore": 20,
-      "msg": "Check all features are working correctly overall.",
+      "msg": "NEEDS MANUAL CHECK: All features are working correctly.",
       "stockComments": {
         "full": "Excellent",
         "partial": "Mostly working",
-        "zero": "Not workinig"
+        "zero": "Not working"
       }
     },
     {
@@ -23,7 +23,7 @@
       "commentCell": "F8",
       "type": "manual",
       "maxScore": 5,
-      "msg": "Check that Fetch API is used to call a web service asynchronously.",
+      "msg": "NEEDS MANUAL CHECK: Fetch API used with .then or await.",
       "stockComments": {
         "full": "Yes",
         "partial": "Attempted",
@@ -35,7 +35,7 @@
       "commentCell": "F9",
       "type": "manual",
       "maxScore": 3,
-      "msg": "Check that try-catch or .then is used to handle errors.",
+      "msg": "NEEDS MANUAL CHECK: Correct error handling with try-catch or .then.",
       "stockComments": {
         "full": "Yes",
         "partial": "Attempted",
@@ -54,11 +54,12 @@
       }
     },
     {
+      "type": "feature",
       "cell": "D11",
-      "commentCell": "F11",
-      "type": "manual",
+      "featureId": "class",
+      "minCount": 1,
       "maxScore": 8,
-      "msg": "Check at least one class is used and is used appropriately.",
+      "commentCell": "F11",
       "stockComments": {
         "full": "Yes",
         "partial": "Attempted",
@@ -66,11 +67,12 @@
       }
     },
     {
+      "type": "feature",
       "cell": "D12",
-      "commentCell": "F12",
-      "type": "manual",
+      "featureId": "New JS features",
+      "minCount": 1,
       "maxScore": 5,
-      "msg": "Check at least one new JS technology is used (local storage, canvas, regex, arrow functions, destructuring, spread operator).",
+      "commentCell": "F12",
       "stockComments": {
         "full": "Yes",
         "partial": "Partially",
@@ -78,8 +80,8 @@
       }
     },
     {
-      "cell": "D15",
-      "commentCell": "F15",
+      "cell": "D14",
+      "commentCell": "F14",
       "type": "scripts_check",
       "maxScore": 4,
       "scripts": [
@@ -93,13 +95,11 @@
       }
     },
     {
-      "cell": "D16",
-      "commentCell": "F16",
       "type": "scripts_check",
+      "cell": "D15",
       "maxScore": 8,
-      "scripts": [
-        "test"
-      ],
+      "scripts": "test",
+      "commentCell": "F15",
       "stockComments": {
         "full": "Yes",
         "partial": "Attempted",
@@ -107,11 +107,10 @@
       }
     },
     {
-      "cell": "D18",
-      "commentCell": "F18",
+      "cell": "D17",
+      "commentCell": "F17",
       "type": "gitignore_check",
       "maxScore": 3,
-      "requiredEntry": "node_modules",
       "stockComments": {
         "full": "Yes",
         "partial": "Incorrect",
@@ -119,8 +118,8 @@
       }
     },
     {
-      "cell": "D19",
-      "commentCell": "F19",
+      "cell": "D18",
+      "commentCell": "F18",
       "type": "deploy_check",
       "maxScore": 8,
       "urlType": "citstudent",
@@ -131,11 +130,11 @@
       }
     },
     {
-      "cell": "D21",
-      "commentCell": "F21",
+      "cell": "D20",
+      "commentCell": "F20",
       "type": "manual",
       "maxScore": 3,
-      "msg": "Check web page has good visual design (professional looking).",
+      "msg": "NEEDS MANUAL CHECK: Web page has good visual design.",
       "stockComments": {
         "full": "Excellent",
         "partial": "Good",
@@ -143,11 +142,11 @@
       }
     },
     {
-      "cell": "D22",
-      "commentCell": "F22",
+      "cell": "D21",
+      "commentCell": "F21",
       "type": "manual",
       "maxScore": 3,
-      "msg": "Check some kind of styling has been applied (CSS, Bootstrap, etc.).",
+      "msg": "NEEDS MANUAL CHECK: Some kind of styling (CSS, Bootstrap, etc.) has been applied.",
       "stockComments": {
         "full": "Yes",
         "partial": "Attempted",
@@ -155,11 +154,11 @@
       }
     },
     {
-      "cell": "D23",
-      "commentCell": "F23",
+      "cell": "D22",
+      "commentCell": "F22",
       "type": "manual",
       "maxScore": 3,
-      "msg": "Check UI behavior is intuitive and logical (good UX).",
+      "msg": "NEEDS MANUAL CHECK: The UI is user friendly and logical.",
       "stockComments": {
         "full": "Excellent",
         "partial": "Good",
@@ -167,11 +166,23 @@
       }
     },
     {
-      "cell": "D25",
-      "commentCell": "F25",
+      "cell": "D24",
+      "commentCell": "F24",
       "type": "manual",
       "maxScore": 6,
-      "msg": "Check good architectural design: separation of business rules from UI code.",
+      "msg": "NEEDS MANUAL CHECK: Good architectural design with separation of business logic from UI.",
+      "stockComments": {
+        "full": "Excellent",
+        "partial": "Fair",
+        "zero": "Poor"
+      }
+    },
+    {
+      "cell": "D25",
+      "commentCell": "F25",
+      "type": "lint",
+      "maxScore": 4,
+      "severity": "warnings",
       "stockComments": {
         "full": "Excellent",
         "partial": "Fair",
@@ -181,18 +192,6 @@
     {
       "cell": "D26",
       "commentCell": "F26",
-      "type": "manual",
-      "maxScore": 4,
-      "msg": "Check code conforms to class standards for style and best practices.",
-      "stockComments": {
-        "full": "Excellent",
-        "partial": "Fair",
-        "zero": "Poor"
-      }
-    },
-    {
-      "cell": "D27",
-      "commentCell": "F27",
       "type": "developer_comments",
       "maxScore": 4,
       "stockComments": {
@@ -202,11 +201,11 @@
       }
     },
     {
-      "cell": "D28",
-      "commentCell": "F28",
+      "cell": "D27",
+      "commentCell": "F27",
       "type": "manual",
       "maxScore": 4,
-      "msg": "Check standard folder structure and conventional, descriptive file names.",
+      "msg": "NEEDS MANUAL CHECK: Standard folder structure and descriptive file names.",
       "stockComments": {
         "full": "Excellent",
         "partial": "Fair",
@@ -214,8 +213,8 @@
       }
     },
     {
-      "cell": "D29",
-      "commentCell": "F29",
+      "cell": "D28",
+      "commentCell": "F28",
       "type": "code_review",
       "maxScore": 4,
       "stockComments": {
@@ -224,5 +223,34 @@
         "zero": "No, no"
       }
     }
-  ]
+  ],
+  "analysis": {
+    "features": [
+      {
+        "id": "class",
+        "regex": "class",
+        "fileRegex": ".js"
+      },
+      {
+        "id": "New JS features",
+        "match": {
+          "anyOf": [
+            {
+              "regex": "=>"
+            },
+            {
+              "regex": "\\.\\.\\."
+            },
+            {
+              "regex": "localStorage"
+            },
+            {
+              "regex": "canvas"
+            }
+          ]
+        },
+        "fileRegex": "\\.m?js$"
+      }
+    ]
+  }
 }

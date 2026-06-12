@@ -266,4 +266,4 @@ export default async function(labDir, repoClonePath) {
     return students; // returns array of augmented student objects
 };
 
-export { CODE_DIR, REPO_DIR };
+export { CODE_DIR, REPO_DIR, extractStudentCode };

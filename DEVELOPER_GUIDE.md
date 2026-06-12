@@ -231,7 +231,7 @@ sequenceDiagram
     Note over grade: === Phase 5: Linting ===
     grade->>lint: lintCode(students, config, artifactsDir)
     lint->>lint: getAllJsFiles() — recursive .js file collection
-    lint->>lint: ESLint.lintFiles() against ~/.eslint/eslint.config.mjs
+    lint->>lint: ESLint.lintFiles() against eslint/student.eslint.config.mjs (or per-lab override)
     lint->>lint: write lint_report.json
     lint-->>grade: (attaches to student.lint)
 
@@ -334,6 +334,7 @@ Three modes, controlled by `config.runtimeCheck`:
 - Serves each directory on a random port
 - Tracks JS runtime exceptions and failed script/stylesheet loads
 - Waits for `networkidle0` plus 2s for delayed execution
+- **Caveat:** this serves the submission's *source* directory, not a build output. It only suits plain static sites. A Vite/bundled project's `index.html` references bare module imports the browser can't resolve unbuilt, so `"browser"` reports false load failures for it — use `"build"` or `"both"` for anything with a build step.
 
 **`"both"` mode:**
 - Runs the full build phase first, storing results as `buildSuccess` / `buildErrors`
@@ -426,7 +427,7 @@ Reads the rubric template and writes per-student graded spreadsheets.
 | `code_review` | Yes | Full/half/zero based on review found + production column complete |
 | `url_check` | Partial | Writes URL for manual verification; score left blank |
 | `deploy_check` | Partial | Fetches citstudent URL; scores reachability + bundling; flags transient failures for manual review |
-| `lint` | Yes | Score based on ESLint issue count. Optional `severity: "errors"` (binary pass/fail) or `"warnings"` (graduated). Default uses combined total. |
+| `lint` | Yes | Score based on ESLint issue count. Optional `severity: "errors"` (binary pass/fail) or `"warnings"` (graduated). Default uses combined total. Writes the actual findings (top issues by frequency) to the comment cell and sets `keepComment: true`, so `stockComments` is ignored for this type. |
 | `html_validate` | Yes | Score based on HTML error count; `tolerance` (default 3) sets half-point tier |
 | `css_validate` | Yes | Score based on CSS error count; `tolerance` (default 3) sets half-point tier |
 | `name_check` | Yes | Score based on invalid name count; `tolerance` (default 2) sets half-point tier |
@@ -443,7 +444,7 @@ Reads the rubric template and writes per-student graded spreadsheets.
 | `npm_package` | Yes | Score if any qualifying npm packages are imported (uses `analysis.npmPackages`) |
 | `package_check` | Yes | Score if `package.json` contains the expected `dependencies` and `devDependencies` |
 
-**`stockComments`:** Any mapping may include `stockComments: { full, partial, zero }` — short strings written into the comment cell instead of the verbose auto-generated comment. Handlers that set `keepComment: true` (e.g. `deploy_check` manual-review flags, validation errors) are **not** overridden by `stockComments.zero`, so diagnostics are never silently erased.
+**`stockComments`:** Any mapping may include `stockComments: { full, partial, zero }` — short strings written into the comment cell instead of the verbose auto-generated comment. Handlers that set `keepComment: true` (e.g. `deploy_check` manual-review flags, validation errors, `lint` findings) are **not** overridden by `stockComments.zero`, so diagnostics are never silently erased.
 
 **Per-part feature pipeline:** `featureCounts` entries in `config.parts[].featureCounts` are converted to `part_feature`-type virtual mappings and processed through the same handler pipeline. This means per-part and top-level scoring share the same logic; no separate code path is needed.
 

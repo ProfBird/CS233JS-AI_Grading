@@ -192,7 +192,8 @@ AI_Grading/   ← repo root (ESM; "type": "module")
   - rubricName: string — rubric filename in the lab directory
 
   - runtimeCheck: "browser" | "build" | "both"
-    - `"both"` runs build first, then Puppeteer browser check. Use `build_check` / `browser_check` / `build_and_browser_check` mapping types to score them separately or together.
+    - `"browser"` serves the submission's source `index.html` directly. This only works for plain static sites; a Vite/bundled project has bare module imports (`import x from 'pkg'`) that the browser can't resolve unbuilt, so `"browser"` reports false load failures for them. For anything that needs a build step, use `"build"` (or `"both"` to also browser-check the built `dist/`).
+    - `"both"` runs build first, then Puppeteer browser check against the built output. Use `build_check` / `browser_check` / `build_and_browser_check` mapping types to score them separately or together.
 
   - summaryCell: string (optional) — cell for AI/manual summary comment
   - graderCell: string (optional) — cell written with "Computer" on every new spreadsheet. On `--regrade`, if the cell still contains "Computer" the file is overwritten; if it has been changed (e.g. to "Brian Bird" after manual review) a new versioned copy is written (`StudentName_Grade-V2.xlsm`, `-V3`, …) instead.
@@ -221,8 +222,8 @@ AI_Grading/   ← repo root (ESM; "type": "module")
 
   - mappings[] — rubric cell assignments (types listed below)
     - types: feature | part1_completed | part_completed | apps_in_repo | developer_comments | code_review | url_check | deploy_check | lint | build_check | browser_check | build_and_browser_check | html_validate | css_validate | name_check | manual | part_feature | repo_hygiene | github_repo | collaborator_check | gitignore_check | scripts_check | npm_package | package_check | env_file_check | path_exists
-    - any mapping may include `stockComments: { full, partial, zero }` — short strings written into the comment cell instead of the verbose auto-generated comment. `keepComment: true` handlers (e.g. `deploy_check` manual-review flags) are **not** overridden by `stockComments.zero`.
-    - lint mappings accept an optional `severity: "errors" | "warnings"` to report only errors (syntax) or only warnings (style) into separate cells
+    - any mapping may include `stockComments: { full, partial, zero }` — short strings written into the comment cell instead of the verbose auto-generated comment. `keepComment: true` handlers (e.g. `deploy_check` manual-review flags, `lint`) are **not** overridden by `stockComments.zero`.
+    - lint mappings accept an optional `severity: "errors" | "warnings"` to report only errors (syntax) or only warnings (style) into separate cells. The comment cell is written with the actual ESLint findings (top issues by frequency), not a stock comment — lint sets `keepComment: true` so `stockComments` is ignored for this type.
     - `html_validate` / `css_validate` mappings accept `tolerance` (default 3) — errors ≤ tolerance score half points; more score zero
     - `name_check` mappings accept `tolerance` (default 2) — same half/zero tier logic
     - `scripts_check` mappings accept `scripts` (comma-separated string or array, default `"dev,build,test"`) — list of npm script names to verify. Score is proportional to how many pass.

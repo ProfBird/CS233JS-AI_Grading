@@ -48,7 +48,7 @@ The wizard will:
 4. Let you **review and edit** the drafted checks before saving: a navigable table where you can change a row's check type, adjust its fields (max score, etc.), or mark a row "graded by hand."
 5. Prompt for the lab title, runtime-check mode (`browser` / `build` / `both`), and the optional summary / grader / title cells, then write `{assignmentname}_config.json`.
 
-> **`feature` / `match` checks in the wizard:** the AI/heuristic draft won't auto-pick `feature` (a code pattern can't be guessed from a rubric label), but you can choose `feature` for any row during the review/edit step. The wizard then guides you through the detection rule — a **single regex**, or a simple **all-of** (AND) / **any-of** (OR) set of patterns — and writes both the rubric mapping and its `analysis.features[]` definition for you. (Nested OR-of-ANDs rules aren't generated — hand-edit the config for those; custom JS analyzers are **deprecated**, use a `match` check instead.) See [Available checks](#available-checks-rubric-mapping-types).
+> **`feature` / `match` checks in the wizard:** the AI/heuristic draft won't auto-pick `feature` (a code pattern can't be guessed from a rubric label), but you can choose `feature` for any row during the review/edit step. The wizard then guides you through the detection rule — which files to search (a plain extension list like `js, mjs`, which it turns into the right `fileRegex`), then a **single regex**, or a simple **all-of** (AND) / **any-of** (OR) set of patterns — and writes both the rubric mapping and its `analysis.features[]` definition for you. (Nested OR-of-ANDs rules aren't generated — hand-edit the config for those; custom JS analyzers are **deprecated**, use a `match` check instead.) See [Available checks](#available-checks-rubric-mapping-types).
 
 ### Available checks (rubric mapping types)
 
@@ -58,15 +58,17 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
 - `feature` *(config-only)* — counts matches of a `regex` (full credit at `minCount`, default 1), **or** evaluates a boolean `match` rule for checks needing AND/OR of several patterns. Example: `"match": { "allOf": [{ "regex": "import\\s+.*from" }, { "regex": "export\\s+" }] }` requires both import and export; use `"anyOf"` for "any one of these implementations" (e.g. group A/B/C variations). Each pattern's presence is computed across all files, so an `allOf` matches even when its patterns live in different files.
 
 **Code quality & validity:**
-- `lint` — runs ESLint; set `severity: "errors"` (syntax) or `"warnings"` (style).
+- `lint` — runs ESLint; set `severity: "errors"` (syntax) or `"warnings"` (style). The comment cell gets the actual findings (top issues by frequency), so `stockComments` has no effect on a `lint` row.
 - `html_validate` / `css_validate` — validate `.html` / `.css`; partial credit up to a `tolerance` (default 3 errors).
 - `name_check` — file/folder names must be Linux-safe (no spaces/special chars); `tolerance` default 2.
 
-**Build & runtime** (require `runtimeCheck` set accordingly):
+**Build & runtime** (require `runtimeCheck` set accordingly — `"build"`, `"browser"`, or `"both"`):
 - `build_check` — `npm install` + `npm run build` succeeds.
 - `browser_check` — app loads in headless Chrome with no console errors.
 - `build_and_browser_check` — both; half credit if only one passes.
 - `scripts_check` — the named npm `scripts` (e.g. `dev,build,preview`) are defined and run.
+
+> **Pick the right `runtimeCheck` mode:** `"browser"` serves the submission's *source* and only suits plain static sites. A Vite/bundled project has bare module imports the browser can't resolve unbuilt, so `"browser"` reports false load failures for it — set `runtimeCheck` to `"build"` (or `"both"` to also browser-check the built `dist/`) for any project with a build step.
 
 **Repository & GitHub:**
 - `github_repo` — a GitHub URL was submitted and the repo cloned.
@@ -91,7 +93,7 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
 - `developer_comments` — code files contain developer name/date/header comments.
 - `manual` — no automation; pulls the score from the student's peer code-review form, otherwise flagged `NEEDS MANUAL CHECK` for you to grade.
 
-Any mapping may also carry `stockComments: { full, partial, zero }` to write a short canned comment per score tier instead of the verbose auto-generated one.
+Any mapping may also carry `stockComments: { full, partial, zero }` to write a short canned comment per score tier instead of the verbose auto-generated one. A few checks keep their own diagnostic comment regardless — `lint` (writes the actual findings), and `deploy_check` when it flags a row for manual review — so `stockComments` is ignored on those rows.
 
 ### File layout
 
@@ -277,7 +279,7 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 
 **Re-cloning a single student:** If a student's repo changes after the initial clone, use `--reclone` to wipe everything and start fresh, or `--regrade` to run `git pull` on existing clones. There's no per-student reclone option.
 
-**ESLint not installed:** Run `npm install` in the `AI_Grading/` directory. ESLint is a devDependency. The ESLint config at `~/.eslint/eslint.config.mjs` must also exist (shared with VS Code).
+**ESLint not installed:** Run `npm install` in the `AI_Grading/` directory. ESLint is a devDependency. The student ruleset ships at `eslint/student.eslint.config.mjs` (overridable per-lab via `configs/{Lab}/eslint.config.mjs`); the linter copies the resolved config into each lab folder so VS Code shows the same warnings.
 
 **HTML/CSS validator not installed:** Run `npm install`. `html-validate` and `csstree-validator` are listed as dependencies and run offline — no network or browser needed.
 

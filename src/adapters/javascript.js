@@ -415,7 +415,6 @@ export default {
     language: 'javascript',
     sourceExtensions: ['.js', '.mjs'],
     stripComments,
-    readManifest: null, // superseded by checkManifest (validates against config directly); see base.js note
     checkManifest,
     extractUsedPackages,
     lint,

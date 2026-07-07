@@ -21,7 +21,7 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 
 ## Prerequisites
 
-- **Node.js** v16 or later
+- **Node.js** v20 or later (the grader's CI tooling — vitest 4, eslint 10, puppeteer 24 — and modern syntax like optional chaining / nullish assignment require it; `package.json` declares `"engines": { "node": ">=20" }`)
 - **npm packages** (install once):
   ```
   npm install

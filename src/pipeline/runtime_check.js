@@ -8,10 +8,11 @@
  *   "build"     — runs the language adapter's install + build steps
  *   "both"      — runs build first, then opens built dist/ in headless Chrome
  *   "run_check" — builds (if applicable) then executes the produced artifact directly,
- *                 matching stdout against configured patterns. Runs the artifact with NO
- *                 sandboxing yet — see Phase 7's runStudentArtifact isolation chokepoint,
- *                 which this will route through once implemented. Safe for JS/Python/
- *                 trusted-classroom use only until then.
+ *                 matching stdout against configured patterns. Execution is routed through
+ *                 runStudentArtifact() in ../lib/sandbox.js (the single isolation
+ *                 chokepoint — see that module's header comment for the tier documentation).
+ *                 Safe for JS/Python/trusted-classroom use only under the default "direct"
+ *                 isolation tier, which is NOT a security sandbox.
  *
  * The method is set per-lab in the config via config.runtimeCheck. "browser" is generic
  * (any language that produces a static index.html); "build"/"run_check" and the

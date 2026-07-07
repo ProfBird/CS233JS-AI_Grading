@@ -172,7 +172,7 @@ describe('computeResults — stock comment override', () => {
             { type: 'lint', severity: 'warnings', cell: 'D7', commentCell: 'F7', maxScore: 4,
               stockComments: { full: 'Excellent', partial: 'Fair', zero: 'Poor' } },
         ] };
-        const student = { lint: { jsFiles: 1, errors: 0, warnings: 5, warningMessages: ['Prefer const: 3', 'Use ===: 2'] } };
+        const student = { lint: { sourceFiles: 1, errors: 0, warnings: 5, warningMessages: ['Prefer const: 3', 'Use ===: 2'] } };
         const [r] = await computeResults(student, cfg);
         expect(r.score).toBe(4);
         expect(r.comment).toContain('Prefer const: 3');   // the linter output…
@@ -184,7 +184,7 @@ describe('computeResults — stock comment override', () => {
         const cfg = { mappings: [
             { type: 'lint', cell: 'D7', commentCell: 'F7', maxScore: 4, stockComments: { full: 'Excellent', partial: 'Fair', zero: 'Poor' } },
         ] };
-        const [r] = await computeResults({ lint: { jsFiles: 1, errors: 0, warnings: 0 } }, cfg);
+        const [r] = await computeResults({ lint: { sourceFiles: 1, errors: 0, warnings: 0 } }, cfg);
         expect(r.comment).toBe('Excellent - no lint issues');
     });
 
@@ -305,6 +305,58 @@ describe('handler registry', () => {
         expect(gh('test_isolated')).toBe(custom);
         expect(gh('test_isolated')({}, {})).toEqual({ score: 42, comment: 'custom' });
         expect(vmt.has('test_isolated')).toBe(true);
+    });
+
+    // Proves the mechanism bin/grade.js's loadHandlerModules() depends on: a config-supplied
+    // module that calls registerHandler() as a side effect on import must be visible in
+    // VALID_MAPPING_TYPES immediately after that import resolves — BEFORE any validation
+    // of mapping types runs. This is the fix for the load-order bug where handlerModules
+    // was previously loaded too late (inside generate_grades.js, after config validation
+    // had already rejected the mapping type as "unknown").
+    it('a dynamically-imported handler module is visible before validation would run', async () => {
+        vi.resetModules();
+        const fresh = await import('../src/pipeline/generate_grades.js');
+        const root = mkdtempSync(join(tmpdir(), 'handlermod-'));
+        try {
+            const modulePath = join(root, 'custom_handler.mjs');
+            writeFileSync(modulePath, `
+                import { registerHandler } from ${JSON.stringify(join(import.meta.dirname, '..', 'src', 'lib', 'handler_registry.js').replace(/\\/g, '/'))};
+                registerHandler('dynamic_check', (map, student) => ({ score: map.maxScore, comment: 'dynamic!' }));
+            `);
+            const { pathToFileURL } = await import('url');
+            await import(pathToFileURL(modulePath).href);
+
+            // Simulates validateConfig()'s check, which must see the type as valid.
+            expect(fresh.VALID_MAPPING_TYPES.has('dynamic_check')).toBe(true);
+            expect(fresh.getHandler('dynamic_check')({ maxScore: 5 }, {})).toEqual({ score: 5, comment: 'dynamic!' });
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+});
+
+// Guards against the four mapping-type lists (handler registry, lab_config.js's wizard
+// MAPPING_TYPES, and mappingDescription()'s switch) silently drifting apart. Full
+// consolidation into one metadata-carrying registry is deferred (see docs/multi_language_
+// refactor_plan.md Phase 5) — this is the "honest minimum" catch for future drift.
+describe('mapping-type lists stay in sync', () => {
+    it('every wizard-listed mapping type has a registered handler', async () => {
+        const { MAPPING_TYPES } = await import('../src/lib/lab_config.js');
+        for (const { value } of MAPPING_TYPES) {
+            expect(getHandler(value), `handler for wizard type "${value}"`).toBeInstanceOf(Function);
+        }
+    });
+
+    it('every registered handler (except test-only ones) is listed for the wizard', async () => {
+        const { MAPPING_TYPES } = await import('../src/lib/lab_config.js');
+        const wizardTypes = new Set(MAPPING_TYPES.map(t => t.value));
+        // part_feature is a virtual mapping type driven by config.parts[].featureCounts,
+        // not directly selectable in the wizard's mapping-type picker — expected absence.
+        const notWizardSelectable = new Set(['part_feature']);
+        for (const type of VALID_MAPPING_TYPES) {
+            if (notWizardSelectable.has(type)) continue;
+            expect(wizardTypes.has(type), `"${type}" registered but missing from lab_config.js MAPPING_TYPES`).toBe(true);
+        }
     });
 });
 
@@ -761,13 +813,13 @@ describe('lint handler', () => {
 
     it('gives maxScore for zero issues', () => {
         const map = { maxScore: 2 };
-        expect(handler(map, { lint: { jsFiles: 5, errors: 0, warnings: 0, messages: [] } }))
+        expect(handler(map, { lint: { sourceFiles: 5, errors: 0, warnings: 0, messages: [] } }))
             .toMatchObject({ score: 2, comment: 'Excellent - no lint issues' });
     });
 
     it('gives maxScore for minor issues (<= 10), keeping its comment (not stock)', () => {
         const map = { maxScore: 2 };
-        const result = handler(map, { lint: { jsFiles: 5, errors: 2, warnings: 3, messages: ['rule1: 3', 'rule2: 2'] } });
+        const result = handler(map, { lint: { sourceFiles: 5, errors: 2, warnings: 3, messages: ['rule1: 3', 'rule2: 2'] } });
         expect(result.score).toBe(2);
         expect(result.comment).toContain('Good - 5 minor issues');
         expect(result.keepComment).toBe(true);   // lint findings are not overridden by stockComments
@@ -775,33 +827,33 @@ describe('lint handler', () => {
 
     it('gives half score for moderate issues (<= 30)', () => {
         const map = { maxScore: 2 };
-        const result = handler(map, { lint: { jsFiles: 5, errors: 10, warnings: 5, messages: ['rule1: 10'] } });
+        const result = handler(map, { lint: { sourceFiles: 5, errors: 10, warnings: 5, messages: ['rule1: 10'] } });
         expect(result.score).toBe(1);
         expect(result.comment).toContain('15 issues');
     });
 
     it('gives 0 for severe issues (> 30)', () => {
         const map = { maxScore: 2 };
-        const result = handler(map, { lint: { jsFiles: 5, errors: 30, warnings: 10, messages: ['rule1: 30'] } });
+        const result = handler(map, { lint: { sourceFiles: 5, errors: 30, warnings: 10, messages: ['rule1: 30'] } });
         expect(result.score).toBe(0);
         expect(result.comment).toContain('40 issues');
     });
 
     it('scores 0 when there are no JS files', () => {
         const map = { maxScore: 2 };
-        expect(handler(map, { lint: { jsFiles: 0, errors: 0, warnings: 0, messages: [] } }))
-            .toMatchObject({ score: 0, comment: 'No JS files to lint' });
+        expect(handler(map, { lint: { sourceFiles: 0, errors: 0, warnings: 0, messages: [] } }))
+            .toMatchObject({ score: 0, comment: 'No source files to lint' });
     });
 
     it('scores 0 when lint data is missing', () => {
         const map = { maxScore: 2 };
-        expect(handler(map, {})).toMatchObject({ score: 0, comment: 'No JS files to lint' });
+        expect(handler(map, {})).toMatchObject({ score: 0, comment: 'No source files to lint' });
     });
 
     it('lists the top offending rules in the comment, capped at 6', () => {
         const map = { maxScore: 2 };
         const messages = ['r1: 9', 'r2: 8', 'r3: 7', 'r4: 6', 'r5: 5', 'r6: 4', 'r7: 3'];
-        const result = handler(map, { lint: { jsFiles: 3, errors: 20, warnings: 15, messages } });
+        const result = handler(map, { lint: { sourceFiles: 3, errors: 20, warnings: 15, messages } });
         expect(result.comment).toContain('r1: 9');
         expect(result.comment).toContain('r6: 4');     // up to 6 rules shown
         expect(result.comment).not.toContain('r7: 3'); // 7th is capped off
@@ -1114,6 +1166,57 @@ describe('scripts_check handler', () => {
         }}};
         expect(handler({ maxScore: 2, scripts: ['build', 'test'] }, student))
             .toEqual({ score: 2, comment: 'All pass: build, test' });
+    });
+});
+
+describe('test_check handler', () => {
+    const handler = getHandler('test_check');
+    const map = { maxScore: 4 };
+
+    it('gives maxScore when all tests pass', () => {
+        const student = { testCheck: { total: 5, passed: 5, failures: [] } };
+        expect(handler(map, student)).toEqual({ score: 4, comment: 'All 5 tests passed' });
+    });
+
+    it('scores proportionally when some tests fail', () => {
+        const student = { testCheck: { total: 4, passed: 2, failures: ['test_add', 'test_subtract'] } };
+        const result = handler(map, student);
+        expect(result.score).toBe(2);
+        expect(result.comment).toContain('2/4 tests passed');
+        expect(result.comment).toContain('test_add');
+        expect(result.keepComment).toBe(true);
+    });
+
+    it('scores 0 with the error when the test run failed', () => {
+        const student = { testCheck: { error: 'pytest not found' } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'pytest not found', keepComment: true });
+    });
+
+    it('scores 0 when no tests were found', () => {
+        const student = { testCheck: { total: 0, passed: 0, failures: [] } };
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'No tests found', keepComment: true });
+    });
+
+    it('scores 0 and flags for manual check when testCheck is absent', () => {
+        expect(handler(map, {})).toEqual({ score: 0, comment: 'NEEDS MANUAL CHECK (no test check data)', keepComment: true });
+    });
+});
+
+describe('run_check handler', () => {
+    const handler = getHandler('run_check');
+    const map = { maxScore: 3 };
+
+    it('gives maxScore when the program ran and matched expectations', () => {
+        const student = { runtimeCheck: { success: true, errors: [] } };
+        expect(handler(map, student)).toEqual({ score: 3, comment: 'Program ran and matched expected output' });
+    });
+
+    it('scores 0 with the failure detail when the program check fails', () => {
+        const student = { runtimeCheck: { success: false, errors: ['Exited with code 1'] } };
+        const result = handler(map, student);
+        expect(result.score).toBe(0);
+        expect(result.comment).toBe('Exited with code 1');
+        expect(result.keepComment).toBe(true);
     });
 });
 

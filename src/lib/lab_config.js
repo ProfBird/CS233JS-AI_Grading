@@ -321,6 +321,10 @@ const MAPPING_TYPES = [
     { label: 'scripts_check',         value: 'scripts_check',         desc: 'Verifies dev/build/test scripts are defined; runs build and test for errors' },
     { label: 'env_file_check',        value: 'env_file_check',        desc: 'Checks that a .env file with at least one KEY=VALUE pair was submitted; flags for manual review when not found (normal if gitignored)' },
     { label: 'path_exists',           value: 'path_exists',           desc: 'Full credit if any file whose path matches pathPattern exists in the repo; use for "file created" checks' },
+    { label: 'run_check',             value: 'run_check',             desc: 'Builds/interprets and runs the program directly; checks stdout against expected patterns (non-web languages)' },
+    { label: 'test_check',            value: 'test_check',            desc: 'Runs the language\'s test runner (pytest/dotnet test/CTest); scores proportionally to tests passed' },
+    { label: 'package_usage',         value: 'package_usage',         desc: 'Language-neutral alias of npm_package — checks that a specific package/module is used' },
+    { label: 'manifest_check',        value: 'manifest_check',        desc: 'Language-neutral alias of package_check — checks the dependency manifest for required/forbidden entries' },
 ];
 
 const MAPPING_TYPE_SCHEMA = {
@@ -489,6 +493,10 @@ function assembleConfig(existingConfig, responses) {
     setOrDelete(config, 'titleCell',   opt.titleCell);
     setOrDelete(config, 'summaryCell', opt.summaryCell);
     setOrDelete(config, 'graderCell',  opt.graderCell);
+    // Omit language entirely for the "javascript" default — keeps existing/new plain-JS
+    // lab configs unchanged even when the wizard is re-run on them (language is only
+    // written when the user actually picked something else).
+    setOrDelete(config, 'language', responses.language && responses.language !== 'javascript' ? responses.language : '');
     config.runtimeCheck = responses.runtimeCheck;
     config.mappings     = responses.mappings;
 

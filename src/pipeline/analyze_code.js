@@ -12,28 +12,14 @@ import { execFileSync } from 'child_process';
 import { pathToFileURL } from 'url';
 import { walk, toPosix } from '../lib/file_walker.js';
 import xlsx from '../lib/xlsx.js';
+import jsAdapter from '../adapters/javascript.js';
+import { resolveAdapter } from '../adapters/index.js';
 
 const ANALYSIS_REPORT = 'analysis_report.json';
 
-// Strip single-line (//) and multi-line (/* */) comments from JS source.
-// Preserves string/template literal contents to avoid stripping // inside URLs, etc.
-// NOTE: block comments are stripped first to prevent apostrophes in JSDoc comments
-// (e.g. "user's") from being mistakenly treated as the start of a string literal.
-function stripComments(code) {
-    // Step 1: strip /* */ block comments first (unambiguous delimiters)
-    code = code.replace(/\/\*[\s\S]*?\*\//g, '');
-    // Step 2: protect string literals
-    const strings = [];
-    code = code.replace(/(['"`])((?:\\[\s\S]|(?!\1)[^\\])*?)\1/g, match => {
-        strings.push(match);
-        return `\x00${strings.length - 1}\x00`;
-    });
-    // Step 3: strip single-line comments
-    code = code.replace(/\/\/[^\n]*/g, '');
-    // Step 4: restore string literals
-    code = code.replace(/\x00(\d+)\x00/g, (_, i) => strings[+i]);
-    return code;
-}
+// Comment-stripping is language-specific (adapter.stripComments); re-exported here,
+// delegating to the JS adapter, for backward compatibility with existing callers/tests.
+const stripComments = code => jsAdapter.stripComments(code);
 
 function escapeRegex(word) {
     return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -69,26 +55,30 @@ function evalMatchNode(node, contents, featId) {
     return contents.some(c => re.test(c));
 }
 
-function countFeatures(allFiles, configFeatures) {
+// adapter defaults to the JS adapter so existing 2-arg callers (config-driven feature
+// detection on a JS lab, and tests) are unaffected; other languages pass their adapter explicitly.
+function countFeatures(allFiles, configFeatures, adapter = jsAdapter) {
     const counts = {};
     if (!configFeatures) return counts;
     configFeatures.forEach(f => { counts[f.id] = 0; });
+
+    const isSourceFile = f => adapter.sourceExtensions.some(ext => f.toLowerCase().endsWith(ext));
 
     for (const feat of configFeatures) {
         const fileFilter = feat.fileRegex
             // Normalize to forward slashes so path-segment patterns (e.g. "src/")
             // match on Windows, where file paths are backslash-separated.
             ? f => new RegExp(feat.fileRegex).test(toPosix(f))
-            : f => f.toLowerCase().endsWith('.js');
+            : isSourceFile;
         const filesToSearch = allFiles.filter(fileFilter);
 
-        // Read each searched file once; strip comments from .js so neither match counting
-        // nor boolean match-evaluation sees commented-out code.
+        // Read each searched file once; strip comments from source files so neither match
+        // counting nor boolean match-evaluation sees commented-out code.
         const contents = [];
         for (const file of filesToSearch) {
             let content;
             try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
-            contents.push(file.toLowerCase().endsWith('.js') ? stripComments(content) : content);
+            contents.push(isSourceFile(file) ? adapter.stripComments(content) : content);
         }
 
         if (feat.match) {
@@ -260,8 +250,6 @@ function detectPartsPresent(extractedDir, config, partGameNames) {
     return result;
 }
 
-const KNOWN_PKG_SECTIONS = new Set(['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']);
-
 // Common words that appear in many app names and are not useful for distinguishing variations.
 const VARIATION_KEYWORD_STOPWORDS = new Set(['web', 'page', 'app', 'list', 'tool', 'maker', 'mini', 'lite', 'plus']);
 
@@ -421,114 +409,6 @@ function checkRepoHygiene(extractedDir, hygiene) {
     return { passed: found.length === 0, foundDirs: found };
 }
 
-function extractUsedPackages(extractedDir, pkgJsonPaths) {
-    const exclusions = ['node_modules', 'dist', '.git'];
-    const allFiles = getAllFiles(extractedDir, exclusions);
-    const sourceFiles = allFiles.filter(f => /\.(js|mjs|cjs|jsx|ts|tsx)$/.test(f));
-
-    const used = new Set();
-
-    function normalizePkgName(raw) {
-        if (raw.startsWith('@')) return raw.split('/').slice(0, 2).join('/');
-        return raw.split('/')[0];
-    }
-
-    // Patterns that capture a package specifier (not a relative path)
-    const patterns = [
-        /\bfrom\s+['"]([^'"./][^'"]*)['"]/g,           // import ... from 'pkg'
-        /\bimport\s+['"]([^'"./][^'"]*)['"]/g,          // import 'pkg' (side-effect)
-        /\bimport\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/g, // import('pkg') dynamic
-        /\brequire\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/g, // require('pkg')
-    ];
-
-    for (const file of sourceFiles) {
-        try {
-            const content = fs.readFileSync(file, 'utf8');
-            for (const re of patterns) {
-                re.lastIndex = 0;
-                let m;
-                while ((m = re.exec(content)) !== null) {
-                    used.add(normalizePkgName(m[1]));
-                }
-            }
-        } catch (e) { /* skip unreadable files */ }
-    }
-
-    // Also treat the first token in each package.json script as a used CLI tool.
-    // This covers tools like "vite", "vitest", "eslint" that are invoked but not imported.
-    for (const pkgPath of pkgJsonPaths) {
-        try {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-            for (const scriptVal of Object.values(pkg.scripts || {})) {
-                const tokens = String(scriptVal).trim().split(/\s+/);
-                // skip "npx" / "node" prefixes and pick the actual tool name
-                let toolIdx = 0;
-                if (tokens[toolIdx] === 'npx' || tokens[toolIdx] === 'node') toolIdx++;
-                if (tokens[toolIdx]) used.add(normalizePkgName(tokens[toolIdx]));
-            }
-        } catch (e) { /* skip */ }
-    }
-
-    return used;
-}
-
-function checkPackageJson(extractedDir, packageCheckConfig) {
-    const allFiles = getAllFiles(extractedDir, ['node_modules', 'dist', '.git']);
-    const pkgFiles = allFiles.filter(f => path.basename(f) === 'package.json');
-
-    if (pkgFiles.length === 0) {
-        return { found: false, passed: false, issues: ['package.json not found'] };
-    }
-
-    const parsed = [];
-    for (const f of pkgFiles) {
-        try {
-            parsed.push({ path: f, pkg: JSON.parse(fs.readFileSync(f, 'utf8')) });
-        } catch (e) { /* skip unparseable */ }
-    }
-
-    if (parsed.length === 0) {
-        return { found: true, passed: false, issues: ['package.json could not be parsed'] };
-    }
-
-    const issues = [];
-    const allSections = [...KNOWN_PKG_SECTIONS];
-
-    for (const [section, packages] of Object.entries(packageCheckConfig)) {
-        if (!KNOWN_PKG_SECTIONS.has(section) || !Array.isArray(packages)) continue;
-        const wrongSections = allSections.filter(s => s !== section);
-
-        for (const pkgName of packages) {
-            const inCorrect = parsed.some(({ pkg }) => pkg[section] && pkgName in pkg[section]);
-            if (inCorrect) continue;
-
-            const inWrong = wrongSections.find(s => parsed.some(({ pkg }) => pkg[s] && pkgName in pkg[s]));
-            if (inWrong) {
-                issues.push(`"${pkgName}" is in ${inWrong} but should be in ${section}`);
-            } else {
-                issues.push(`"${pkgName}" not found in package.json`);
-            }
-        }
-    }
-
-    // Check for extra packages declared in package.json but never imported or used as CLI tools.
-    const allowedExtras = new Set(Array.isArray(packageCheckConfig.allowedExtras) ? packageCheckConfig.allowedExtras : []);
-    const usedPackages = extractUsedPackages(extractedDir, pkgFiles);
-
-    for (const { pkg } of parsed) {
-        for (const section of KNOWN_PKG_SECTIONS) {
-            if (!pkg[section]) continue;
-            for (const pkgName of Object.keys(pkg[section])) {
-                if (!usedPackages.has(pkgName) && !allowedExtras.has(pkgName)) {
-                    issues.push(`extra package "${pkgName}" in ${section} is never imported`);
-                }
-            }
-        }
-    }
-
-    return { found: true, passed: issues.length === 0, issues };
-}
-
 /**
  * Custom analyzer extension point. Invokes a lab's custom analyzer and merges its
  * returned object into the analysis. A throwing analyzer is logged and skipped
@@ -549,6 +429,8 @@ function applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student)
 
 export default async function(students, config, labDir, configDir = null) {
     console.log("--- Analysis Phase ---");
+
+    const adapter = resolveAdapter(config);
 
     const rubricPath = config.rubricName
         ? path.join(configDir || labDir, config.rubricName)
@@ -637,7 +519,7 @@ export default async function(students, config, labDir, configDir = null) {
 
         const jsFiles = allExtractedFiles.filter(f => {
             const lf = f.toLowerCase();
-            return (lf.endsWith('.js') || lf.endsWith('.mjs')) && !lf.includes('node_modules') && !lf.includes('dist');
+            return adapter.sourceExtensions.some(ext => lf.endsWith(ext)) && !lf.includes('node_modules') && !lf.includes('dist');
         });
 
         const nameParts = student.name.toLowerCase().split(/\s+/);
@@ -655,7 +537,7 @@ export default async function(students, config, labDir, configDir = null) {
         });
 
         // Whole-repo feature counts — used by feature-type mappings in generate_grades
-        const wholeCounts = countFeatures(allExtractedFiles, config.analysis && config.analysis.features);
+        const wholeCounts = countFeatures(allExtractedFiles, config.analysis && config.analysis.features, adapter);
         Object.assign(analysis.features, wholeCounts);
 
         // Per-part feature counts
@@ -665,7 +547,7 @@ export default async function(students, config, labDir, configDir = null) {
                 const partDir = findPartDir(student.extractedDir, gameNames, part.folderPattern);
                 if (partDir) {
                     const partFiles = getAllFiles(partDir, exclusions);
-                    analysis.partFeatures[part.id] = countFeatures(partFiles, config.analysis && config.analysis.features);
+                    analysis.partFeatures[part.id] = countFeatures(partFiles, config.analysis && config.analysis.features, adapter);
                     const featureLog = (config.analysis && config.analysis.features || []).map(f =>
                         `${f.id}=${analysis.partFeatures[part.id][f.id] || 0}`
                     ).join(', ');
@@ -685,18 +567,21 @@ export default async function(students, config, labDir, configDir = null) {
             applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student);
         }
 
-        if (config.packageCheck) {
-            analysis.packageCheck = checkPackageJson(student.extractedDir, config.packageCheck);
+        if (config.packageCheck && adapter.checkManifest) {
+            analysis.packageCheck = adapter.checkManifest(student.extractedDir, config.packageCheck);
             if (!analysis.packageCheck.passed) {
                 console.log(`    ${student.name} package.json: ${analysis.packageCheck.issues.join('; ')}`);
             }
         }
 
-        // Always extract npm packages used in source code (for npm_package handler)
-        {
+        // Always extract used packages/modules in source code (for npm_package handler),
+        // when the adapter supports the concept (some languages have no such notion).
+        if (adapter.extractUsedPackages) {
             const allFiles = getAllFiles(student.extractedDir, ['node_modules', 'dist', '.git']);
             const pkgFiles = allFiles.filter(f => path.basename(f) === 'package.json');
-            analysis.npmPackages = [...extractUsedPackages(student.extractedDir, pkgFiles)].sort();
+            analysis.npmPackages = [...adapter.extractUsedPackages(student.extractedDir, pkgFiles)].sort();
+        } else {
+            analysis.npmPackages = [];
         }
 
         if (config.repoHygiene) {

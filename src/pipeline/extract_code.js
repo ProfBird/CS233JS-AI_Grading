@@ -14,6 +14,13 @@ import AdmZip from 'adm-zip';
 const CODE_DIR = 'extracted_code';
 const REPO_DIR = 'repo';
 
+// Default URL categories to look for in a student's onlinetext.html — overridable via
+// config.urlPatterns (e.g. a course using GitLab or a different deployment host). Keys
+// become the labels under student.urls; "github" is structurally special (it decides
+// whether the pipeline clones a repo vs. extracts a zip), the rest are just labels
+// consumed by url_check/deploy_check mappings.
+const DEFAULT_URL_PATTERNS = { github: 'github.com', citstudent: 'citstudent.lanecc.edu' };
+
 // Replace spaces and filesystem-unfriendly characters with hyphens for directory/file names.
 const toSafeName = name => name.replace(/[\s/\\:*?"<>|]+/g, '-');
 
@@ -81,10 +88,16 @@ function getStudents(labDir) {
     return Object.values(students);
 }
 
-async function extractUrls(textDir) {
-    if (!textDir) return { citstudent: null, github: null };
+function emptyUrls(urlPatterns) {
+    const urls = {};
+    for (const key of Object.keys(urlPatterns)) urls[key] = null;
+    return urls;
+}
+
+async function extractUrls(textDir, urlPatterns = DEFAULT_URL_PATTERNS) {
+    if (!textDir) return emptyUrls(urlPatterns);
     const textFile = path.join(textDir, 'onlinetext.html');
-    if (!fs.existsSync(textFile)) return { citstudent: null, github: null };
+    if (!fs.existsSync(textFile)) return emptyUrls(urlPatterns);
 
     let content;
     try {
@@ -92,21 +105,24 @@ async function extractUrls(textDir) {
     } catch (e) {
         // Google Drive timeout — skip this student rather than hanging the pipeline
         console.log(`  Warning: timeout reading onlinetext.html for a student (Google Drive may be slow) — skipping`);
-        return { citstudent: null, github: null };
+        return emptyUrls(urlPatterns);
     }
-    const urls = { citstudent: null, github: null };
+    const urls = emptyUrls(urlPatterns);
+    const entries = Object.entries(urlPatterns);
 
     const hrefRegex = /href="(.*?)"/g;
     let m;
     while ((m = hrefRegex.exec(content)) !== null) {
-        if (m[1].includes('citstudent.lanecc.edu')) urls.citstudent = m[1];
-        if (m[1].includes('github.com')) urls.github = m[1];
+        for (const [key, pattern] of entries) {
+            if (m[1].includes(pattern)) urls[key] = m[1];
+        }
     }
 
     const plainUrlRegex = /https?:\/\/[^\s<>"]+/g;
     while ((m = plainUrlRegex.exec(content)) !== null) {
-        if (m[0].includes('citstudent.lanecc.edu') && !urls.citstudent) urls.citstudent = m[0];
-        if (m[0].includes('github.com') && !urls.github) urls.github = m[0];
+        for (const [key, pattern] of entries) {
+            if (m[0].includes(pattern) && !urls[key]) urls[key] = m[0];
+        }
     }
     return urls;
 }
@@ -125,8 +141,8 @@ function extractZip(student, codeDir) {
     }
 }
 
-async function extractStudentCode(student, labDir, repoClonePath) {
-    const urls = await extractUrls(student.textDir);
+async function extractStudentCode(student, labDir, repoClonePath, urlPatterns = DEFAULT_URL_PATTERNS) {
+    const urls = await extractUrls(student.textDir, urlPatterns);
     // Prefer the GitHub repository over a submitted zip when both are present, so the dir is
     // named for the repo (the zip is only used as a fallback if the clone fails).
     const codeDirName = urls.github ? REPO_DIR : CODE_DIR;
@@ -214,8 +230,9 @@ async function extractStudentCode(student, labDir, repoClonePath) {
     return urls;
 }
 
-export default async function(labDir, repoClonePath) {
+export default async function(labDir, repoClonePath, config = {}) {
     console.log("--- Code Acquisition Phase ---");
+    const urlPatterns = { ...DEFAULT_URL_PATTERNS, ...(config.urlPatterns || {}) };
     if (repoClonePath) {
         try {
             fs.mkdirSync(repoClonePath, { recursive: true });
@@ -231,7 +248,7 @@ export default async function(labDir, repoClonePath) {
 
     for (const student of students) {
         try {
-            const urls = await extractStudentCode(student, labDir, repoClonePath);
+            const urls = await extractStudentCode(student, labDir, repoClonePath, urlPatterns);
             urlsReport[student.name] = urls;
 
             // Ensure student has extractedDir field for downstream

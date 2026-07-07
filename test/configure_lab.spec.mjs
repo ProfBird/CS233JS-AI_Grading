@@ -395,6 +395,22 @@ describe('assembleConfig', () => {
         const config = assembleConfig(null, { extractOnly: true });
         expect(config).toEqual({ extractOnly: true, mappings: [] });
     });
+
+    it('omits language entirely when the wizard selection is the "javascript" default', () => {
+        const config = assembleConfig(null, { ...wizardResponses, language: 'javascript' });
+        expect(config.language).toBeUndefined();
+    });
+
+    it('writes language when the wizard selection is not "javascript"', () => {
+        const config = assembleConfig(null, { ...wizardResponses, language: 'python' });
+        expect(config.language).toBe('python');
+    });
+
+    it('clears a previously-set language when re-run and switched back to javascript', () => {
+        const existing = { rubricName: 'old.xlsm', runtimeCheck: 'browser', language: 'python', mappings: [] };
+        const config = assembleConfig(existing, { ...wizardResponses, language: 'javascript' });
+        expect(config.language).toBeUndefined();
+    });
 });
 
 // ── mergeFeatureDefs ──────────────────────────────────────────────────────

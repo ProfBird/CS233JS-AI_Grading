@@ -1,0 +1,12 @@
+# Shipped default ruff ruleset for student Python labs — kept close to defaults but
+# forgiving of intro-level style noise (line length, missing docstrings). Mirrors the
+# intent of eslint/student.eslint.config.mjs: catch real correctness issues (undefined
+# names, unused imports/vars) without penalizing students for every style nit.
+line-length = 100
+
+[lint]
+# E/W = pycodestyle, F = pyflakes (the correctness-relevant checks), C90 = complexity
+select = ["E", "W", "F", "C90"]
+ignore = [
+    "E501",   # line too long — length is already relaxed above; don't double-penalize
+]

@@ -14,6 +14,7 @@ import path from 'path';
 import { getAvailableModel, generateSummary as ollamaGenerateSummary } from '../lib/ollama_comments.js';
 import { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } from '../lib/rubric_writer.js';
 import { walk, toPosix } from '../lib/file_walker.js';
+import { registerHandler, getHandler, VALID_MAPPING_TYPES } from '../lib/handler_registry.js';
 
 // --- Cell helpers ---
 
@@ -50,26 +51,15 @@ function resolveOutputPath(basePath, graderCell) {
 }
 
 // --- Handler Registry ---
-
-const _registry = new Map();
-const VALID_MAPPING_TYPES = new Set();
-
-/**
- * Register a handler for a mapping type.
- * @param {string} type  — mapping type name (must match "type" in config mappings)
- * @param {function} handlerFn — (map, student) => { score, comment }
- */
-function registerHandler(type, handlerFn) {
-    if (_registry.has(type)) {
-        throw new Error(`Handler "${type}" is already registered`);
-    }
-    _registry.set(type, handlerFn);
-    VALID_MAPPING_TYPES.add(type);
-}
-
-function getHandler(type) {
-    return _registry.get(type);
-}
+// registerHandler/getHandler/VALID_MAPPING_TYPES now live in ../lib/handler_registry.js
+// so bin/grade.js can import just the registry (cheaply, before this module's heavier
+// ollama/rubric_writer dependencies load) to register config.handlerModules BEFORE
+// validateConfig() runs. Wizard-facing metadata (labels/descriptions/field prompts)
+// still lives separately in lib/lab_config.js's MAPPING_TYPES/MAPPING_TYPE_SCHEMA —
+// deliberately not merged in yet; see test/generate_grades.spec.mjs's
+// "mapping-type lists stay in sync" test, which will fail loudly if the two drift.
+// Full metadata consolidation is a documented future step (docs/multi_language_refactor_plan.md
+// Phase 5) — do it the next time the wizard's schema needs to change anyway.
 
 // --- Built-in Handlers ---
 
@@ -152,7 +142,8 @@ registerHandler('url_check', (map, student) => {
 });
 
 registerHandler('deploy_check', async (map, student) => {
-    const url = (student.analysis && student.analysis.urls && student.analysis.urls.citstudent) || '';
+    const urlType = map.urlType || 'citstudent';
+    const url = (student.analysis && student.analysis.urls && student.analysis.urls[urlType]) || '';
     if (!url) {
         return { score: 0, comment: 'No deployment URL provided' };
     }
@@ -196,7 +187,13 @@ registerHandler('deploy_check', async (map, student) => {
         };
     }
 
-    // 2. Check <script> tags for bundling indicators
+    // 2. Check <script> tags for bundling indicators — opt-out via map.checkBundling: false
+    // for courses/labs where "bundled" isn't a meaningful deployment signal.
+    const checkBundling = map.checkBundling !== false;
+    if (!checkBundling) {
+        return { score: map.maxScore, comment: 'URL reachable' };
+    }
+
     const scriptSrcRe = /<script\s[^>]*src\s*=\s*['"]([^'"]+)['"][^>]*>/gi;
     const scripts = [];
     let bundled = false;
@@ -227,7 +224,7 @@ const LINT_TOP_ISSUES = 6;  // how many offending rules to list in the lint comm
 // the top offending rules, e.g. "Good - 5 minor issues (Prefer const: 3, Use ===: 2)").
 function lintResult(map, student) {
     const lint = student.lint || {};
-    if (!(lint.jsFiles > 0)) return { score: 0, comment: 'No JS files to lint' };
+    if (!(lint.sourceFiles > 0)) return { score: 0, comment: 'No source files to lint' };
 
     const severity = map.severity; // 'errors', 'warnings', or undefined (all)
 
@@ -404,6 +401,17 @@ registerHandler('build_and_browser_check', (map, student) => {
     return { score: 0, comment: errors.length ? errors.join('; ') : 'Check failed' };
 });
 
+// run_check: scores the "run_check" runtime-check strategy (build/interpret + execute the
+// artifact directly, matching stdin/stdout expectations) — see runtime_check.js.
+registerHandler('run_check', (map, student) => {
+    const rt = student.runtimeCheck || {};
+    if (rt.success) {
+        return { score: map.maxScore, comment: 'Program ran and matched expected output' };
+    }
+    const errors = rt.errors || [];
+    return { score: 0, comment: errors.length ? errors.join('; ') : 'Program check failed', keepComment: true };
+});
+
 registerHandler('manual', (map, student) => {
     const cr = student.codeReview;
     if (cr && cr.found && cr.items && map._reviewIndex !== undefined && map._reviewIndex < cr.items.length) {
@@ -433,7 +441,10 @@ registerHandler('manual', (map, student) => {
     return { score: map.maxScore ?? '', comment: map.msg || 'NEEDS MANUAL CHECK' };
 });
 
-registerHandler('npm_package', (map, student) => {
+// npm_package: checks that a package/module is imported in source. The underlying logic
+// is language-agnostic (reads analysis.npmPackages, populated per-language by the resolved
+// adapter's extractUsedPackages) — package_usage is a generic alias for non-npm labs.
+const npmPackageHandler = (map, student) => {
     const a = student.analysis || {};
     const excluded = new Set(map.exclude || []);
     const all = a.npmPackages || [];
@@ -445,15 +456,21 @@ registerHandler('npm_package', (map, student) => {
         return { score: 0, comment: `No qualifying packages (found only excluded: ${all.join(', ')})` };
     }
     return { score: 0, comment: 'No npm packages imported' };
-});
+};
+registerHandler('npm_package', npmPackageHandler);
+registerHandler('package_usage', npmPackageHandler);
 
-registerHandler('package_check', (map, student) => {
+// package_check: validates the language adapter's manifest check (analysis.packageCheck,
+// populated by adapter.checkManifest). manifest_check is a generic alias for non-npm labs.
+const packageCheckHandler = (map, student) => {
     const pc = student.analysis && student.analysis.packageCheck;
     if (!pc) return { score: map.maxScore, comment: 'NEEDS MANUAL CHECK (no package.json check data)' };
     if (!pc.found) return { score: 0, comment: 'package.json not found' };
     if (pc.passed) return { score: map.maxScore, comment: 'package.json entries correct' };
     return { score: 0, comment: pc.issues.join('; ') };
-});
+};
+registerHandler('package_check', packageCheckHandler);
+registerHandler('manifest_check', packageCheckHandler);
 
 /**
  * Per-part feature handler — reads from analysis.partFeatures[partId][featureId].
@@ -638,6 +655,28 @@ registerHandler('scripts_check', (map, student) => {
     return { score, comment: parts.join(' | '), keepComment: true };
 });
 
+// test_check: proportional scoring against a language adapter's test-runner results
+// (pytest/dotnet test/CTest — see student.testCheck, attached by runtime_check.js's
+// checkStudentTests). Scores proportionally to tests passed, same pattern as scripts_check.
+registerHandler('test_check', (map, student) => {
+    const tc = student.testCheck;
+    if (!tc) return { score: 0, comment: 'NEEDS MANUAL CHECK (no test check data)', keepComment: true };
+    if (tc.error) return { score: 0, comment: tc.error, keepComment: true };
+    if (!tc.total) return { score: 0, comment: 'No tests found', keepComment: true };
+
+    if (tc.passed === tc.total) {
+        return { score: map.maxScore, comment: `All ${tc.total} tests passed` };
+    }
+
+    const failureList = (tc.failures || []).slice(0, 5).join(', ');
+    const score = Math.round(map.maxScore * tc.passed / tc.total);
+    return {
+        score,
+        comment: `${tc.passed}/${tc.total} tests passed${failureList ? ` (failing: ${failureList})` : ''}`,
+        keepComment: true,
+    };
+});
+
 // --- Mapping types that can produce a score even when code extraction failed ---
 
 // Types that report an extraction error rather than 'N/A' when code could not be obtained.
@@ -656,6 +695,7 @@ function mappingDescription(map) {
         case 'build_check': return 'App builds without errors';
         case 'browser_check': return 'No run-time console errors';
         case 'build_and_browser_check': return 'No build or console errors';
+        case 'run_check': return 'Program runs and produces expected output';
         case 'lint': return 'Style and best practices';
         case 'html_validate': return 'HTML is valid';
         case 'css_validate': return 'CSS is valid';
@@ -667,12 +707,13 @@ function mappingDescription(map) {
         case 'url_check': return 'URL provided';
         case 'apps_in_repo': return 'App(s) in GitHub repository';
         case 'repo_hygiene': return 'Repo hygiene';
-        case 'npm_package': return 'NPM package used';
-        case 'package_check': return 'package.json check';
+        case 'npm_package': case 'package_usage': return 'Package/module used';
+        case 'package_check': case 'manifest_check': return 'Dependency manifest check';
         case 'part_feature': return map.featureId || 'Part feature';
         case 'part_completed': return map.partId || 'Part completed';
         case 'part1_completed': return 'Part 1 completed';
         case 'scripts_check': return `npm scripts: ${(map.scripts || 'dev,build,test')}`;
+        case 'test_check': return 'Automated tests pass';
         case 'env_file_check': return '.env file with API key';
         case 'path_exists': return map.pathPattern ? `File exists: ${map.pathPattern}` : 'File exists check';
         case 'gitignore_check': return map.requiredEntry ? `.gitignore contains ${map.requiredEntry}` : '.gitignore exists';

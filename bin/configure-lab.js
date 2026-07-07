@@ -565,10 +565,20 @@ async function main() {
         tui.print('\n--- Assignment Settings ---');
         const ex           = existingConfig || {};
         const titleText    = await tui.ask('Assignment title', ex.titleText || labName);
+        const languageOpts = [
+            { label: 'javascript', value: 'javascript', desc: 'ESLint + npm install/build (default)' },
+            { label: 'typescript', value: 'typescript', desc: 'typescript-eslint + tsc --noEmit' },
+            { label: 'python',     value: 'python',     desc: 'ruff + py_compile + pytest' },
+            { label: 'cpp',        value: 'cpp',        desc: 'g++/clang compiler diagnostics' },
+            { label: 'csharp',     value: 'csharp',     desc: 'dotnet build/test' },
+        ];
+        const langIdx      = Math.max(0, languageOpts.findIndex(o => o.value === (ex.language || 'javascript')));
+        const language     = await tui.askOptions('Language', languageOpts, langIdx);
         const runtimeOpts  = [
-            { label: 'browser', value: 'browser', desc: 'Puppeteer headless browser' },
-            { label: 'build',   value: 'build',   desc: 'npm install + npm run build' },
-            { label: 'both',    value: 'both',     desc: 'Browser + build' },
+            { label: 'browser',   value: 'browser',   desc: 'Puppeteer headless browser' },
+            { label: 'build',     value: 'build',     desc: 'Install + build (npm/tsc/py_compile/g++/dotnet, per language)' },
+            { label: 'both',      value: 'both',       desc: 'Browser + build' },
+            { label: 'run_check', value: 'run_check', desc: 'Build (if needed) then run the program directly, checking stdout' },
         ];
         const rtIdx        = Math.max(0, runtimeOpts.findIndex(o => o.value === ex.runtimeCheck));
         const runtimeCheck = await tui.askOptions('Runtime check mode', runtimeOpts, rtIdx);
@@ -593,6 +603,7 @@ async function main() {
         const config = assembleConfig(existingConfig, {
             rubricName,
             titleText,
+            language,
             runtimeCheck,
             mappings,
             optional: { titleCell, summaryCell, graderCell },

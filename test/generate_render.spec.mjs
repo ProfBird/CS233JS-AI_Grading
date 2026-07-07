@@ -90,7 +90,7 @@ describe('spreadsheet path', () => {
             urls: { github: 'https://github.com/x/y' },
             extractedDir: '/tmp/x',
             analysis: { features: { arrow: 3 }, partFeatures: { part1: { loops: 2 } } },
-            lint: { jsFiles: 1, errors: 0, warnings: 0, messages: [] },
+            lint: { sourceFiles: 1, errors: 0, warnings: 0, messages: [] },
             codeReview: { found: false, items: [], productionCompleted: false },
         };
         const s = await gradeToSheet(student, config, 'normal.xlsx');
@@ -191,7 +191,7 @@ describe('text report path', () => {
         const student = {
             name: 'Ada',
             analysis: { features: { arrow: 3 }, partFeatures: { part1: { loops: 2 } } },
-            lint: { jsFiles: 1, errors: 0, warnings: 0, messages: [] },
+            lint: { sourceFiles: 1, errors: 0, warnings: 0, messages: [] },
         };
         const txt = await gradeToText(student, config, 'normal_txt.xlsx');
         expect(txt).toContain('GRADE REPORT: Ada');

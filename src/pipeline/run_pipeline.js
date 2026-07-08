@@ -54,7 +54,7 @@ const PHASES = [
     },
     {
         name: 'lintCode',
-        run: (students, config, dirs) => lintCode(students, config, dirs.artifactsDir),
+        run: (students, config, dirs) => lintCode(students, config, dirs.artifactsDir, dirs.labName, dirs.stepName),
         when: () => true,
     },
     {
@@ -116,9 +116,12 @@ async function runPipeline(students, config, dirs, options) {
         console.log(`  Skipping ${alreadyDone.length} already-graded: ${alreadyDone.join(', ')}\n`);
     }
 
+    // Enriched with labName/stepName from options so phases (e.g. lintCode) that need
+    // the assignment/step identity don't have to re-derive it from directory paths.
+    const phaseDirs = { ...dirs, labName: options.labName, stepName: options.stepName };
     for (const phase of PHASES) {
         if (!phase.when(config)) continue;
-        await phase.run(toGrade, config, dirs);
+        await phase.run(toGrade, config, phaseDirs);
     }
 
     let generateSummary;

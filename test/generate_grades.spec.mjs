@@ -789,10 +789,16 @@ describe('code_review handler', () => {
 describe('url_check handler', () => {
     const handler = getHandler('url_check');
 
-    it('returns NEEDS CHECK with url when present', () => {
+    it('awards maxScore as a placeholder pending manual review when url is present', () => {
+        const map = { urlType: 'citstudent', maxScore: 5 };
+        const student = { analysis: { urls: { citstudent: 'https://citstudent.lanecc.edu/~user/lab' } } };
+        expect(handler(map, student)).toEqual({ score: 5, comment: 'NEEDS CHECK: https://citstudent.lanecc.edu/~user/lab' });
+    });
+
+    it('falls back to a numeric 0 (not "") when maxScore is missing — every results[] score must be a number', () => {
         const map = { urlType: 'citstudent' };
         const student = { analysis: { urls: { citstudent: 'https://citstudent.lanecc.edu/~user/lab' } } };
-        expect(handler(map, student)).toEqual({ score: '', comment: 'NEEDS CHECK: https://citstudent.lanecc.edu/~user/lab' });
+        expect(handler(map, student)).toEqual({ score: 0, comment: 'NEEDS CHECK: https://citstudent.lanecc.edu/~user/lab' });
     });
 
     it('returns 0 when urlType not found', () => {
@@ -1010,9 +1016,9 @@ describe('manual handler', () => {
         expect(handler(map, {})).toEqual({ score: 8, comment: 'NEEDS MANUAL CHECK (Game works correctly)' });
     });
 
-    it('returns empty score when maxScore is null', () => {
+    it('falls back to a numeric 0 (not "") when maxScore is missing — every results[] score must be a number', () => {
         const map = { msg: 'Check this' };
-        expect(handler(map, {})).toEqual({ score: '', comment: 'Check this' });
+        expect(handler(map, {})).toEqual({ score: 0, comment: 'Check this' });
     });
 
     it('returns default message when no msg', () => {

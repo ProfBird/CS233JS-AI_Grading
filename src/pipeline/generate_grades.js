@@ -136,7 +136,7 @@ registerHandler('url_check', (map, student) => {
     const a = student.analysis || {};
     const url = a.urls && a.urls[map.urlType];
     if (url) {
-        return { score: map.maxScore ?? '', comment: `NEEDS CHECK: ${url}` };
+        return { score: map.maxScore ?? 0, comment: `NEEDS CHECK: ${url}` };
     }
     return { score: 0, comment: `No ${map.urlType} URL provided` };
 });
@@ -438,7 +438,7 @@ registerHandler('manual', (map, student) => {
             return { score, comment };
         }
     }
-    return { score: map.maxScore ?? '', comment: map.msg || 'NEEDS MANUAL CHECK' };
+    return { score: map.maxScore ?? 0, comment: map.msg || 'NEEDS MANUAL CHECK' };
 });
 
 // npm_package: checks that a package/module is imported in source. The underlying logic
@@ -729,7 +729,10 @@ function* partFeatureMaps(config) {
     }
 }
 
-const num = v => (v != null ? v : 0);
+// Every score in results[] must be a number (formatTextReport()'s totalScore += r.score
+// would otherwise silently string-concatenate a stray '' or NaN into the total). Coerces
+// any non-finite/non-number value to 0 defensively, not just null/undefined.
+const num = v => (Number.isFinite(v) ? v : 0);
 
 // Returns the grader-authored stock comment for a mapping at the given score, or null
 // when none applies. Manual rows are exempt (a human still grades them), and missing
@@ -739,6 +742,14 @@ function stockCommentFor(map, score) {
     const max  = map.maxScore || 0;
     const tier = (max > 0 && score >= max) ? 'full' : (score <= 0 ? 'zero' : 'partial');
     return map.stockComments[tier] || null;
+}
+
+// Appends one rendered result — the shape shared by every results[] entry regardless of
+// which of computeResults' four push sites produced it (extraction-error mappings,
+// extraction-error part-features, normal mappings, normal part-features). Coerces score
+// through num() here so callers can't reintroduce a non-numeric score (see num()'s doc).
+function pushResult(results, { desc, score, maxScore, comment, cell, commentCell, linkCell, linkUrlType }) {
+    results.push({ desc, score: num(score), maxScore: maxScore || 0, comment, cell, commentCell, linkCell, linkUrlType });
 }
 
 /**
@@ -755,20 +766,20 @@ async function computeResults(student, config) {
     // underlying error; everything else (including part features) is marked N/A.
     if (analysis.extractionError) {
         for (const map of config.mappings) {
-            results.push({
+            pushResult(results, {
                 desc: mappingDescription(map),
                 score: 0,
-                maxScore: map.maxScore || 0,
+                maxScore: map.maxScore,
                 comment: isCodeSourceType(map) ? `ERROR: ${analysis.extractionError}` : 'N/A (code unavailable)',
                 cell: map.cell,
                 commentCell: map.commentCell
             });
         }
         for (const { part, fc } of partFeatureMaps(config)) {
-            results.push({
+            pushResult(results, {
                 desc: fc.featureId || `${part.id} feature`,
                 score: 0,
-                maxScore: fc.maxScore || 0,
+                maxScore: fc.maxScore,
                 comment: 'N/A (code unavailable)',
                 cell: fc.cell,
                 commentCell: fc.commentCell
@@ -799,10 +810,10 @@ async function computeResults(student, config) {
         const stock = stockCommentFor(map, num(score));
         if (stock !== null && !keepComment) comment = stock;
 
-        results.push({
+        pushResult(results, {
             desc: mappingDescription(map),
-            score: num(score),
-            maxScore: map.maxScore || 0,
+            score,
+            maxScore: map.maxScore,
             comment,
             cell: map.cell,
             commentCell: map.commentCell,
@@ -825,10 +836,10 @@ async function computeResults(student, config) {
                 failMsg: fc.failMsg
             };
             const result = await partFeatureHandler(virtualMap, student);
-            results.push({
+            pushResult(results, {
                 desc: fc.featureId || `${part.id} feature`,
-                score: num(result.score),
-                maxScore: fc.maxScore || 0,
+                score: result.score,
+                maxScore: fc.maxScore,
                 comment: result.comment,
                 cell: fc.cell,
                 commentCell: fc.commentCell

@@ -9,6 +9,10 @@
  *     output shape and the friendly rule-name mapping used in rubric comments
  *   - eslint.config.mjs resolution priority: step-specific > lab-specific > shipped default
  *     (uses scratch folders under the real configs/ dir, cleaned up in afterEach)
+ *
+ * lintCode's labName/stepName are passed in explicitly by the caller (run_pipeline.js,
+ * threading through bin/grade.js's resolved assignment/step names) rather than derived
+ * by climbing up from labDir — see refactoring_plan_2026-07-07.md Priority 3.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
@@ -55,7 +59,7 @@ describe('lintCode phase — zero/skip shapes', () => {
 
     it('produces the zero shape when a student has no extractedDir', async () => {
         student = { name: 'NoCode' };
-        await lintCode([student], {}, labDir);
+        await lintCode([student], {}, labDir, '__LintCharacterizationLab__');
         expect(student.lint).toEqual({ sourceFiles: 0, errors: 0, warnings: 0, messages: [], ruleCounts: {} });
     });
 
@@ -64,7 +68,7 @@ describe('lintCode phase — zero/skip shapes', () => {
         mkdirSync(extractedDir, { recursive: true });
         writeFileSync(join(extractedDir, 'index.html'), '<html></html>');
         student = { name: 'HtmlOnly', extractedDir };
-        await lintCode([student], {}, labDir);
+        await lintCode([student], {}, labDir, '__LintCharacterizationLab__');
         expect(student.lint).toEqual({ sourceFiles: 0, errors: 0, warnings: 0, messages: [], ruleCounts: {} });
     });
 });
@@ -96,7 +100,7 @@ describe('lintCode phase — real ESLint run against the shipped ruleset', () =>
         writeFileSync(join(extractedDir, 'app.js'), code);
         student = { name: 'Buggy', extractedDir };
 
-        await lintCode([student], {}, labDir);
+        await lintCode([student], {}, labDir, '__LintCharacterizationLab__');
 
         expect(student.lint.sourceFiles).toBe(1);
         expect(student.lint.errors).toBe(2);   // no-undef + semi
@@ -114,7 +118,7 @@ describe('lintCode phase — real ESLint run against the shipped ruleset', () =>
     it('reports a clean file as zero errors/warnings', async () => {
         writeFileSync(join(extractedDir, 'clean.js'), 'const x = 1;\nconsole.log(x);\n');
         student = { name: 'Clean', extractedDir };
-        await lintCode([student], {}, labDir);
+        await lintCode([student], {}, labDir, '__LintCharacterizationLab__');
         expect(student.lint.errors).toBe(0);
         expect(student.lint.warnings).toBe(0);
     });
@@ -151,7 +155,7 @@ export default [{
         writeFileSync(join(extractedDir, 'app.js'), 'console.log(notDefined)\n');
 
         const student = { name: 'Default', extractedDir };
-        await lintCode([student], {}, labDir);
+        await lintCode([student], {}, labDir, scratchLabName);
         // Shipped default has no-undef:error and semi:error — both should fire.
         expect(student.lint.errors).toBe(2);
     });
@@ -167,7 +171,7 @@ export default [{
         writeFileSync(join(extractedDir, 'app.js'), 'console.log(notDefined)\n');
 
         const student = { name: 'LabOverride', extractedDir };
-        await lintCode([student], {}, labDir);
+        await lintCode([student], {}, labDir, scratchLabName);
         // Permissive override turns both rules off.
         expect(student.lint.errors).toBe(0);
     });
@@ -183,9 +187,9 @@ export default [{ files: ['**/*.js'], rules: { 'no-undef': 'error' } }];
         mkdirSync(join(CONFIGS_DIR, scratchParentName, scratchLabName), { recursive: true });
         writeFileSync(join(CONFIGS_DIR, scratchParentName, scratchLabName, 'eslint.config.mjs'), permissiveConfig);
 
-        // labDir = <root>/<scratchParentName>/<scratchLabName>/Artifacts so that
-        // labRoot's basename = scratchLabName ("labName") and its parent's basename
-        // = scratchParentName ("parentName"), matching lint_code.js's derivation.
+        // scratchParentName is the real assignment name, scratchLabName is the step —
+        // matching the (labName, stepName) convention run_pipeline.js passes through
+        // from bin/grade.js's resolved names (labName=assignment, stepName=step).
         const labDir = join(root, scratchParentName, scratchLabName, 'Artifacts');
         mkdirSync(labDir, { recursive: true });
         const extractedDir = join(root, 'extracted');
@@ -193,7 +197,7 @@ export default [{ files: ['**/*.js'], rules: { 'no-undef': 'error' } }];
         writeFileSync(join(extractedDir, 'app.js'), 'console.log(notDefined)\n');
 
         const student = { name: 'StepOverride', extractedDir };
-        await lintCode([student], {}, labDir);
+        await lintCode([student], {}, labDir, scratchParentName, scratchLabName);
         expect(student.lint.errors).toBe(0);
     });
 });

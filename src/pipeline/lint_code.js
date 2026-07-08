@@ -20,27 +20,31 @@ function getAllJsFiles(dir, exclusions = [], adapter = resolveAdapter({})) {
     return getAllFilesByExt(dir, adapter.sourceExtensions, exclusions);
 }
 
-export default async function(students, config, labDir) {
+export default async function(students, config, labDir, labName, stepName) {
     console.log("--- Linting Phase ---");
 
     const adapter = resolveAdapter(config);
 
-    // labDir is the Artifacts subdir; derive the lab name from one level up
+    // labName/stepName come directly from the caller (bin/grade.js's resolved
+    // assignment/step names, threaded through run_pipeline.js) instead of being
+    // re-derived by climbing up from labDir — see refactoring_plan_2026-07-07.md
+    // Priority 3: path-climbing baked in the codeRoot/Lab/Artifacts (flat) and
+    // codeRoot/Lab/Step/Artifacts (multi-step) layout assumption, silently resolving
+    // the wrong config directory if that layout ever changed.
+    const adapterLabName = stepName || labName;
+    const adapterParentName = stepName ? labName : null;
     const labRoot = path.dirname(labDir);
-    const labName = path.basename(labRoot);
-    // For multi-step labs labRoot is <codeRoot>/{AssignmentName}/{StepName}; parentName = AssignmentName.
-    const parentName = path.basename(path.dirname(labRoot));
 
     // Grader uses a config from inside this repo so that node_modules (globals, etc.) resolve correctly.
     // Priority: per-lab override in configs/{Parent}/{Step}/ or configs/{Lab}/ > the shipped default.
     const repoRoot = path.join(import.meta.dirname, '..', '..');
     const configsDir = path.join(repoRoot, 'configs');
     const candidates = adapter.lintConfigCandidates
-        ? adapter.lintConfigCandidates(configsDir, labName, parentName)
+        ? adapter.lintConfigCandidates(configsDir, adapterLabName, adapterParentName)
         : [];
     const lintConfigFile = candidates.find(c => fs.existsSync(c)) || null;
     if (!lintConfigFile && adapter.lintConfigCandidates) {
-        console.warn(`WARNING: No lint config found in configs/${labName}/ or configs/. Linting may fail.`);
+        console.warn(`WARNING: No lint config found in configs/${adapterLabName}/ or configs/. Linting may fail.`);
     }
 
     // Also copy the resolved override into the lab folder so an editor can find it when
@@ -50,7 +54,7 @@ export default async function(students, config, labDir) {
         if (!fs.existsSync(vsCodeCopy)) {
             try {
                 fs.copyFileSync(lintConfigFile, vsCodeCopy);
-                console.log(`  Copied ${path.basename(lintConfigFile)} to ${labName}/ (for editor use)`);
+                console.log(`  Copied ${path.basename(lintConfigFile)} to ${path.basename(labRoot)}/ (for editor use)`);
             } catch (e) { /* non-fatal */ }
         }
     }

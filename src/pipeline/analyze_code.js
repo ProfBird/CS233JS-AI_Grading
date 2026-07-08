@@ -14,6 +14,7 @@ import { walk, toPosix } from '../lib/file_walker.js';
 import xlsx from '../lib/xlsx.js';
 import jsAdapter from '../adapters/javascript.js';
 import { resolveAdapter } from '../adapters/index.js';
+import { checkVersionVariation } from '../lib/variation_detect.js';
 
 const ANALYSIS_REPORT = 'analysis_report.json';
 
@@ -109,7 +110,13 @@ function readGameNamesFromRubric(rubricPath, rubricTitleRow) {
         if (row && row[4]) {
             return row[4].split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
         }
-    } catch (e) { /* skip */ }
+        // rubricTitleRow is always caller-supplied when this function runs (see call
+        // sites), so an empty result here means it's misconfigured — surface it instead
+        // of letting findPartDir() silently fail to match every part.
+        console.warn(`  WARNING: readGameNamesFromRubric: no game names found at row ${rubricTitleRow}, column E of ${rubricPath} — check "rubricTitleRow" in the lab config`);
+    } catch (e) {
+        console.warn(`  WARNING: readGameNamesFromRubric: failed to read ${rubricPath}: ${e.message}`);
+    }
     return [];
 }
 
@@ -250,115 +257,6 @@ function detectPartsPresent(extractedDir, config, partGameNames) {
     return result;
 }
 
-// Common words that appear in many app names and are not useful for distinguishing variations.
-const VARIATION_KEYWORD_STOPWORDS = new Set(['web', 'page', 'app', 'list', 'tool', 'maker', 'mini', 'lite', 'plus']);
-
-/**
- * Derives search keywords from an appName by keeping words that are at least
- * 4 chars long and not in the stopword list.
- * @param {string} appName
- * @returns {string[]} lowercase keywords
- */
-function variationKeywords(appName) {
-    return appName.toLowerCase().split(/\W+/).filter(
-        w => w.length >= 4 && !VARIATION_KEYWORD_STOPWORDS.has(w)
-    );
-}
-
-/**
- * Collects a corpus of searchable text from the repo: HTML title tags,
- * top-level directory names, package.json name fields, and README content.
- * @param {string} extractedDir
- * @returns {string} lowercase combined text
- */
-function buildVariationCorpus(extractedDir) {
-    const parts = [];
-    // Exclude build artifacts, deps, and directory names that mark distributed
-    // starter/template files — they often contain ALL variation keywords and
-    // would pollute the signal. Match on directory-name components only
-    // (checked via path.basename of each directory entry), not full-path substrings,
-    // to avoid incorrectly excluding repos whose root folder happens to contain
-    // one of these words (e.g., a repo named "LCC-CIT CourseMaterials ...").
-    const hardExclusions = new Set(['node_modules', 'dist', '.git']);
-    const nameExclusionPatterns = [/_starter$/i, /_template$/i, /^filestostudents$/i];
-
-    function isExcluded(fullPath) {
-        const segments = fullPath.split(path.sep);
-        return segments.some(seg =>
-            hardExclusions.has(seg) ||
-            nameExclusionPatterns.some(re => re.test(seg))
-        );
-    }
-
-    // Top-level directory and file names
-    try {
-        for (const entry of fs.readdirSync(extractedDir)) {
-            parts.push(entry);
-        }
-    } catch (e) { /* skip */ }
-
-    // HTML title tags (up to 20 HTML files, skipping excluded dirs)
-    const allFiles = getAllFiles(extractedDir).filter(f => !isExcluded(f));
-    const htmlFiles = allFiles.filter(f => f.toLowerCase().endsWith('.html'));
-    for (const f of htmlFiles.slice(0, 20)) {
-        try {
-            const content = fs.readFileSync(f, 'utf8');
-            const m = content.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-            if (m) parts.push(m[1]);
-        } catch (e) { /* skip */ }
-    }
-
-    // package.json name field
-    const pkgFiles = allFiles.filter(f => path.basename(f) === 'package.json');
-    for (const f of pkgFiles.slice(0, 5)) {
-        try {
-            const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
-            if (pkg.name) parts.push(pkg.name);
-            if (pkg.description) parts.push(pkg.description);
-        } catch (e) { /* skip */ }
-    }
-
-    // README (first 1 000 chars)
-    const readmes = allFiles.filter(f => /README/i.test(path.basename(f)));
-    for (const f of readmes.slice(0, 3)) {
-        try {
-            parts.push(fs.readFileSync(f, 'utf8').substring(0, 1000));
-        } catch (e) { /* skip */ }
-    }
-
-    return parts.join(' ').toLowerCase();
-}
-
-/**
- * Detects which lab variation a student implemented by matching keywords
- * from each variation's appName against the code corpus.
- * Only applies when top-level config.variations exists.
- * @param {string} extractedDir
- * @param {Object} variations  config.variations map (letter → { appName })
- * @returns {{ detected: string|null, appName: string|null, scores: Object }}
- */
-function checkVersionVariation(extractedDir, variations) {
-    const corpus = buildVariationCorpus(extractedDir);
-    const scores = {};
-
-    for (const [letter, info] of Object.entries(variations)) {
-        if (!info.appName) continue;
-        const keywords = variationKeywords(info.appName);
-        scores[letter] = keywords.filter(kw => corpus.includes(kw)).length;
-    }
-
-    const best = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-    if (best.length === 0 || best[0][1] === 0) {
-        return { detected: null, appName: null, scores };
-    }
-    // Ambiguous if top two scores are tied (and non-zero)
-    if (best.length > 1 && best[0][1] === best[1][1]) {
-        return { detected: null, appName: null, scores, ambiguous: true };
-    }
-    const letter = best[0][0];
-    return { detected: letter, appName: variations[letter].appName, scores };
-}
-
 function checkRepoHygiene(extractedDir, hygiene) {
     if (!hygiene || !Array.isArray(hygiene.excludedFromRepo)) return null;
 
@@ -373,7 +271,12 @@ function checkRepoHygiene(extractedDir, hygiene) {
                 'git', ['ls-files'],
                 { cwd: extractedDir, stdio: ['ignore', 'pipe', 'ignore'] }
             ).toString();
-        } catch (e) { /* fall through to empty string */ }
+        } catch (e) {
+            // Falls through to empty string (treated as "no tracked files"), but that
+            // silently reports hygiene as passed — warn so a broken git invocation
+            // (missing binary, corrupt repo) isn't mistaken for a clean submission.
+            console.warn(`  WARNING: checkRepoHygiene: "git ls-files" failed in ${extractedDir}: ${e.message}`);
+        }
 
         const trackedPaths = trackedFiles.split(/\r?\n/).filter(Boolean);
         const found = [];
@@ -615,4 +518,4 @@ export default async function(students, config, labDir, configDir = null) {
     console.log(`Created ${ANALYSIS_REPORT} for ${report.length} students.`);
 };
 
-export { stripComments, normalizeDirName, getAllFiles, getSubdirs, checkRepoHygiene, detectPartsPresent, applyCustomAnalyzer, countFeatures };
+export { stripComments, normalizeDirName, getAllFiles, getSubdirs, checkRepoHygiene, detectPartsPresent, applyCustomAnalyzer, countFeatures, readGameNamesFromRubric };

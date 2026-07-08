@@ -245,6 +245,26 @@ describe('text report path', () => {
         expect(txt).toContain('GRADE REPORT: Bob');
         expect(txt).not.toContain('Custom Pipeline');
     });
+
+    it('produces a numeric Total even when a manual/url_check mapping omits maxScore (Priority 2 regression guard)', async () => {
+        // Before the fix, manual/url_check without maxScore returned score: '' — and
+        // totalScore += r.score walked 0 -> 12 -> "12" (12 + '' string-concatenates) ->
+        // "125" (then "12" + 5 concatenates again) instead of summing to 17. Mixing a
+        // maxScore-less manual mapping with numeric ones pins the fix.
+        makeRubric('nomax_total_txt.xlsx');
+        const config = {
+            mappings: [
+                { type: 'feature', featureId: 'arrow', maxScore: 12, cell: 'B5', commentCell: 'C5' },
+                { type: 'manual', msg: 'Check this', cell: 'B6', commentCell: 'C6' }, // no maxScore
+                { type: 'feature', featureId: 'loop', maxScore: 5, cell: 'B7', commentCell: 'C7' },
+            ],
+        };
+        const student = { name: 'Riley', analysis: { features: { arrow: 12, loop: 5 } } };
+        const txt = await gradeToText(student, config, 'nomax_total_txt.xlsx');
+        expect(txt).not.toContain('Total: 125 / 17'); // string-concat corruption would look like this
+        expect(txt).toMatch(/Total: \d+ \/ 17/);
+        expect(txt).toContain('Total: 17 / 17');
+    });
 });
 
 // ── computeResults (shared compute) ────────────────────────────────────────
@@ -262,5 +282,21 @@ describe('computeResults', () => {
         const results = await computeResults({ analysis: {} }, config);
         expect(results[0].score).toBe(0);
         expect(results[0].comment).toBe('ERROR: Unknown mapping type "bogus"');
+    });
+
+    it('a manual mapping with no maxScore yields a numeric score, not "" (Priority 2)', async () => {
+        const config = { mappings: [{ type: 'manual', msg: 'Check this' }] };
+        const results = await computeResults({ analysis: {} }, config);
+        expect(results[0].score).toBe(0);
+        expect(typeof results[0].score).toBe('number');
+        expect(results[0].comment).toBe('Check this');
+    });
+
+    it('a url_check mapping with no maxScore yields a numeric score, not "" (Priority 2)', async () => {
+        const config = { mappings: [{ type: 'url_check', urlType: 'citstudent' }] };
+        const student = { analysis: { urls: { citstudent: 'https://citstudent.lanecc.edu/~user/lab' } } };
+        const results = await computeResults(student, config);
+        expect(results[0].score).toBe(0);
+        expect(typeof results[0].score).toBe('number');
     });
 });

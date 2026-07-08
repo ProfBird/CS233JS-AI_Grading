@@ -22,6 +22,7 @@ const { countFeatures } = await import('../src/pipeline/analyze_code.js');
 
 const {
     buildMappingEntry, copyRubric, promptRubricRows, extensionsToFileRegex,
+    promptFields, promptRubricCriteria,
 } = await import('../src/lib/config_prompts.js');
 
 const {
@@ -294,6 +295,97 @@ describe('promptRubricRows', () => {
     it('returns null when rubric is unreadable and user leaves alternative blank', async () => {
         const driver = mockDriver(['']);
         expect(await promptRubricRows(driver, '/nonexistent/rubric.xlsx')).toBeNull();
+    });
+});
+
+// ── promptRubricCriteria ─────────────────────────────────────────────────
+// config_prompts.js's thin wrapper around lab_config.js's readRubricCriteria — reports
+// the count via driver.print but does not prompt for corrections (criteria are hints).
+
+describe('promptRubricCriteria', () => {
+    it('returns the criteria array unchanged from readRubricCriteria', async () => {
+        const driver = mockDriver([]);
+        const rubric = join(import.meta.dirname, '..', 'configs', 'TermProject', 'DevEnvAndStaticSite', 'CS233JS_TermProjectDevEnv_Rubric.xlsm');
+        const result = await promptRubricCriteria(driver, rubric);
+        expect(result).toEqual(readRubricCriteria(rubric));
+        expect(result.length).toBeGreaterThan(0);
+    });
+
+    it('returns an empty array without prompting when no Rubric sheet/Criteria column exists', async () => {
+        const driver = mockDriver([]); // no answers queued — would throw if promptRubricCriteria asked anything
+        const result = await promptRubricCriteria(driver, LAB04_RUBRIC);
+        expect(result).toEqual([]);
+    });
+});
+
+// ── promptFields ──────────────────────────────────────────────────────────
+// Walks a MAPPING_TYPE_SCHEMA fields array, dispatching to the driver method that
+// matches each field's type (int/options/text) and applying defaults/current values.
+
+describe('promptFields', () => {
+    it('applies askInt for an "int" field, using the field default when no current value', async () => {
+        const fields = [{ key: 'maxScore', prompt: '  Max score [0]: ', type: 'int', default: 0 }];
+        const driver = mockDriver(['7']);
+        const result = await promptFields(driver, fields);
+        expect(result).toEqual({ maxScore: 7 });
+    });
+
+    it('seeds the int prompt default from currentValues over the field default', async () => {
+        const fields = [{ key: 'maxScore', prompt: '  Max score [0]: ', type: 'int', default: 0 }];
+        const driver = mockDriver(['']); // blank answer -> falls back to the def passed to askInt
+        const result = await promptFields(driver, fields, { maxScore: 4 });
+        expect(result).toEqual({ maxScore: 4 });
+    });
+
+    it('applies askOptions for an "options" field and resolves the numbered choice', async () => {
+        const fields = [{
+            key: 'severity', prompt: '  Severity:', type: 'options',
+            options: [{ label: 'Errors', value: 'errors' }, { label: 'Warnings', value: 'warnings' }],
+        }];
+        const driver = mockDriver(['2']);
+        const result = await promptFields(driver, fields);
+        expect(result).toEqual({ severity: 'warnings' });
+    });
+
+    it('defaults the options prompt index from a matching currentValues entry', async () => {
+        const fields = [{
+            key: 'severity', prompt: '  Severity:', type: 'options',
+            options: [{ label: 'Errors', value: 'errors' }, { label: 'Warnings', value: 'warnings' }],
+        }];
+        const driver = mockDriver(['']); // blank -> accept the resolved default index
+        const result = await promptFields(driver, fields, { severity: 'warnings' });
+        expect(result).toEqual({ severity: 'warnings' });
+    });
+
+    it('returns null and stops when a required text field is left empty with no default', async () => {
+        const fields = [{ key: 'pathPattern', prompt: '  Path pattern: ', required: true }];
+        const driver = mockDriver(['']);
+        expect(await promptFields(driver, fields)).toBeNull();
+    });
+
+    it('skips (omits from result) an optional text field left empty with no default', async () => {
+        const fields = [
+            { key: 'maxScore', prompt: '  Max score [0]: ', type: 'int', default: 0 },
+            { key: 'linkCell', prompt: '  Link cell (e.g. F20, or blank): ', optional: true },
+        ];
+        const driver = mockDriver(['3', '']);
+        const result = await promptFields(driver, fields);
+        expect(result).toEqual({ maxScore: 3 });
+        expect(result).not.toHaveProperty('linkCell');
+    });
+
+    it('fills a plain text field from the driver answer', async () => {
+        const fields = [{ key: 'msg', prompt: '  Message: ' }];
+        const driver = mockDriver(['Custom note']);
+        const result = await promptFields(driver, fields);
+        expect(result).toEqual({ msg: 'Custom note' });
+    });
+
+    it('falls back to the currentValues entry when the text answer is blank', async () => {
+        const fields = [{ key: 'msg', prompt: '  Message: ' }];
+        const driver = mockDriver(['']);
+        const result = await promptFields(driver, fields, { msg: 'Existing note' });
+        expect(result).toEqual({ msg: 'Existing note' });
     });
 });
 

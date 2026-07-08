@@ -107,13 +107,17 @@ function friendlyRuleName(ruleId) {
     return ruleId && ruleId.startsWith('-W') ? ruleId.slice(2).replace(/-/g, ' ') : (ruleId || 'error');
 }
 
-// Parses g++/clang SARIF diagnostics (-fdiagnostics-format=sarif-stderr) into the shared
-// Diagnostics shape. Falls back to a minimal shape if the output isn't valid SARIF (e.g.
-// an older compiler that doesn't support the flag) — success/failure still comes from
+// Parses g++/clang SARIF diagnostics (-fdiagnostics-format=sarif-stderr / =sarif) into the
+// shared Diagnostics shape. Falls back to a minimal shape if the output isn't valid SARIF
+// (e.g. an older compiler that doesn't support the flag) — success/failure still comes from
 // the exit code either way, this only affects whether per-rule detail is available.
 function parseSarif(output) {
+    // clang wraps the JSON in plain text (a -Wsarif-format-unstable notice before,
+    // "N warnings generated." after) — parse just the outermost { ... } span.
+    const start = output.indexOf('{'), end = output.lastIndexOf('}');
+    if (start === -1 || end < start) return null;
     let doc;
-    try { doc = JSON.parse(output); } catch (e) { return null; }
+    try { doc = JSON.parse(output.slice(start, end + 1)); } catch (e) { return null; }
     const results = (doc.runs && doc.runs[0] && doc.runs[0].results) || [];
 
     const ruleCounts = {}, errorRuleCounts = {}, warningRuleCounts = {};
@@ -148,9 +152,26 @@ function parseSarif(output) {
 // this instead of merging the two shapes together (Diagnostics.errors is a *count*;
 // the build-result shape's errors is a *string[]* — spreading one into the other would
 // silently clobber whichever came second).
+// GCC and clang spell the SARIF-to-stderr format value differently: GCC 13+ takes
+// "sarif-stderr", clang takes plain "sarif" (and rejects "sarif-stderr" outright, which
+// would fail every compile — notably on macOS, where g++ is clang in disguise). Probe
+// the compiler's --version once and cache the answer per compiler command.
+const sarifFlagCache = new Map();
+async function sarifFormatValue(compiler) {
+    if (!sarifFlagCache.has(compiler)) {
+        let value = 'sarif-stderr';
+        try {
+            const { stdout } = await execFileAsync(compiler, ['--version'], { timeout: 5000 });
+            if (/clang/i.test(stdout)) value = 'sarif';
+        } catch (e) { /* missing compiler is preflight()'s job to report; keep the GCC default */ }
+        sarifFlagCache.set(compiler, value);
+    }
+    return sarifFlagCache.get(compiler);
+}
+
 async function compileLoose(project, config) {
     const compiler = compilerBin(config);
-    const args = ['-std=c++17', '-Wall', '-fdiagnostics-format=sarif-stderr', ...project.sourceFiles, '-o', project.artifactPath];
+    const args = ['-std=c++17', '-Wall', `-fdiagnostics-format=${await sarifFormatValue(compiler)}`, ...project.sourceFiles, '-o', project.artifactPath];
     try {
         const { stderr } = await execFileAsync(compiler, args, { cwd: project.dir, timeout: 20000 });
         // A successful compile can still emit -Wall warnings on stderr with exit code 0.

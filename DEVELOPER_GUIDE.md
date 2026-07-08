@@ -47,11 +47,13 @@ graph TD
         ollama[ollama_comments.js]
         file_walker[file_walker.js]
         handler_registry[handler_registry.js]
+        config_validation[config_validation.js]
         sandbox[sandbox.js]
         lab_config[lab_config.js]
         llm_client[llm_client.js]
         tui[tui.js]
         config_prompts[config_prompts.js]
+        variation_detect[variation_detect.js]
     end
 
     subgraph "External Dependencies"
@@ -83,7 +85,8 @@ graph TD
     %% Config loading
     grade -.-> local_config
     grade -.-> lab_configs
-    grade -.->|handlerModules, before validateConfig| handler_registry
+    grade -.->|validateConfig, loadHandlerModules| config_validation
+    config_validation -.->|handlerModules, before validateConfig| handler_registry
 
     %% Adapter resolution — every language-specific phase resolves an adapter by config.language
     runtime --> adapter_index
@@ -105,6 +108,7 @@ graph TD
     check_names --> file_walker
     lint --> file_walker
     analyze --> file_walker
+    analyze --> variation_detect
     runtime --> sandbox
     configure_lab --> tui
     configure_lab --> lab_config
@@ -408,8 +412,8 @@ acquisition, then hands off to `src/pipeline/run_pipeline.js` for phase orchestr
 - `--reclone` wipes both old-style dirs (inside submission folders) and the `<codeRoot>/<labName>` tree
 - `--regrade` without `--reclone` runs `git pull` on each student's existing repo before re-grading
 - When `labDir` has no direct Moodle submissions but contains subdirs that do (e.g. separate Beta/Production groups), prompts the user to pick which group to grade
-- Loads `config.handlerModules` (external mapping-type handler modules) **before** validating the config — a mapping type registered by one of those modules must already be recognized as valid when `validateConfig()` checks every mapping's `type` against `VALID_MAPPING_TYPES`. This ordering fixed a real bug where handler modules were previously loaded too late (inside `generate_grades.js`, after validation had already run).
-- Validates config on startup — checks required keys, known mapping types (`VALID_MAPPING_TYPES`, sourced from `../lib/handler_registry.js`), runtime-check mode (`VALID_RUNTIME_MODES`, sourced from `runtime_check.js`'s check-strategy registry — new strategies don't require editing the validator), cell reference format, part structure, feature definitions
+- Calls `loadHandlerModules(config, labConfigDir)` (external mapping-type handler modules) **before** validating the config — a mapping type registered by one of those modules must already be recognized as valid when `validateConfig()` checks every mapping's `type` against `VALID_MAPPING_TYPES`. This ordering fixed a real bug where handler modules were previously loaded too late (inside `generate_grades.js`, after validation had already run). Both functions live in `../src/lib/config_validation.js`, not in `bin/grade.js` itself — extracted so they're unit-testable without stubbing `process.exit` (`validateConfig` throws instead; `bin/grade.js` wraps the call in `try/catch` and exits on failure).
+- Validates config on startup via `validateConfig()` — checks required keys, known mapping types (`VALID_MAPPING_TYPES`, sourced from `../lib/handler_registry.js`), runtime-check mode (`VALID_RUNTIME_MODES`, sourced from `runtime_check.js`'s check-strategy registry — new strategies don't require editing the validator), cell reference format, part structure, feature definitions
 - Calls `extractCode(labDir, submissionsDir, config)` directly; for `config.extractOnly` labs, writes the extraction-only log summary and returns without calling `run_pipeline.js` at all
 - Otherwise calls `runPipeline(students, config, dirs, options)`, which filters out already-graded students (unless `--regrade`), runs the phase list, generates grades, and writes `grading_log.txt` — see `run_pipeline.js` below
 
@@ -505,6 +509,7 @@ Regex-based analysis of student source files, driven by the resolved language ad
 - Checks for code review documents
 - `detectPartsPresent()` — scans extracted directory for part subdirectories; auto-detects `part1`, `part2`, etc. even without explicit `parts` config. Results stored in `analysis.partPresence`
 - `config.packageCheck` validation and `analysis.npmPackages` population both delegate to `adapter.checkManifest()` / `adapter.extractUsedPackages()` — both nullable (e.g. `null` for C++, which has no manifest/package concept); when null, `analysis.npmPackages` is simply `[]` and no manifest check runs
+- When `config.variations` is set, delegates to `../lib/variation_detect.js`'s `checkVersionVariation(extractedDir, variations)` — keyword-matches each variation's `appName` against a corpus of repo text and stores the result in `analysis.versionVariation`. Self-contained module, not analyze_code.js's own logic.
 - **Custom analyzer hook** — `config.analysis.customAnalyzer` specifies a JS module (relative to `configs/{AssignmentName}/`) that receives `(jsFiles, analysis, config, student)` and can mutate `analysis` directly. Enables lab-specific checks beyond regex (e.g., Lab02's `modules` feature requires both `import` AND `export`). **Deprecated** — see the Config Schema section; no analyzers currently exist.
 
 ### `lint_code.js` — ESLint Runner

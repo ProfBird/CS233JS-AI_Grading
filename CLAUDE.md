@@ -106,6 +106,7 @@ adapter's `preflight` check upfront, filters out already-graded students (unless
 
 - **src/lib/file_walker.js** — Recursive directory traversal. Exports: `walk(dir, opts)` (core traversal with `visit`, `onFile`, `onDir`, `shouldSkip`, `shouldDescend`, `followSymlinks`, `maxDepth`); `getAllFilesByExt(dir, ext, exclusions)` (collect files by one extension or an array of extensions); `DEFAULT_SKIP_DIRS` (Set of dirs never scanned: `node_modules`, `dist`, `build`, `.git`, `__MACOSX`).
 - **src/lib/handler_registry.js** — The mapping-type handler registry (`registerHandler`, `getHandler`, `VALID_MAPPING_TYPES`), extracted from `generate_grades.js` into its own lightweight module. Wizard-facing metadata (labels/descriptions/field prompts) still lives separately in `lab_config.js`'s `MAPPING_TYPES`/`MAPPING_TYPE_SCHEMA` — deliberately not merged in yet (see `test/generate_grades.spec.mjs`'s "mapping-type lists stay in sync" test, which fails loudly if the two drift; full metadata consolidation is a documented future step for whenever the wizard's schema next needs to change anyway).
+- **src/lib/config_validation.js** — `validateConfig(config, labName)` and `loadHandlerModules(config, labConfigDir)`, extracted out of `bin/grade.js` so they're unit-testable without stubbing `process.exit` (`validateConfig` throws an `Error` on failure instead; `bin/grade.js` catches it and exits). Depends only on `VALID_MAPPING_TYPES` (`handler_registry.js`), `VALID_RUNTIME_MODES` (`runtime_check.js`), and `fs`/`path`/`url` — no CLI/readline machinery.
 - **src/lib/sandbox.js** — `runStudentArtifact()`, the native-code-execution isolation chokepoint. See the "Language adapters" section above.
 - **src/lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
 - **src/lib/ollama_comments.js** — HTTP client for a local Ollama server; generates one-sentence AI rubric summaries.
@@ -113,6 +114,7 @@ adapter's `preflight` check upfront, filters out already-graded students (unless
 - **src/lib/llm_client.js** — Unified LLM client supporting Ollama, OpenRouter, and Anthropic. Used by `configure-lab.js` to generate AI-assisted config drafts. Exports `LLMClient`, `loadLLMClient` (reads provider/key from `local-config.json`), `setupLLMInteractive`, and `selectModel`. Handles HTTP 429 rate-limit retries with fallback model.
 - **src/lib/tui.js** — Terminal UI primitives for `configure-lab.js` wizard (neo-blessed). Provides a scrollable log pane, text input bar, arrow-key option popup, full-screen review table, and spinner. Redirects `console.log`/`console.error` to the TUI pane while active.
 - **src/lib/config_prompts.js** — Driver-based rubric prompt functions shared between the TUI wizard and tests. Implements `promptRubricRows`, `promptRubricCriteria`, `copyRubric`, `promptFields`, and `buildMappingEntry`. Uses a driver interface (`ask`, `askBoolean`, `askInt`, `askOptions`, `print`, `exit`) so the same logic runs in both interactive and test contexts.
+- **src/lib/variation_detect.js** — `checkVersionVariation(extractedDir, variations)` and its helpers (`buildVariationCorpus`, `variationKeywords`, `VARIATION_KEYWORD_STOPWORDS`), extracted out of `analyze_code.js` — self-contained, no dependency on `analyze_code.js`'s per-student state. Keyword-matches each `config.variations` entry's `appName` against a corpus of repo text (top-level names, HTML `<title>`s, `package.json` name/description, README excerpts) to detect which lab variation a student implemented.
 
 ### Config files
 
@@ -181,6 +183,7 @@ AI_Grading/   ← repo root (ESM; "type": "module")
   │   ├── lib/                     # shared utilities used by pipeline phases + wizard
   │   │   ├── file_walker.js
   │   │   ├── handler_registry.js  # mapping-type handler registry (registerHandler/getHandler/VALID_MAPPING_TYPES)
+  │   │   ├── config_validation.js # validateConfig()/loadHandlerModules(), extracted out of bin/grade.js
   │   │   ├── sandbox.js           # runStudentArtifact() — native-code execution isolation chokepoint
   │   │   ├── rubric_writer.js
   │   │   ├── ollama_comments.js
@@ -188,6 +191,7 @@ AI_Grading/   ← repo root (ESM; "type": "module")
   │   │   ├── llm_client.js        # unified LLM client (Ollama / OpenRouter / Anthropic)
   │   │   ├── tui.js               # neo-blessed TUI for the configure-lab wizard
   │   │   ├── config_prompts.js    # driver-based rubric prompt logic (TUI + test shared)
+  │   │   ├── variation_detect.js  # checkVersionVariation() + helpers, extracted out of analyze_code.js
   │   │   └── xlsx.js              # ESM wrapper around the xlsx package
   │   └── analyzers/               # (deprecated; now empty) former per-lab custom analyzers
   ├── configs/

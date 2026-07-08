@@ -91,3 +91,36 @@ describe('extractStudentCode — repo/zip precedence', () => {
         expect(existsSync(join(student.extractedDir, 'FROM_ZIP.txt'))).toBe(true);
     });
 });
+
+describe('extractStudentCode — config-driven urlPatterns', () => {
+    let root;
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), 'urlpatterns-'));
+        vi.mocked(execFileSync).mockReset();
+    });
+    afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+    function makeTextOnlyStudent(name, html) {
+        const textDir = join(root, `${name}_text`);
+        mkdirSync(textDir, { recursive: true });
+        writeFileSync(join(textDir, 'onlinetext.html'), html);
+        return { name, textDir, zipFile: undefined };
+    }
+
+    it('defaults to citstudent/github when no urlPatterns are configured', async () => {
+        const student = makeTextOnlyStudent('Default', '<a href="https://citstudent.lanecc.edu/~jdoe/">site</a>');
+        const outDir = join(root, 'out'); mkdirSync(outDir, { recursive: true });
+        const urls = await extractStudentCode(student, root, outDir);
+        expect(urls.citstudent).toBe('https://citstudent.lanecc.edu/~jdoe/');
+        expect(urls.github).toBeNull();
+    });
+
+    it('recognizes an additional URL type configured via urlPatterns', async () => {
+        const student = makeTextOnlyStudent('Custom', '<a href="https://myapp.up.railway.app/">deploy</a>');
+        const outDir = join(root, 'out'); mkdirSync(outDir, { recursive: true });
+        const urlPatterns = { github: 'github.com', deploy: 'railway.app' };
+        const urls = await extractStudentCode(student, root, outDir, urlPatterns);
+        expect(urls.deploy).toBe('https://myapp.up.railway.app/');
+        expect(urls.citstudent).toBeUndefined(); // not in the configured pattern set
+    });
+});

@@ -27,6 +27,12 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # The python language adapter's tests need ruff/pytest; they're not part of any
+      # npm dependency, so install them explicitly. GitHub-hosted runners already ship
+      # a Python interpreter on all three OSes. C++/C# adapter tests self-skip
+      # (beforeAll + ctx.skip()) if g++/dotnet aren't present on a given runner image,
+      # so no install step is added for those — see DEVELOPER_GUIDE.md's CI section.
+      - run: python -m pip install --disable-pip-version-check ruff pytest
       - run: npm test
 
   lint:

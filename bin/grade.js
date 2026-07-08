@@ -19,16 +19,10 @@ import path from 'path';
 import readline from 'readline';
 import { spawnSync } from 'child_process';
 import extractCode, { CODE_DIR, REPO_DIR } from '../src/pipeline/extract_code.js';
-import analyzeCode from '../src/pipeline/analyze_code.js';
-import lintCode from '../src/pipeline/lint_code.js';
-import validateHtml from '../src/pipeline/validate_html.js';
-import validateCss from '../src/pipeline/validate_css.js';
-import checkNames from '../src/pipeline/check_names.js';
-import runtimeCheck from '../src/pipeline/runtime_check.js';
-import generateGrades, { VALID_MAPPING_TYPES } from '../src/pipeline/generate_grades.js';
-import readCodeReview from '../src/pipeline/read_code_review.js';
+import { runPipeline } from '../src/pipeline/run_pipeline.js';
 
 import { getExistingSteps } from '../src/lib/lab_config.js';
+import { validateConfig, loadHandlerModules } from '../src/lib/config_validation.js';
 
 // This file lives in bin/; course config + the default-config template live at the repo root.
 const REPO_ROOT = path.join(import.meta.dirname, '..');
@@ -40,8 +34,9 @@ const LOG_FILE = 'grading_log.txt';
 // --- Help ---
 
 function showHelp() {
+    const courseCode = (readLocalConfig().courseCode) || 'CS233JS';
     console.log(`
-CS233JS AI Grader v1.0
+${courseCode} AI Grader v1.0
 
 USAGE
   node bin/grade.js [labName] [stepName] [options]
@@ -94,114 +89,6 @@ function hasMoodleSubmissions(dir) {
             f => MOODLE_DIR_PATTERN.test(f) && fs.statSync(path.join(dir, f)).isDirectory()
         );
     } catch (e) { return false; }
-}
-
-// --- Config validation ---
-
-const VALID_RUNTIME_MODES = new Set(['browser', 'build', 'both']);
-
-// Validate that a cell reference looks like "A1" or "AA23"
-function isValidCellRef(ref) {
-    return typeof ref === 'string' && /^[A-Z]+\d+$/.test(ref);
-}
-
-function validateConfig(config, labName) {
-    const errors = [];
-
-    // Extract-only configs need no rubric, runtimeCheck, or mappings
-    if (config.extractOnly === true) {
-        return;
-    }
-
-    if (!config.rubricName || typeof config.rubricName !== 'string') {
-        errors.push(`Missing or invalid "rubricName" (must be a string)`);
-    }
-
-    if (!config.runtimeCheck) {
-        errors.push(`Missing "runtimeCheck" (must be "${[...VALID_RUNTIME_MODES].join('" or "')}")`);
-    } else if (!VALID_RUNTIME_MODES.has(config.runtimeCheck)) {
-        errors.push(`Invalid runtimeCheck "${config.runtimeCheck}" (must be one of: ${[...VALID_RUNTIME_MODES].join(', ')})`);
-    }
-
-    if (!Array.isArray(config.mappings) || config.mappings.length === 0) {
-        errors.push(`Missing or empty "mappings" array`);
-    } else {
-        config.mappings.forEach((map, i) => {
-            const prefix = `mappings[${i}]`;
-            if (!map.type) {
-                errors.push(`${prefix}: missing "type"`);
-            } else if (!VALID_MAPPING_TYPES.has(map.type)) {
-                errors.push(`${prefix}: unknown type "${map.type}"`);
-            }
-            if (map.cell && !isValidCellRef(map.cell)) {
-                errors.push(`${prefix}.cell: "${map.cell}" is not a valid cell reference`);
-            }
-            if (map.commentCell && !isValidCellRef(map.commentCell)) {
-                errors.push(`${prefix}.commentCell: "${map.commentCell}" is not a valid cell reference`);
-            }
-        });
-    }
-
-    if (config.analysis && config.analysis.customAnalyzer && typeof config.analysis.customAnalyzer !== 'string') {
-        errors.push(`"analysis.customAnalyzer" must be a string (file path relative to configs/)`);
-    }
-
-    if (config.analysis && Array.isArray(config.analysis.features)) {
-        config.analysis.features.forEach((feat, i) => {
-            const prefix = `analysis.features[${i}]`;
-            if (!feat.id) errors.push(`${prefix}: missing "id"`);
-            // A feature needs either a single "regex" (counted) or a nested "match"
-            // tree of allOf/anyOf/regex (boolean) — see analyze_code.js evalMatchNode.
-            if (!feat.regex && !feat.match) errors.push(`${prefix}: needs "regex" or "match"`);
-        });
-    }
-
-    if (config.repoHygiene) {
-        if (!config.repoHygiene.excludedFromRepo || !Array.isArray(config.repoHygiene.excludedFromRepo)) {
-            errors.push(`"repoHygiene.excludedFromRepo" must be an array of directory names`);
-        }
-    }
-
-    if (config.packageCheck) {
-        const KNOWN_SECTIONS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
-        for (const [section, packages] of Object.entries(config.packageCheck)) {
-            if (!KNOWN_SECTIONS.includes(section)) {
-                errors.push(`packageCheck: unknown section "${section}" (expected: ${KNOWN_SECTIONS.join(', ')})`);
-            } else if (!Array.isArray(packages)) {
-                errors.push(`packageCheck.${section} must be an array of package names`);
-            }
-        }
-    }
-
-    if (config.codeReview) {
-        if (config.codeReview.studentNameCell && !isValidCellRef(config.codeReview.studentNameCell)) {
-            errors.push(`codeReview.studentNameCell: "${config.codeReview.studentNameCell}" is not a valid cell reference`);
-        }
-        if (config.codeReview.groupCell && !isValidCellRef(config.codeReview.groupCell)) {
-            errors.push(`codeReview.groupCell: "${config.codeReview.groupCell}" is not a valid cell reference`);
-        }
-        if (config.codeReview.manualFallback && !['maxScore', 'zero', 'skip'].includes(config.codeReview.manualFallback)) {
-            errors.push(`codeReview.manualFallback: "${config.codeReview.manualFallback}" must be one of: maxScore, zero, skip`);
-        }
-    }
-
-    if (config.parts) {
-        if (!Array.isArray(config.parts)) {
-            errors.push(`"parts" must be an array`);
-        } else {
-            config.parts.forEach((part, i) => {
-                const prefix = `parts[${i}]`;
-                if (!part.id) errors.push(`${prefix}: missing "id"`);
-            });
-        }
-    }
-
-    if (errors.length > 0) {
-        console.error(`\nERROR: Config validation failed for ${labName}:`);
-        errors.forEach(e => console.error(`  - ${e}`));
-        console.error();
-        process.exit(1);
-    }
 }
 
 // --- Helpers ---
@@ -319,9 +206,14 @@ async function main() {
             .sort();
 
         if (!labName) {
-            console.log('\n╔══════════════════════════════════╗');
-            console.log('║     CS233JS AI Grader v1.0       ║');
-            console.log('╚══════════════════════════════════╝');
+            const courseCode = localConfig.courseCode || 'CS233JS';
+            const title = `${courseCode} AI Grader v1.0`;
+            const boxWidth = Math.max(36, title.length + 6);
+            const pad = boxWidth - 2 - title.length;
+            const leftPad = Math.floor(pad / 2), rightPad = pad - leftPad;
+            console.log(`\n╔${'═'.repeat(boxWidth - 2)}╗`);
+            console.log(`║${' '.repeat(leftPad)}${title}${' '.repeat(rightPad)}║`);
+            console.log(`╚${'═'.repeat(boxWidth - 2)}╝`);
             console.log('  (Run with --help to see all command-line options)\n');
 
             console.log('Available assignments:');
@@ -392,7 +284,18 @@ async function main() {
             console.error(`ERROR: Could not parse config file ${configPath}: ${e.message}`);
             process.exit(1);
         }
-        validateConfig(config, labName);
+        // toolchains (compiler/SDK paths not on the default PATH) are machine-specific, so
+        // they live in local-config.json; a lab config may override individual entries.
+        if (localConfig.toolchains) {
+            config.toolchains = { ...localConfig.toolchains, ...(config.toolchains || {}) };
+        }
+        await loadHandlerModules(config, labConfigDir);
+        try {
+            validateConfig(config, labName);
+        } catch (e) {
+            console.error(`\nERROR: ${e.message}\n`);
+            process.exit(1);
+        }
 
         labDir = path.join(labRoot, labName);
         if (!fs.existsSync(labDir)) {
@@ -645,7 +548,7 @@ async function main() {
     }
 
     // 1. Code Acquisition
-    const students = await extractCode(labDir, submissionsDir);
+    const students = await extractCode(labDir, submissionsDir, config);
 
     // In extract-only mode, skip all checking and grade-generation phases
     if (config.extractOnly) {
@@ -672,94 +575,14 @@ async function main() {
         return;
     }
 
-    // In normal mode, skip students whose grade output already exists
-    let toGrade = students;
-    if (!regrade) {
-        const outputExt = textReport ? '.txt' : (config.rubricName.endsWith('.xlsm') ? '.xlsm' : '.xlsx');
-        const alreadyDone = [];
-        toGrade = students.filter(s => {
-            if (!s.gradeDir) return true;
-            const dirName  = path.basename(s.gradeDir);
-            const gradePath = path.join(s.gradeDir, textReport
-                ? `${dirName}_Grade.txt`
-                : `${dirName}_Grade${outputExt}`);
-            if (fs.existsSync(gradePath)) { alreadyDone.push(s.name); return false; }
-            return true;
-        });
-        if (alreadyDone.length > 0) {
-            console.log(`  Skipping ${alreadyDone.length} already-graded: ${alreadyDone.join(', ')}\n`);
-        }
-    }
-
-    // 2. Runtime Check — attaches to student.runtimeCheck
-    await runtimeCheck(toGrade, config, artifactsDir);
-
-    // 3. Code Review Reading — attaches to student.codeReview (runs before analysis so group letter is available)
-    await readCodeReview(toGrade, config);
-
-    // 4. Analysis — attaches to student.analysis
-    await analyzeCode(toGrade, config, artifactsDir, labConfigDir);
-
-    // 5. Linting — attaches to student.lint
-    await lintCode(toGrade, config, artifactsDir);
-
-    // 5b. HTML / CSS validation — attaches student.htmlValidation / student.cssValidation
-    await validateHtml(toGrade, config, artifactsDir);
-    await validateCss(toGrade, config, artifactsDir);
-
-    // 5c. File/folder name legality — attaches student.nameCheck
-    await checkNames(toGrade, config, artifactsDir);
-
-    // 6. Generation — reads from student objects
-    let generateSummary;
-    if (!skipRubric) {
-        generateSummary = await generateGrades(toGrade, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir, textReport });
-    } else if (textReport) {
-        generateSummary = await generateGrades(toGrade, config, artifactsDir, { aiComments, aiModel: aiModelFlag, rubricDir: labConfigDir, textReport: true });
-    } else {
-        generateSummary = { successful: [], errors: [] };
-        console.log("--- Grade Generation Phase (skipped) ---\n");
-    }
-
-    // 6. Log Summary
-    console.log("\n--- Creating Log Summary ---");
-    const logLines = [];
-    logLines.push(`Grading Summary for ${labName} [${modeLabel}]`);
-    logLines.push(`Date: ${new Date().toISOString()}`);
-    logLines.push(`===================================`);
-
-    const errors = [];
-    if (generateSummary && generateSummary.errors) {
-        errors.push(...generateSummary.errors);
-    }
-
-    students.forEach(student => {
-        if (student.error) {
-            errors.push({ student: student.name, issue: `Extraction: ${student.error}` });
-        }
-        if (student.analysis && student.analysis.error) {
-            errors.push({ student: student.name, issue: `Analysis: ${student.analysis.error}` });
-        }
-        if (student.runtimeCheck && !student.runtimeCheck.success && student.runtimeCheck.errors && student.runtimeCheck.errors.length > 0) {
-            errors.push({ student: student.name, issue: `Runtime: ${student.runtimeCheck.errors.join(', ')}` });
-        }
-    });
-
-    const successfulStudents = generateSummary ? generateSummary.successful : [];
-    logLines.push(`\nSuccessfully Graded (${successfulStudents.length}):`);
-    successfulStudents.forEach(s => logLines.push(` - ${s}`));
-
-    logLines.push(`\nIssues Encountered (${errors.length}):`);
-    if (errors.length === 0) {
-        logLines.push(" None! Great job.");
-    } else {
-        errors.forEach(e => logLines.push(` - ${e.student}: ${e.issue}`));
-    }
-
-    const logPath = path.join(artifactsDir, LOG_FILE);
-    fs.writeFileSync(logPath, logLines.join('\n'), 'utf8');
-
-    console.log(`\nAll Done! Summary written to ${logPath}\n`);
+    // Runtime check, code review, analysis, lint, markup validation, name check, grade
+    // generation, and the log summary are all orchestrated by run_pipeline.js.
+    await runPipeline(
+        students,
+        config,
+        { artifactsDir, labConfigDir },
+        { regrade, skipRubric, textReport, aiComments, aiModelFlag, labName, stepName, modeLabel }
+    );
 }
 
 main().catch(err => {

@@ -8,7 +8,12 @@
 
 ## Overview
 
-The AI Grader automates grading of student JavaScript lab submissions for CS233JS. It handles both ZIP uploads and GitHub repository submissions, runs analysis/lint/runtime/validation checks, and fills in rubric spreadsheets with scores and comments.
+The AI Grader automates grading of student lab submissions for CS233JS. It was built
+for JavaScript but also grades TypeScript, Python, C++, and C# assignments — pick the
+language per-lab (see [Choosing a language](#choosing-a-language) below); JavaScript is
+the default, so existing labs need no changes. It handles both ZIP uploads and GitHub
+repository submissions, runs analysis/lint/runtime/validation checks, and fills in
+rubric spreadsheets with scores and comments.
 
 The pipeline is designed for a workflow where some items are auto-graded and others require manual instructor review.
 
@@ -16,16 +21,38 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 
 ## Prerequisites
 
-- **Node.js** v16 or later
+- **Node.js** v20 or later (the grader's CI tooling — vitest 4, eslint 10, puppeteer 24 — and modern syntax like optional chaining / nullish assignment require it; `package.json` declares `"engines": { "node": ">=20" }`)
 - **npm packages** (install once):
   ```
   npm install
   ```
-  This installs `puppeteer`, `xlsx`, `adm-zip`, `mammoth`, `html-validate`, `csstree-validator`, `globals`, `eslint`, and `vitest` (test runner).
+  This installs `puppeteer`, `xlsx`, `adm-zip`, `mammoth`, `html-validate`, `csstree-validator`, `globals`, `eslint`, `typescript`/`@typescript-eslint/*`, and `vitest` (test runner).
 
 - **Git** — required for cloning student repositories
 - **unzip** — required for extracting ZIP submissions (pre-installed on macOS/Linux)
 - **Ollama** (optional) — for AI-generated summary comments (`--ai-comments` flag)
+
+**Only if grading Python/C++/C# labs** — these toolchains aren't npm packages and must
+already be installed on the grading machine:
+- **Python** — a Python 3 interpreter, plus `pip install ruff pytest`
+- **C++** — a compiler (g++ or clang)
+- **C#** — the .NET SDK
+
+If a toolchain isn't on your PATH (e.g. a manually-installed MinGW g++), point at it via
+`toolchains` in `configs/local-config.json` instead of adding it to PATH:
+```json
+{
+  "labRoot": "...", "codeRoot": "...",
+  "toolchains": {
+    "python": "py",
+    "cpp": { "compiler": "C:\\path\\to\\mingw64\\bin\\g++.exe" },
+    "csharp": { "dotnet": "dotnet" }
+  }
+}
+```
+When a lab's toolchain isn't found, the grader prints a one-line warning with an
+actionable hint at the start of that lab's run (rather than failing silently or
+repeating the same failure for every student).
 
 ---
 
@@ -46,27 +73,52 @@ The wizard will:
 2. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm) and copy it into the config directory with the standard naming convention.
 3. Read the rubric's Grade sheet and — using AI (or a heuristic fallback if no model is configured) — **draft a check type for each rubric row**. The types are listed under [Available checks](#available-checks-rubric-mapping-types) below.
 4. Let you **review and edit** the drafted checks before saving: a navigable table where you can change a row's check type, adjust its fields (max score, etc.), or mark a row "graded by hand."
-5. Prompt for the lab title, runtime-check mode (`browser` / `build` / `both`), and the optional summary / grader / title cells, then write `{assignmentname}_config.json`.
+5. Prompt for the lab title, **language** (`javascript` by default; `typescript`/`python`/`cpp`/`csharp` also selectable), runtime-check mode (`browser` / `build` / `both` / `run_check`), and the optional summary / grader / title cells, then write `{assignmentname}_config.json`.
 
 > **`feature` / `match` checks in the wizard:** the AI/heuristic draft won't auto-pick `feature` (a code pattern can't be guessed from a rubric label), but you can choose `feature` for any row during the review/edit step. The wizard then guides you through the detection rule — which files to search (a plain extension list like `js, mjs`, which it turns into the right `fileRegex`), then a **single regex**, or a simple **all-of** (AND) / **any-of** (OR) set of patterns — and writes both the rubric mapping and its `analysis.features[]` definition for you. (Nested OR-of-ANDs rules aren't generated — hand-edit the config for those; custom JS analyzers are **deprecated**, use a `match` check instead.) See [Available checks](#available-checks-rubric-mapping-types).
+
+### Choosing a language
+
+Pick a lab's language in the wizard's assignment-settings step, or by adding
+`"language"` to the config by hand:
+
+| Language | Value | What's used to grade it |
+|---|---|---|
+| JavaScript (default) | `javascript` | ESLint, `npm install`/`npm run build`, headless-Chrome console check |
+| TypeScript | `typescript` | typescript-eslint, `tsc --noEmit` for type errors |
+| Python | `python` | `ruff` for style/correctness, `py_compile` for syntax, `pytest` for tests |
+| C++ | `cpp` | Compiler warnings/errors (g++/clang), direct compile-and-run |
+| C# | `csharp` | `dotnet build`/`dotnet test` |
+
+Omit `"language"` entirely for a JavaScript lab — that's the existing behavior, unchanged.
+
+For non-web languages (Python/C++/C#), consider `runtimeCheck: "run_check"` instead of
+`"browser"`/`"build"`: it builds (if applicable) and then actually runs the program,
+feeding it `runCheck.stdin` and checking its output against `runCheck.expectPatterns`
+(a list of regexes) — this suits a console-program assignment far better than a
+browser-based check. Score it with the `run_check` mapping type. A `test_check` mapping
+type is also available for labs that grade automated tests (pytest/dotnet test), scoring
+proportionally to how many pass.
 
 ### Available checks (rubric mapping types)
 
 Each rubric row in the config is a *mapping* with a `type` that tells the grader what to check, the `cell` / `commentCell` to write, and a `maxScore`. These are the available types — the wizard drafts most of them automatically; the ones marked **config-only** need a pattern you add by hand.
 
-**Code features** — detect language/API usage in the student's `.js`:
+**Code features** — detect language/API usage in the student's source files:
 - `feature` *(config-only)* — counts matches of a `regex` (full credit at `minCount`, default 1), **or** evaluates a boolean `match` rule for checks needing AND/OR of several patterns. Example: `"match": { "allOf": [{ "regex": "import\\s+.*from" }, { "regex": "export\\s+" }] }` requires both import and export; use `"anyOf"` for "any one of these implementations" (e.g. group A/B/C variations). Each pattern's presence is computed across all files, so an `allOf` matches even when its patterns live in different files.
 
 **Code quality & validity:**
-- `lint` — runs ESLint; set `severity: "errors"` (syntax) or `"warnings"` (style). The comment cell gets the actual findings (top issues by frequency), so `stockComments` has no effect on a `lint` row.
+- `lint` — runs the lab's language-specific linter/analyzer (ESLint for JS/TS, `ruff` for Python, compiler warnings for C++/C#); set `severity: "errors"` (syntax) or `"warnings"` (style). The comment cell gets the actual findings (top issues by frequency), so `stockComments` has no effect on a `lint` row.
 - `html_validate` / `css_validate` — validate `.html` / `.css`; partial credit up to a `tolerance` (default 3 errors).
 - `name_check` — file/folder names must be Linux-safe (no spaces/special chars); `tolerance` default 2.
 
-**Build & runtime** (require `runtimeCheck` set accordingly — `"build"`, `"browser"`, or `"both"`):
-- `build_check` — `npm install` + `npm run build` succeeds.
-- `browser_check` — app loads in headless Chrome with no console errors.
+**Build & runtime** (require `runtimeCheck` set accordingly):
+- `build_check` — the lab's build step succeeds (`npm run build` for JS, `tsc --noEmit` for TS, a syntax check for Python, compiling for C++, `dotnet build` for C#).
+- `browser_check` — app loads in headless Chrome with no console errors (JS/TS web labs only).
 - `build_and_browser_check` — both; half credit if only one passes.
-- `scripts_check` — the named npm `scripts` (e.g. `dev,build,preview`) are defined and run.
+- `run_check` — (needs `runtimeCheck: "run_check"`) the program runs and its output matches `runCheck.expectPatterns` — the console-program equivalent of `browser_check`, for Python/C++/C# labs.
+- `test_check` — (needs a `test_check`-supporting lab, e.g. Python/C#) proportional credit for how many automated tests (pytest/dotnet test) pass.
+- `scripts_check` — the named npm scripts (e.g. `dev,build,preview`) are defined and run. JS/TS only — other languages have no npm-style named-script concept.
 
 > **Pick the right `runtimeCheck` mode:** `"browser"` serves the submission's *source* and only suits plain static sites. A Vite/bundled project has bare module imports the browser can't resolve unbuilt, so `"browser"` reports false load failures for it — set `runtimeCheck` to `"build"` (or `"both"` to also browser-check the built `dist/`) for any project with a build step.
 
@@ -78,14 +130,14 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
 - `apps_in_repo` — the app (or all app subfolders) exist in the cloned repo.
 
 **Files & packages:**
-- `package_check` — `package.json` has the required (and not the forbidden) dependencies.
-- `npm_package` — a specific npm package is imported in the code.
+- `package_check` (alias `manifest_check`) — the dependency manifest (`package.json` for JS/TS, `requirements.txt` for Python) has the required (and not the forbidden) dependencies.
+- `npm_package` (alias `package_usage`) — a specific package/module is imported in the code. Use `package_usage` if it reads better for a non-JS lab — same check either way.
 - `env_file_check` — a `.env` file with at least one `KEY=VALUE` was submitted (flags for manual review if absent — normal when gitignored).
 - `path_exists` — any file whose path matches `pathPattern` exists (a "required file was created" check).
 - `part1_completed` / `part_completed` — files for a lab part are present (multi-part labs with named subfolders).
 
 **Deployment & links:**
-- `deploy_check` — fetches the citstudent URL; full credit if live and Vite-bundled, half if live but unbundled, flags for manual review if unreachable.
+- `deploy_check` — fetches the deployment URL (`urlType`, default `citstudent`); full credit if live and bundled, half if live but unbundled (set `checkBundling: false` to skip that check entirely), flags for manual review if unreachable.
 - `url_check` — fetches a submitted URL; full credit on HTTP 200.
 
 **Review & manual:**
@@ -226,13 +278,15 @@ node bin/grade.js TermProject                  # interactive step picker for mul
 
 ## What the Pipeline Does
 
-For each student, the grader runs these phases in order:
+For each student, the grader runs these phases in order. Steps 2, 4, and 5 use whichever
+language's tooling the lab is configured for (JavaScript by default) — see
+[Choosing a language](#choosing-a-language).
 
 1. **Code Acquisition** — unzips `.zip` files or clones GitHub repos
-2. **Runtime Check** — runs `npm install && npm run build` (build mode), opens the app in headless Chrome (browser mode), or both (both mode), depending on the lab config. Also verifies that specified npm scripts (dev/build/preview) run without errors when the config includes a `scripts_check` mapping.
+2. **Runtime Check** — depending on the lab config: builds (`npm run build` / `tsc` / a Python syntax check / compiling / `dotnet build`), opens the app in headless Chrome, does both, or (`run_check`) builds and then actually runs the program, checking its output. Also verifies that specified npm scripts (dev/build/preview) run without errors when the config includes a `scripts_check` mapping, and runs the language's test suite (pytest/dotnet test) when it includes a `test_check` mapping.
 3. **Code Review Reading** — reads the student's `.docx` peer review form to extract per-item scores and the lab group letter (A/B/C)
-4. **Analysis** — scans JavaScript files for required features using regex patterns
-5. **Linting** — runs ESLint to flag code quality issues
+4. **Analysis** — scans the lab's source files for required features using regex patterns
+5. **Linting** — runs the language's linter/analyzer (ESLint for JS/TS, `ruff` for Python, compiler warnings for C++/C#) to flag code quality issues
 6. **HTML Validation** — checks `.html`/`.htm` files for validity using `html-validate` (offline)
 7. **CSS Validation** — checks `.css` files for syntax errors using `csstree-validator` (offline)
 8. **File/Folder Name Check** — flags names with spaces or special characters that would break Linux deploys
@@ -279,9 +333,13 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 
 **Re-cloning a single student:** If a student's repo changes after the initial clone, use `--reclone` to wipe everything and start fresh, or `--regrade` to run `git pull` on existing clones. There's no per-student reclone option.
 
-**ESLint not installed:** Run `npm install` in the `AI_Grading/` directory. ESLint is a devDependency. The student ruleset ships at `eslint/student.eslint.config.mjs` (overridable per-lab via `configs/{Lab}/eslint.config.mjs`); the linter copies the resolved config into each lab folder so VS Code shows the same warnings.
+**ESLint/TypeScript not installed:** Run `npm install` in the `AI_Grading/` directory — ESLint and the TypeScript tooling are both devDependencies. The ESLint config at `eslint/student.eslint.config.mjs` (or `student.typescript.eslint.config.mjs` for TS) must also exist (shared with VS Code).
 
 **HTML/CSS validator not installed:** Run `npm install`. `html-validate` and `csstree-validator` are listed as dependencies and run offline — no network or browser needed.
+
+**Python/C++/C# toolchain not found:** The grader prints a warning with an actionable hint at the start of that lab's run (e.g. "Install a compiler ... and set config.toolchains.cpp.compiler"). See [Prerequisites](#prerequisites) for what to install, and point `configs/local-config.json`'s `toolchains` section at it if it's not on your PATH.
+
+**`run_check` executes student code directly on this machine:** unlike the browser check (sandboxed by Chrome) or `npm run build` (no arbitrary execution), `run_check` compiles/interprets and then *runs* the student's program with your machine's permissions. This is appropriate for grading known students in a classroom setting, not for anonymous or adversarial submissions — see `src/lib/sandbox.js`'s documentation if you need to understand the isolation model in more depth.
 
 **Rubric not found:** If the rubric spreadsheet isn't in `configs/{AssignmentName}/`, the grader will prompt you to provide one or automatically switch to `--text-report` mode (generates `.txt` files instead).
 

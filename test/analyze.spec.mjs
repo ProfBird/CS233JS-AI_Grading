@@ -7,7 +7,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import analyzeCode, { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer, countFeatures } from '../src/pipeline/analyze_code.js';
+import * as fs from 'fs';
+import xlsx from 'xlsx';
+import analyzeCode, { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer, countFeatures, readGameNamesFromRubric } from '../src/pipeline/analyze_code.js';
+
+// The xlsx ESM build does not auto-wire Node's fs; writeFile needs set_fs() first.
+xlsx.set_fs(fs);
 
 // Helper: load a shipped config's analysis.features so tests exercise the real config.
 const loadFeatures = lab => JSON.parse(
@@ -356,5 +361,60 @@ describe('Lab05 c12/c13 features (nested match rules)', () => {
             'ctx.strokeStyle = "black";',
             'ctx.font = "bold 40px Impact, sans-serif";',
         ].join('\n') })).toBe(0);
+    });
+});
+
+// ── readGameNamesFromRubric (silent-failure surfacing, Priority 4) ───────────
+
+describe('readGameNamesFromRubric', () => {
+    let tmpDir, warnSpy;
+
+    beforeEach(() => {
+        tmpDir = mkdtempSync(join(tmpdir(), 'rubric-warn-'));
+        warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        warnSpy.mockRestore();
+        rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function makeRubric(rows) {
+        const sheet = xlsx.utils.aoa_to_sheet(rows);
+        const wb = xlsx.utils.book_new();
+        xlsx.utils.book_append_sheet(wb, sheet, 'Grade');
+        const p = join(tmpDir, 'Rubric.xlsx');
+        xlsx.writeFile(wb, p);
+        return p;
+    }
+
+    it('returns game names from column E of the configured row, no warning', () => {
+        const rows = [[], ['', '', '', '', 'Boneyard Bluff, Skull Skirmish']];
+        const p = makeRubric(rows);
+        expect(readGameNamesFromRubric(p, 2)).toEqual(['boneyard bluff', 'skull skirmish']);
+        expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('warns and returns [] when the configured row has no game names (misconfigured rubricTitleRow)', () => {
+        const rows = [['only column A has data']];
+        const p = makeRubric(rows);
+        expect(readGameNamesFromRubric(p, 1)).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toMatch(/rubricTitleRow/);
+    });
+
+    it('warns and returns [] for a corrupt/unreadable rubric file', () => {
+        // Plain text parses fine as CSV (xlsx auto-detects format), so use bytes that
+        // look like a truncated/corrupt binary container (PK header with no valid zip
+        // body) to force a real parse failure.
+        const p = join(tmpDir, 'Corrupt.xlsx');
+        writeFileSync(p, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff]));
+        expect(readGameNamesFromRubric(p, 1)).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toMatch(/failed to read/);
+    });
+
+    it('returns [] silently when the rubric path does not exist (expected absence)', () => {
+        expect(readGameNamesFromRubric(join(tmpDir, 'nope.xlsx'), 1)).toEqual([]);
+        expect(warnSpy).not.toHaveBeenCalled();
     });
 });

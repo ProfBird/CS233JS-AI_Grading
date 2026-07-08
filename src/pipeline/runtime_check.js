@@ -1,39 +1,53 @@
 /**
  * runtime_check.js
  *
- * Checks student apps for runtime errors using one of three methods:
- *   "browser" — serves source index.html in headless Chrome to capture console errors
- *   "build"   — runs npm install + npm run build
- *   "both"    — runs build first, then opens built dist/ in headless Chrome
+ * Checks student apps for runtime errors using a named check strategy, registered via
+ * registerCheckStrategy() below (mirrors the mapping-handler registry pattern in
+ * generate_grades.js). Built-in strategies:
+ *   "browser"   — serves source index.html in headless Chrome to capture console errors
+ *   "build"     — runs the language adapter's install + build steps
+ *   "both"      — runs build first, then opens built dist/ in headless Chrome
+ *   "run_check" — builds (if applicable) then executes the produced artifact directly,
+ *                 matching stdout against configured patterns. Execution is routed through
+ *                 runStudentArtifact() in ../lib/sandbox.js (the single isolation
+ *                 chokepoint — see that module's header comment for the tier documentation).
+ *                 Safe for JS/Python/trusted-classroom use only under the default "direct"
+ *                 isolation tier, which is NOT a security sandbox.
  *
- * The method is set per-lab in the config via config.runtimeCheck.
+ * The method is set per-lab in the config via config.runtimeCheck. "browser" is generic
+ * (any language that produces a static index.html); "build"/"run_check" and the
+ * scripts_check sub-phase delegate their actual mechanics to the resolved language
+ * adapter (see src/adapters/) so this file no longer hardcodes npm/ESLint specifics.
+ *
  * Attaches results directly to each student object as student.runtimeCheck.
  */
 
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
-import { exec, spawn, execFileSync } from 'child_process';
-import util from 'util';
-const execAsync = util.promisify(exec);
 import { walk } from '../lib/file_walker.js';
-
-// Kill a spawned process and its whole tree, cross-platform. On POSIX we signal
-// the negative PID (the detached process group). Windows has no process groups,
-// so use taskkill /T to walk and terminate the child tree (npm -> node -> vite).
-function killProcessTree(pid) {
-    if (!pid) return;
-    if (process.platform === 'win32') {
-        try { execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch (_) {}
-    } else {
-        try { process.kill(-pid, 'SIGKILL'); }
-        catch (_) { try { process.kill(pid, 'SIGKILL'); } catch (_) {} }
-    }
-}
+import { resolveAdapter } from '../adapters/index.js';
+import { runStudentArtifact } from '../lib/sandbox.js';
 
 const RUNTIME_REPORT = 'runtime_report.json';
 
-// ========== Browser-based check ==========
+// ========== Strategy registry ==========
+
+const _strategies = new Map();
+const VALID_RUNTIME_MODES = new Set();
+
+// Registers a named runtime-check strategy. fn(student, config, ctx) => runtimeCheck result,
+// where ctx = { adapter, browser } (browser is only launched when needsBrowser is true).
+function registerCheckStrategy(name, fn, opts = {}) {
+    _strategies.set(name, { fn, needsBrowser: !!opts.needsBrowser });
+    VALID_RUNTIME_MODES.add(name);
+}
+
+function getCheckStrategy(name) {
+    return _strategies.get(name);
+}
+
+// ========== Browser-based check (generic — not language-specific) ==========
 
 // Loaded on demand (only when a browser check actually runs) so build-only labs
 // don't pay Puppeteer's startup cost. Dynamic import keeps it lazy under ESM.
@@ -183,173 +197,209 @@ async function runBrowserCheck(htmlDirs, browser, baseDir) {
     return { success: allSuccess, errors: allErrors };
 }
 
-// ========== Build-based check ==========
+// ========== Build-based check (delegates project mechanics to the language adapter) ==========
 
-function findPackageJsonDirs(dirPath) {
-    const arrayOfDirs = [];
-    walk(dirPath, {
-        visit: (d, names) => { if (names.includes('package.json')) arrayOfDirs.push(d); },
-        shouldDescend: (full, name) => !name.includes('node_modules') && !name.startsWith('.') && name !== 'dist'
-    });
-    return arrayOfDirs;
+// Kept exported for backward compatibility; defaults to the JS adapter's project detection.
+function findPackageJsonDirs(dirPath, adapter = resolveAdapter({}), config = {}) {
+    return adapter.detectProject(dirPath, config).map(p => p.dir);
 }
 
-async function checkBuild(extractedDir) {
+async function checkBuild(extractedDir, adapter, config) {
     if (!extractedDir || !fs.existsSync(extractedDir)) {
         return { success: false, errors: [] };
     }
-    const packageDirs = findPackageJsonDirs(extractedDir);
-    if (packageDirs.length === 0) {
+    const projects = adapter.detectProject(extractedDir, config);
+    if (projects.length === 0) {
         return { success: false, errors: ['No package.json found'] };
     }
 
     const errors = [];
     let allOk = true;
 
-    for (const pkgDir of packageDirs) {
-        const relDir = path.relative(extractedDir, pkgDir) || 'root';
-        // Remove any committed node_modules/ before installing — committed node_modules
-        // may have missing execute bits on .bin/ symlinks, causing npm run build to fail.
-        const nodeModulesDir = path.join(pkgDir, 'node_modules');
-        if (fs.existsSync(nodeModulesDir)) {
-            try { fs.rmSync(nodeModulesDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+    for (const project of projects) {
+        const relDir = path.relative(extractedDir, project.dir) || 'root';
+
+        if (adapter.install) {
+            const installResult = await adapter.install(project, config);
+            if (!installResult.success) {
+                errors.push(...installResult.errors.map(e => `${relDir}: ${e}`));
+                allOk = false;
+                continue;
+            }
         }
-        try {
-            await execAsync('npm install --no-fund --no-audit --ignore-scripts', { cwd: pkgDir, timeout: 20000 });
-        } catch (err) {
-            errors.push(`${relDir}: npm install failed or timed out`);
-            allOk = false;
-            continue;
-        }
-        try {
-            await execAsync('npm run build', { cwd: pkgDir, timeout: 20000 });
-        } catch (err) {
-            errors.push(`${relDir}: npm run build failed or timed out`);
+
+        const buildResult = await adapter.build(project, config);
+        if (!buildResult.success) {
+            errors.push(...buildResult.errors.map(e => `${relDir}: ${e}`));
             allOk = false;
         }
     }
     return { success: allOk, errors };
 }
 
-// ========== Scripts check ==========
+// ========== run_check: execute the built/interpreted artifact directly ==========
+// Execution is delegated to the runStudentArtifact() chokepoint in ../lib/sandbox.js —
+// see that module for the isolation-tier documentation (direct/restricted-user/container).
+// This strategy never spawns the artifact itself.
+
+registerCheckStrategy('run_check', async (student, config, ctx) => {
+    const { adapter } = ctx;
+    const projects = adapter.detectProject(student.extractedDir, config);
+    if (projects.length === 0) return { success: false, errors: ['No runnable project found'] };
+    const project = projects[0];
+
+    let artifactPath = project.artifactPath;
+    if (!project.runCommand && adapter.build) {
+        const buildResult = await adapter.build(project, config);
+        if (!buildResult.success) return { success: false, errors: buildResult.errors };
+        artifactPath = buildResult.artifactPath || artifactPath;
+    }
+
+    const runCommand = project.runCommand || (artifactPath ? [artifactPath] : null);
+    if (!runCommand) return { success: false, errors: ['No run command available for this project'] };
+
+    const runConfig = config.runCheck || {};
+    const executionConfig = config.execution || {};
+    const result = await runStudentArtifact(runCommand, {
+        mode: executionConfig.mode,
+        stdin: runConfig.stdin || '',
+        timeoutMs: runConfig.timeoutMs || executionConfig.timeoutMs || 10000,
+    });
+
+    const errors = [];
+    if (result.timedOut) errors.push('Program timed out (possible infinite loop or unclosed stdin read)');
+    else if (result.code !== 0) errors.push(`Exited with code ${result.code}${result.stderr ? `: ${result.stderr.trim().slice(0, 300)}` : ''}`);
+
+    for (const pattern of (runConfig.expectPatterns || [])) {
+        if (!new RegExp(pattern).test(result.stdout)) errors.push(`Expected output pattern not found: ${pattern}`);
+    }
+
+    return { success: errors.length === 0, errors, stdout: (result.stdout || '').slice(0, 2000) };
+});
+
+// ========== Scripts check (delegates script execution to the language adapter) ==========
 
 // Scripts that start persistent servers — verify they're defined, never run them.
+// This is pipeline-level policy (which script *names* are unsafe to actually execute),
+// not something the adapter itself has an opinion about.
 const SERVER_SCRIPTS = new Set(['dev', 'start', 'serve', 'watch', 'preview']);
 
-// Runs an npm script in pkgDir using spawn with a detached process group so
-// the entire tree (npm → node → vite, etc.) is reliably killed on timeout.
-function spawnScript(pkgDir, scriptName, timeoutMs) {
-    return new Promise(resolve => {
-        let child;
-        try {
-            // shell:true so "npm" resolves to npm.cmd on Windows (and avoids Node's
-            // EINVAL when spawning a .cmd without a shell). detached:true gives the
-            // child its own process group on POSIX so the whole tree can be killed.
-            child = spawn('npm', ['run', scriptName], { cwd: pkgDir, detached: true, stdio: 'pipe', shell: true });
-        } catch (err) {
-            resolve({ code: null, stdout: '', stderr: err.message, killed: false });
-            return;
-        }
-
-        let stdout = '', stderr = '';
-        if (child.stdout) child.stdout.on('data', d => { stdout += d; });
-        if (child.stderr) child.stderr.on('data', d => { stderr += d; });
-
-        let resolved = false;
-        const done = (code, killed) => {
-            if (resolved) return;
-            resolved = true;
-            clearTimeout(timer);
-            resolve({ code, stdout: stdout.slice(0, 500), stderr: stderr.slice(0, 500), killed: !!killed });
-        };
-
-        const timer = setTimeout(() => {
-            killProcessTree(child.pid);
-            done(null, true);
-        }, timeoutMs);
-
-        child.on('close', code => done(code, false));
-        child.on('error', () => {
-            killProcessTree(child.pid);
-            done(null, false);
-        });
-    });
+// Kept exported for backward compatibility; defaults to the JS adapter.
+async function runNpmScript(pkgDir, scriptName, adapter = resolveAdapter({})) {
+    return adapter.runScript({ dir: pkgDir }, scriptName, { verifyOnly: SERVER_SCRIPTS.has(scriptName) });
 }
 
-// Checks one npm script: { defined, ran, passed, error }.
-// Server scripts are verified as defined only; runnable scripts are actually executed.
-async function runNpmScript(pkgDir, scriptName) {
-    let pkg;
-    try {
-        pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
-    } catch (e) {
-        return { defined: false, ran: false, passed: false, error: 'package.json unreadable' };
-    }
-
-    if (!pkg.scripts || !pkg.scripts[scriptName]) {
-        return { defined: false, ran: false, passed: false, error: `"${scriptName}" not in package.json scripts` };
-    }
-
-    if (SERVER_SCRIPTS.has(scriptName)) {
-        // Can't run a server script safely — just confirm it's defined.
-        return { defined: true, ran: false, passed: true, error: null };
-    }
-
-    const { code, stdout, stderr, killed } = await spawnScript(pkgDir, scriptName, 30000);
-
-    if (code === 0) {
-        return { defined: true, ran: true, passed: true, error: null };
-    }
-
-    if (killed) {
-        // Killed by 30s timeout — likely a watch-mode test runner. If no explicit failure
-        // patterns appear in the output, the scripts ran but were waiting for file changes.
-        const combined = (stdout + stderr).toLowerCase();
-        if (!/\bfail\b|\berror\b|\bnot found\b/.test(combined)) {
-            return { defined: true, ran: true, passed: true, error: null };
-        }
-    }
-
-    const errorText = (stderr + stdout).trim().slice(0, 300) || 'Script exited with error';
-    return { defined: true, ran: true, passed: false, error: errorText };
-}
-
-// Checks a set of npm scripts for a student's extracted code.
-// Installs node_modules first if they're not already present.
-// Returns { scripts: { [name]: { defined, ran, passed, error } } } or { error: string }.
-async function checkStudentScripts(extractedDir, scriptNames) {
+// Checks a set of scripts for a student's extracted code, using the resolved adapter.
+// Installs dependencies first if not already present. Returns
+// { scripts: { [name]: { defined, ran, passed, error } } } or { error: string }.
+async function checkStudentScripts(extractedDir, scriptNames, adapter = resolveAdapter({}), config = {}) {
     if (!extractedDir || !fs.existsSync(extractedDir)) {
         return { error: 'No extracted code directory' };
     }
-    const pkgDirs = findPackageJsonDirs(extractedDir);
-    if (pkgDirs.length === 0) return { error: 'No package.json found' };
+    if (!adapter.runScript) {
+        return { error: `Named scripts are not applicable for the "${adapter.language}" language` };
+    }
+    const projects = adapter.detectProject(extractedDir, config);
+    if (projects.length === 0) return { error: 'No package.json found' };
 
-    const pkgDir = pkgDirs[0];
+    const project = projects[0];
 
-    if (!fs.existsSync(path.join(pkgDir, 'node_modules'))) {
-        try {
-            await execAsync('npm install --no-fund --no-audit --ignore-scripts', { cwd: pkgDir, timeout: 30000 });
-        } catch (e) {
-            return { error: 'npm install failed' };
-        }
+    if (adapter.install && !fs.existsSync(path.join(project.dir, 'node_modules'))) {
+        const installResult = await adapter.install(project, config);
+        if (!installResult.success) return { error: 'npm install failed' };
     }
 
     const scripts = {};
     for (const name of scriptNames) {
-        scripts[name] = await runNpmScript(pkgDir, name);
+        scripts[name] = await adapter.runScript(project, name, { verifyOnly: SERVER_SCRIPTS.has(name) });
     }
     return { scripts };
 }
 
+// ========== Test check (delegates to the language adapter's test runner) ==========
+
+// Runs when at least one test_check mapping is configured and the adapter supports
+// running tests (pytest/dotnet test/CTest — wired up per-language in later phases).
+async function checkStudentTests(extractedDir, adapter, config = {}) {
+    if (!extractedDir) return { error: 'No code extracted' };
+    if (!adapter.runTests) return { error: `Test running is not supported for the "${adapter.language}" language yet` };
+    const projects = adapter.detectProject(extractedDir, config);
+    if (projects.length === 0) return { error: 'No project found' };
+    return adapter.runTests(projects[0], config);
+}
+
+// ========== Built-in strategies ==========
+
+registerCheckStrategy('build', async (student, config, ctx) => {
+    const result = await checkBuild(student.extractedDir, ctx.adapter, config);
+    if (result.success) {
+        console.log(`  OK: ${student.name}: Build successful`);
+    } else {
+        console.log(`  FAIL: ${student.name}: Build failed (${result.errors.join(', ')})`);
+    }
+    return result;
+});
+
+registerCheckStrategy('browser', async (student, config, ctx) => {
+    const htmlDirs = findAllIndexHtmlDirs(student.extractedDir);
+    const result = await runBrowserCheck(htmlDirs, ctx.browser, student.extractedDir);
+    if (result.success) {
+        console.log(`  OK: ${student.name}: No console errors`);
+    } else {
+        console.log(`  FAIL: ${student.name}: ${result.errors.join('; ')}`);
+    }
+    return result;
+}, { needsBrowser: true });
+
+registerCheckStrategy('both', async (student, config, ctx) => {
+    // Build first, then browser-check the built dist/. Build and browser results are
+    // stored as separate fields so that build_check and browser_check mappings can
+    // score them independently.
+    const buildResult = await checkBuild(student.extractedDir, ctx.adapter, config);
+    if (!buildResult.success) {
+        console.log(`  FAIL: ${student.name}: Build failed (${buildResult.errors.join(', ')})`);
+        return {
+            success: false,
+            buildSuccess: false,
+            buildErrors: buildResult.errors,
+            browserSuccess: null,
+            browserErrors: [],
+            errors: buildResult.errors
+        };
+    }
+    const distDirs = findDistIndexHtmlDirs(student.extractedDir);
+    const browserResult = await runBrowserCheck(distDirs, ctx.browser, student.extractedDir);
+    if (browserResult.success) {
+        console.log(`  OK: ${student.name}: Build and browser checks passed`);
+    } else {
+        console.log(`  FAIL: ${student.name}: ${browserResult.errors.join('; ')}`);
+    }
+    return {
+        success: browserResult.success,
+        buildSuccess: true,
+        buildErrors: [],
+        browserSuccess: browserResult.success,
+        browserErrors: browserResult.errors,
+        errors: browserResult.errors
+    };
+}, { needsBrowser: true });
+
 // ========== Main export ==========
 
 export default async function(students, config, labDir) {
+    const adapter = resolveAdapter(config);
     const mode = config.runtimeCheck || 'build';
-    const needsBrowser = mode === 'browser' || mode === 'both';
+    const strategy = getCheckStrategy(mode);
     console.log(`--- Runtime Check Phase (${mode} mode) ---`);
 
-    if (needsBrowser) await loadPuppeteer();
-    if (needsBrowser && !puppeteer) {
+    if (!strategy) {
+        console.error(`  ERROR: Unknown runtimeCheck mode "${mode}". Registered: ${[...VALID_RUNTIME_MODES].join(', ')}`);
+        students.forEach(s => { s.runtimeCheck = { success: false, errors: [`Unknown runtimeCheck mode "${mode}"`] }; });
+        return;
+    }
+
+    if (strategy.needsBrowser) await loadPuppeteer();
+    if (strategy.needsBrowser && !puppeteer) {
         console.error('  ERROR: Puppeteer not installed. Run: npm install puppeteer');
         students.forEach(s => {
             s.runtimeCheck = { success: false, errors: ['Puppeteer not installed'] };
@@ -358,7 +408,7 @@ export default async function(students, config, labDir) {
     }
 
     let browser;
-    if (needsBrowser) {
+    if (strategy.needsBrowser) {
         try {
             browser = await puppeteer.launch({ headless: 'shell' });
         } catch (e) {
@@ -375,62 +425,13 @@ export default async function(students, config, labDir) {
         }
     }
 
+    const ctx = { adapter, browser };
     for (const student of students) {
         if (!student.extractedDir || !fs.existsSync(student.extractedDir) || student.error) {
             student.runtimeCheck = { success: false, errors: [] };
             continue;
         }
-
-        if (mode === 'build') {
-            const result = await checkBuild(student.extractedDir);
-            student.runtimeCheck = result;
-            if (result.success) {
-                console.log(`  OK: ${student.name}: Build successful`);
-            } else {
-                console.log(`  FAIL: ${student.name}: Build failed (${result.errors.join(', ')})`);
-            }
-        } else if (mode === 'browser') {
-            const htmlDirs = findAllIndexHtmlDirs(student.extractedDir);
-            const result = await runBrowserCheck(htmlDirs, browser, student.extractedDir);
-            student.runtimeCheck = result;
-            if (result.success) {
-                console.log(`  OK: ${student.name}: No console errors`);
-            } else {
-                console.log(`  FAIL: ${student.name}: ${result.errors.join('; ')}`);
-            }
-        } else {
-            // "both": build first, then browser-check the built dist/.
-            // Build and browser results are stored as separate fields so that
-            // build_check and browser_check mappings can score them independently.
-            const buildResult = await checkBuild(student.extractedDir);
-            if (!buildResult.success) {
-                student.runtimeCheck = {
-                    success: false,
-                    buildSuccess: false,
-                    buildErrors: buildResult.errors,
-                    browserSuccess: null,
-                    browserErrors: [],
-                    errors: buildResult.errors
-                };
-                console.log(`  FAIL: ${student.name}: Build failed (${buildResult.errors.join(', ')})`);
-            } else {
-                const distDirs = findDistIndexHtmlDirs(student.extractedDir);
-                const browserResult = await runBrowserCheck(distDirs, browser, student.extractedDir);
-                student.runtimeCheck = {
-                    success: browserResult.success,
-                    buildSuccess: true,
-                    buildErrors: [],
-                    browserSuccess: browserResult.success,
-                    browserErrors: browserResult.errors,
-                    errors: browserResult.errors
-                };
-                if (browserResult.success) {
-                    console.log(`  OK: ${student.name}: Build and browser checks passed`);
-                } else {
-                    console.log(`  FAIL: ${student.name}: ${browserResult.errors.join('; ')}`);
-                }
-            }
-        }
+        student.runtimeCheck = await strategy.fn(student, config, ctx);
     }
 
     if (browser) await browser.close();
@@ -452,7 +453,7 @@ export default async function(students, config, labDir) {
                 student.scriptsCheck = { error: 'No code extracted' };
                 continue;
             }
-            student.scriptsCheck = await checkStudentScripts(student.extractedDir, allScriptNames);
+            student.scriptsCheck = await checkStudentScripts(student.extractedDir, allScriptNames, adapter, config);
             const sc = student.scriptsCheck;
             if (sc.error) {
                 console.log(`  FAIL: ${student.name}: ${sc.error}`);
@@ -464,6 +465,26 @@ export default async function(students, config, labDir) {
         }
     }
 
+    // Test check — runs independently of the build/browser mode. Only runs when at
+    // least one test_check mapping is configured.
+    const testCheckMappings = (config.mappings || []).filter(m => m.type === 'test_check');
+    if (testCheckMappings.length > 0) {
+        console.log(`--- Test Check ---`);
+        for (const student of students) {
+            if (!student.extractedDir || student.error) {
+                student.testCheck = { error: 'No code extracted' };
+                continue;
+            }
+            student.testCheck = await checkStudentTests(student.extractedDir, adapter, config);
+            const tc = student.testCheck;
+            if (tc.error) {
+                console.log(`  FAIL: ${student.name}: ${tc.error}`);
+            } else {
+                console.log(`  ${student.name}: ${tc.passed}/${tc.total} tests passed`);
+            }
+        }
+    }
+
     const report = students.map(s => {
         const entry = {
             student:  s.name,
@@ -471,10 +492,14 @@ export default async function(students, config, labDir) {
             errors:   s.runtimeCheck ? s.runtimeCheck.errors  : [],
         };
         if (s.scriptsCheck) entry.scriptsCheck = s.scriptsCheck;
+        if (s.testCheck) entry.testCheck = s.testCheck;
         return entry;
     });
     fs.writeFileSync(path.join(labDir, RUNTIME_REPORT), JSON.stringify(report, null, 2));
     console.log(`Created ${RUNTIME_REPORT} for ${report.length} students.`);
 };
 
-export { findAllIndexHtmlDirs, findDistIndexHtmlDirs, findPackageJsonDirs, runNpmScript, checkStudentScripts };
+export {
+    findAllIndexHtmlDirs, findDistIndexHtmlDirs, findPackageJsonDirs, runNpmScript, checkStudentScripts,
+    registerCheckStrategy, getCheckStrategy, VALID_RUNTIME_MODES, checkStudentTests,
+};

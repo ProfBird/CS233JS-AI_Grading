@@ -247,7 +247,10 @@ registerCheckStrategy('run_check', async (student, config, ctx) => {
     const { adapter } = ctx;
     const projects = adapter.detectProject(student.extractedDir, config);
     if (projects.length === 0) return { success: false, errors: ['No runnable project found'] };
-    const project = projects[0];
+    // Prefer a project the adapter has tagged executable (e.g. csharp.js's OutputType=Exe
+    // check, so a class-library/test project in the same solution isn't picked over the
+    // actual console app); adapters that don't tag this (cpp/python) fall back to [0].
+    const project = projects.find(p => p.executable) || projects[0];
 
     let artifactPath = project.artifactPath;
     if (!project.runCommand && adapter.build) {

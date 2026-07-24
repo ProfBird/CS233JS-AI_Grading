@@ -150,6 +150,13 @@ describe('csharp adapter — detectProject() with a real dotnet SDK', () => {
             const projects = detectProject(root);
             expect(projects.length).toBe(2);
             expect(projects.map(p => p.type)).toEqual(['csproj', 'csproj']);
+
+            // Exactly one of the two is tagged executable — the console app, not the
+            // class library — so runtime_check.js's run_check can pick the right one
+            // instead of whichever happens to be first in the solution.
+            const executableProjects = projects.filter(p => p.executable);
+            expect(executableProjects.length).toBe(1);
+            expect(executableProjects[0].dir).toMatch(/App$/);
         } finally {
             rmSync(root, { recursive: true, force: true });
         }

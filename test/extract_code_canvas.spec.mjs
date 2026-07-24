@@ -83,7 +83,9 @@ describe('importOneSubmission', () => {
     it('errors when an online_upload submission has no attachments', async () => {
         const student = await importOneSubmission(onlineUploadSubmission({ attachments: [] }), join(root, 'out'), {});
         expect(student.error).toMatch(/no attachments/i);
-        expect(student.extractedDir).toBeUndefined();
+        // makeStudent() always sets extractedDir (to null when unavailable) rather than
+        // omitting the key — matches the Moodle acquisition source's shape.
+        expect(student.extractedDir).toBeNull();
     });
 
     it('clones a GitHub link found in an online_text_entry body', async () => {

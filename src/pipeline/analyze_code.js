@@ -10,11 +10,12 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { pathToFileURL } from 'url';
-import { walk, toPosix } from '../lib/file_walker.js';
+import { walk, toPosix, getAllFiles } from '../lib/file_walker.js';
 import xlsx from '../lib/xlsx.js';
 import jsAdapter from '../adapters/javascript.js';
 import { resolveAdapter } from '../adapters/index.js';
 import { checkVersionVariation } from '../lib/variation_detect.js';
+import { runPerStudentPhase, writePhaseReport } from '../lib/per_student_phase.js';
 
 const ANALYSIS_REPORT = 'analysis_report.json';
 
@@ -24,18 +25,6 @@ const stripComments = code => jsAdapter.stripComments(code);
 
 function escapeRegex(word) {
     return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// Collects every file under dirPath. Exclusions are substring matches against
-// the full path, applied to both files and directories. Does not descend into
-// symlinks; does NOT skip dot-dirs unless they match an exclusion.
-function getAllFiles(dirPath, exclusions = []) {
-    const results = [];
-    walk(dirPath, {
-        shouldSkip: full => exclusions.some(ex => toPosix(full).includes(toPosix(ex))),
-        onFile: full => results.push(full)
-    });
-    return results;
 }
 
 // Evaluate a nested match node against the already-read file contents, codebase-wide.
@@ -269,13 +258,14 @@ function checkRepoHygiene(extractedDir, hygiene) {
         try {
             trackedFiles = execFileSync(
                 'git', ['ls-files'],
-                { cwd: extractedDir, stdio: ['ignore', 'pipe', 'ignore'] }
+                { cwd: extractedDir, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }
             ).toString();
         } catch (e) {
-            // Falls through to empty string (treated as "no tracked files"), but that
-            // silently reports hygiene as passed — warn so a broken git invocation
-            // (missing binary, corrupt repo) isn't mistaken for a clean submission.
+            // A broken git invocation (missing binary, corrupt repo, timeout) must not be
+            // mistaken for "no tracked files" -> hygiene passed. Fail closed and flag for
+            // manual review instead of silently awarding a clean-repo score.
             console.warn(`  WARNING: checkRepoHygiene: "git ls-files" failed in ${extractedDir}: ${e.message}`);
+            return { passed: false, foundDirs: [], error: `git ls-files failed: ${e.message}` };
         }
 
         const trackedPaths = trackedFiles.split(/\r?\n/).filter(Boolean);
@@ -317,10 +307,12 @@ function checkRepoHygiene(extractedDir, hygiene) {
  * returned object into the analysis. A throwing analyzer is logged and skipped
  * (analysis is left intact); a non-object return is ignored.
  * @param {function} customAnalyzer — (jsFiles, analysis, config, student) => object|undefined
+ *   May itself be async; the return value is always awaited before merging, so an async
+ *   analyzer's result lands in `analysis` rather than a pending Promise being assigned.
  */
-function applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student) {
+async function applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student) {
     try {
-        const customResults = customAnalyzer(jsFiles, analysis, config, student);
+        const customResults = await customAnalyzer(jsFiles, analysis, config, student);
         if (customResults && typeof customResults === 'object') {
             Object.assign(analysis, customResults);
         }
@@ -331,8 +323,6 @@ function applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student)
 }
 
 export default async function(students, config, labDir, configDir = null) {
-    console.log("--- Analysis Phase ---");
-
     const adapter = resolveAdapter(config);
 
     const rubricPath = config.rubricName
@@ -374,7 +364,11 @@ export default async function(students, config, labDir, configDir = null) {
         }
     }
 
-    students.forEach(student => {
+    // Base analysis shape shared by both a fresh per-student analysis and the
+    // no-code/error fallback — built fresh each call so the zeroed `features` map and
+    // empty `partFeatures`/`partPresence` objects are never shared references between
+    // students (the bug class described in per_student_phase.js's noCodeResult docs).
+    const baseAnalysis = (student) => {
         const analysis = {
             error: null,
             urls: student.urls || {},
@@ -384,30 +378,38 @@ export default async function(students, config, labDir, configDir = null) {
             partFeatures: {},
             partPresence: {}
         };
-
         if (config.analysis && config.analysis.features) {
             config.analysis.features.forEach(feat => {
                 analysis.features[feat.id] = 0;
             });
         }
+        return analysis;
+    };
 
-        if (student.error) {
-            analysis.error = "No code found to analyze.";
-            analysis.extractionError = student.error;
-            student.analysis = analysis;
-            return;
-        }
-
-        if (!student.extractedDir || !fs.existsSync(student.extractedDir)) {
-            analysis.error = "No code found to analyze.";
-            analysis.extractionError = 'Code directory not found';
-            student.analysis = analysis;
-            return;
-        }
-
+    await runPerStudentPhase(students, {
+        name: 'Analysis Phase',
+        attachKey: 'analysis',
+        noCodeResult: (student) => {
+            const analysis = baseAnalysis(student);
+            analysis.error = 'No code found to analyze.';
+            analysis.extractionError = student.error || 'Code directory not found';
+            return analysis;
+        },
+        errorResult: (e, student) => {
+            const analysis = baseAnalysis(student);
+            analysis.error = 'Analysis failed.';
+            analysis.extractionError = e.message;
+            return analysis;
+        },
+        checkStudent: async (student) => {
+        const analysis = baseAnalysis(student);
         const exclusions = ['node_modules', 'dist', '.git'];
         const allExtractedFiles = getAllFiles(student.extractedDir, exclusions);
 
+        // Loose existence check ("did they submit anything review-named"), deliberately
+        // more permissive than read_code_review.js's student.codeReview.found (which
+        // requires a top-level, parseable .docx). See src/lib/student.js's Student typedef
+        // doc for why these two flags are expected to disagree sometimes.
         const checkCodeReview = (fileName) => {
             const basename = path.basename(fileName).toLowerCase();
             if (basename.includes('review') && (basename.endsWith('.docx') || basename.endsWith('.pdf') || basename.endsWith('.txt'))) {
@@ -467,7 +469,7 @@ export default async function(students, config, labDir, configDir = null) {
 
         // Custom analyzer hook — merges additional data into analysis
         if (customAnalyzer) {
-            applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student);
+            await applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student);
         }
 
         if (config.packageCheck && adapter.checkManifest) {
@@ -495,7 +497,7 @@ export default async function(students, config, labDir, configDir = null) {
         }
 
         if (config.variations) {
-            analysis.versionVariation = checkVersionVariation(student.extractedDir, config.variations);
+            analysis.versionVariation = checkVersionVariation(student.extractedDir, config.variations, config.variationExcludeNamePatterns);
             const vv = analysis.versionVariation;
             if (vv.detected) {
                 console.log(`    ${student.name} version: ${vv.detected} (${vv.appName})`);
@@ -506,16 +508,15 @@ export default async function(students, config, labDir, configDir = null) {
             }
         }
 
-        student.analysis = analysis;
+        return analysis;
+        }
     });
 
-    const report = students.map(s => ({
+    writePhaseReport(labDir, ANALYSIS_REPORT, students, s => ({
         student: s.name,
         results: s.analysis || {},
         filesDir: s.filesDir
     }));
-    fs.writeFileSync(path.join(labDir, ANALYSIS_REPORT), JSON.stringify(report, null, 2));
-    console.log(`Created ${ANALYSIS_REPORT} for ${report.length} students.`);
 };
 
 export { stripComments, normalizeDirName, getAllFiles, getSubdirs, checkRepoHygiene, detectPartsPresent, applyCustomAnalyzer, countFeatures, readGameNamesFromRubric };

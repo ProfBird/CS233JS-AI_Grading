@@ -200,8 +200,10 @@ function acquireCode(student, codeDir, urls) {
         if (normalizedUrl) {
             console.log(`  Cloning repo for ${student.name}...`);
             try {
-                // --depth 1 to make cloning faster; SIGKILL ensures hung processes don't freeze the pipeline
-                execFileSync('git', ['clone', '--depth', '1', normalizedUrl, codeDir], { stdio: 'ignore', timeout: 60_000, killSignal: 'SIGKILL' });
+                // --depth 1 to make cloning faster; SIGKILL ensures hung processes don't freeze the pipeline.
+                // stderr is captured (not 'ignore'd) so the catch block's e.stderr branch below
+                // actually has diagnostics to report instead of always falling through to e.message.
+                execFileSync('git', ['clone', '--depth', '1', normalizedUrl, codeDir], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 60_000, killSignal: 'SIGKILL' });
                 student.extractedDir = codeDir;
             } catch (e) {
                 const reason = e.killed ? '(timed out after 60s)' : e.stderr ? e.stderr.toString().trim() : e.message;
@@ -307,4 +309,4 @@ export default async function(labDir, repoClonePath, config = {}) {
     return students; // returns array of augmented student objects
 };
 
-export { CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS, extractStudentCode, extractUrls, acquireCode, applyGithubSubdir, extractZip, normalizeGithubUrl };
+export { CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS, extractStudentCode, extractUrls, acquireCode, applyGithubSubdir, extractZip, normalizeGithubUrl, emptyUrls };

@@ -45,7 +45,7 @@ const PHASES = [
     },
     {
         name: 'readCodeReview',
-        run: (students, config) => readCodeReview(students, config),
+        run: (students, config, dirs) => readCodeReview(students, config, dirs.artifactsDir),
         when: () => true,
     },
     {

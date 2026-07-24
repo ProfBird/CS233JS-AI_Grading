@@ -8,7 +8,9 @@
  *   - a real ESLint run against the shipped student.eslint.config.mjs, verifying the
  *     output shape and the friendly rule-name mapping used in rubric comments
  *   - eslint.config.mjs resolution priority: step-specific > lab-specific > shipped default
- *     (uses scratch folders under the real configs/ dir, cleaned up in afterEach)
+ *     (uses scratch folders under a temp dir, passed via lintCode's configsDirOverride
+ *     param — NOT the real repo configs/ dir, so a killed run can't leave scratch
+ *     course/lab folders behind for getExistingCourses() to pick up as real ones)
  *
  * lintCode's labName/stepName are passed in explicitly by the caller (run_pipeline.js,
  * threading through bin/grade.js's resolved assignment/step names) rather than derived
@@ -20,9 +22,6 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 import lintCode, { getAllJsFiles } from '../src/pipeline/lint_code.js';
-
-const REPO_ROOT = join(import.meta.dirname, '..');
-const CONFIGS_DIR = join(REPO_ROOT, 'configs');
 
 describe('getAllJsFiles', () => {
     let root;
@@ -125,19 +124,21 @@ describe('lintCode phase — real ESLint run against the shipped ruleset', () =>
 });
 
 describe('lintCode phase — eslint.config.mjs resolution priority', () => {
-    let root, scratchLabName, scratchParentName, scratchCourseName;
+    let root, scratchConfigsDir, scratchLabName, scratchParentName, scratchCourseName;
 
     beforeEach(() => {
         root = mkdtempSync(join(tmpdir(), 'lintcfg-'));
+        // A scratch configs/ dir under the temp root, passed via lintCode's
+        // configsDirOverride param — NOT the real repo configs/ tree, so nothing needs
+        // cleaning up there and a killed run can't leave a stray "course" behind.
+        scratchConfigsDir = join(root, 'configs');
+        mkdirSync(scratchConfigsDir, { recursive: true });
         scratchLabName = '__scratch_lint_lab__';
         scratchParentName = '__scratch_lint_parent__';
         scratchCourseName = '__scratch_lint_course__';
     });
     afterEach(() => {
         rmSync(root, { recursive: true, force: true });
-        rmSync(join(CONFIGS_DIR, scratchLabName), { recursive: true, force: true });
-        rmSync(join(CONFIGS_DIR, scratchParentName), { recursive: true, force: true });
-        rmSync(join(CONFIGS_DIR, scratchCourseName), { recursive: true, force: true });
     });
 
     // A config that disables no-undef entirely lets us tell, from the *scoring*, which
@@ -157,14 +158,14 @@ export default [{
         writeFileSync(join(extractedDir, 'app.js'), 'console.log(notDefined)\n');
 
         const student = { name: 'Default', extractedDir };
-        await lintCode([student], {}, labDir, scratchLabName);
+        await lintCode([student], {}, labDir, scratchLabName, null, null, scratchConfigsDir);
         // Shipped default has no-undef:error and semi:error — both should fire.
         expect(student.lint.errors).toBe(2);
     });
 
     it('prefers a lab-specific override over the shipped default', async () => {
-        mkdirSync(join(CONFIGS_DIR, scratchLabName), { recursive: true });
-        writeFileSync(join(CONFIGS_DIR, scratchLabName, 'eslint.config.mjs'), permissiveConfig);
+        mkdirSync(join(scratchConfigsDir, scratchLabName), { recursive: true });
+        writeFileSync(join(scratchConfigsDir, scratchLabName, 'eslint.config.mjs'), permissiveConfig);
 
         const labDir = join(root, scratchLabName, 'Artifacts');
         mkdirSync(labDir, { recursive: true });
@@ -173,21 +174,21 @@ export default [{
         writeFileSync(join(extractedDir, 'app.js'), 'console.log(notDefined)\n');
 
         const student = { name: 'LabOverride', extractedDir };
-        await lintCode([student], {}, labDir, scratchLabName);
+        await lintCode([student], {}, labDir, scratchLabName, null, null, scratchConfigsDir);
         // Permissive override turns both rules off.
         expect(student.lint.errors).toBe(0);
     });
 
     it('prefers a step-specific override over a lab-specific one', async () => {
         // Lab-specific override that would flag the issue (i.e. NOT permissive)...
-        mkdirSync(join(CONFIGS_DIR, scratchLabName), { recursive: true });
-        writeFileSync(join(CONFIGS_DIR, scratchLabName, 'eslint.config.mjs'), `
+        mkdirSync(join(scratchConfigsDir, scratchLabName), { recursive: true });
+        writeFileSync(join(scratchConfigsDir, scratchLabName, 'eslint.config.mjs'), `
 export default [{ files: ['**/*.js'], rules: { 'no-undef': 'error' } }];
 `);
         // ...but the step-specific override (configs/{parent}/{lab}/eslint.config.mjs)
         // should win instead, and it's permissive.
-        mkdirSync(join(CONFIGS_DIR, scratchParentName, scratchLabName), { recursive: true });
-        writeFileSync(join(CONFIGS_DIR, scratchParentName, scratchLabName, 'eslint.config.mjs'), permissiveConfig);
+        mkdirSync(join(scratchConfigsDir, scratchParentName, scratchLabName), { recursive: true });
+        writeFileSync(join(scratchConfigsDir, scratchParentName, scratchLabName, 'eslint.config.mjs'), permissiveConfig);
 
         // scratchParentName is the real assignment name, scratchLabName is the step —
         // matching the (labName, stepName) convention run_pipeline.js passes through
@@ -199,13 +200,13 @@ export default [{ files: ['**/*.js'], rules: { 'no-undef': 'error' } }];
         writeFileSync(join(extractedDir, 'app.js'), 'console.log(notDefined)\n');
 
         const student = { name: 'StepOverride', extractedDir };
-        await lintCode([student], {}, labDir, scratchParentName, scratchLabName);
+        await lintCode([student], {}, labDir, scratchParentName, scratchLabName, null, scratchConfigsDir);
         expect(student.lint.errors).toBe(0);
     });
 
     it('resolves a course-scoped override (configs/{course}/{lab}/eslint.config.mjs) when courseName is passed', async () => {
-        mkdirSync(join(CONFIGS_DIR, scratchCourseName, scratchLabName), { recursive: true });
-        writeFileSync(join(CONFIGS_DIR, scratchCourseName, scratchLabName, 'eslint.config.mjs'), permissiveConfig);
+        mkdirSync(join(scratchConfigsDir, scratchCourseName, scratchLabName), { recursive: true });
+        writeFileSync(join(scratchConfigsDir, scratchCourseName, scratchLabName, 'eslint.config.mjs'), permissiveConfig);
 
         const labDir = join(root, scratchCourseName, scratchLabName, 'Artifacts');
         mkdirSync(labDir, { recursive: true });
@@ -216,12 +217,12 @@ export default [{ files: ['**/*.js'], rules: { 'no-undef': 'error' } }];
         // Without courseName: the course-scoped override isn't found, so the shipped
         // default applies and both rules fire.
         const withoutCourse = { name: 'NoCourseArg', extractedDir };
-        await lintCode([withoutCourse], {}, labDir, scratchLabName);
+        await lintCode([withoutCourse], {}, labDir, scratchLabName, null, null, scratchConfigsDir);
         expect(withoutCourse.lint.errors).toBe(2);
 
         // With courseName: the course-scoped override is found and wins (permissive).
         const withCourse = { name: 'CourseOverride', extractedDir };
-        await lintCode([withCourse], {}, labDir, scratchLabName, null, scratchCourseName);
+        await lintCode([withCourse], {}, labDir, scratchLabName, null, scratchCourseName, scratchConfigsDir);
         expect(withCourse.lint.errors).toBe(0);
     });
 });

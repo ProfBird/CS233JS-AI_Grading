@@ -84,4 +84,21 @@ function getAllFilesByExt(dir, ext, exclusions = []) {
     return results;
 }
 
-export { walk, getAllFilesByExt, DEFAULT_SKIP_DIRS, toPosix };
+// Collects every file under dirPath, skipping (and not descending into) any directory
+// whose name exactly matches an exclusion. Matching is by path *segment*, not substring —
+// an exclusion of "dist" must not falsely exclude a directory named "mydist" or
+// "distutils" (the bug the 6 hand-rolled copies of this function had — some matched by
+// substring, some by segment; this is the correct behavior, consolidated).
+function getAllFiles(dirPath, exclusions = []) {
+    const results = [];
+    walk(dirPath, {
+        shouldSkip: full => {
+            const segments = toPosix(full).split('/');
+            return exclusions.some(ex => segments.includes(ex));
+        },
+        onFile: full => results.push(full)
+    });
+    return results;
+}
+
+export { walk, getAllFiles, getAllFilesByExt, DEFAULT_SKIP_DIRS, toPosix };

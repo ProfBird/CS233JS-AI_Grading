@@ -89,7 +89,10 @@ async function promptRubricCriteria(driver, rubricPath) {
 // Prompts for a rubric file path (up to 3 attempts), suggests a canonical
 // name, and returns { rubricPath, rubricName, ext }.
 
-async function copyRubric(driver, labName, rubricPrefix = 'CS233JS') {
+// rubricPrefix's default is a generic fallback for callers that don't have a course's
+// configured prefix handy (e.g. a direct/test call) — the real interactive path always
+// passes course.rubricPrefix, so this never surfaces in normal use.
+async function copyRubric(driver, labName, rubricPrefix = 'Rubric') {
     driver.print('\n--- Rubric Spreadsheet ---');
     driver.print('  Provide a path to the .xlsx or .xlsm rubric file.');
 

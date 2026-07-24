@@ -18,7 +18,9 @@ import path from 'path';
 import { execFile } from 'child_process';
 import util from 'util';
 const execFileAsync = util.promisify(execFile);
-import { walk, toPosix } from '../lib/file_walker.js';
+import { getAllFiles as sharedGetAllFiles } from '../lib/file_walker.js';
+import { makeCommentStripper } from '../lib/comment_stripper.js';
+import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 
 const SOURCE_EXTENSIONS = ['.cpp', '.cc', '.cxx', '.c++'];
 const HEADER_EXTENSIONS = ['.h', '.hpp', '.hh'];
@@ -37,24 +39,18 @@ function exeName(base) {
 // but ALSO has raw string literals R"delim(...)delim" whose content is arbitrary text —
 // a naive quote-matching regex (as used for JS) would misparse quotes/parens inside one.
 // Raw strings must be protected before the generic string-literal pass runs.
-function stripComments(code) {
-    const strings = [];
-    const protect = re => { code = code.replace(re, m => { strings.push(m); return `\x00${strings.length - 1}\x00`; }); };
-
-    // Block comments first (unambiguous delimiters), same rationale as the JS adapter.
-    code = code.replace(/\/\*[\s\S]*?\*\//g, '');
-
-    // Raw string literals: R"delim(...)delim" — delim is 0-16 chars, excluding
-    // whitespace/parens/backslash per the C++11 grammar.
-    protect(/R"([^\s()\\]{0,16})\(([\s\S]*?)\)\1"/g);
-
-    // Ordinary single/double-quoted strings and char literals (escape-aware).
-    protect(/("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g);
-
-    code = code.replace(/\/\/[^\n]*/g, '');
-    code = code.replace(/\x00(\d+)\x00/g, (_, i) => strings[+i]);
-    return code;
-}
+// Block comments are stripped first (unambiguous delimiters), same rationale as the JS
+// adapter. Raw string literals (R"delim(...)delim" — delim is 0-16 chars, excluding
+// whitespace/parens/backslash per the C++11 grammar) are protected before ordinary
+// single/double-quoted strings and char literals.
+const stripComments = makeCommentStripper({
+    blockComment: /\/\*[\s\S]*?\*\//g,
+    lineComment: /\/\/[^\n]*/g,
+    protectPatterns: [
+        /R"([^\s()\\]{0,16})\(([\s\S]*?)\)\1"/g,
+        /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g,
+    ],
+});
 
 // ---------- File collection ----------
 // Matches exclusions against whole path SEGMENTS ("build" as a directory component), not
@@ -62,15 +58,7 @@ function stripComments(code) {
 // (or, as it turns out, a test fixture named "cppbuild-ok-...") must not be excluded just
 // because "build" appears somewhere in its name.
 function getAllFiles(dirPath, exclusions = DEFAULT_EXCLUSIONS) {
-    const results = [];
-    walk(dirPath, {
-        shouldSkip: full => {
-            const segments = toPosix(full).split('/');
-            return exclusions.some(ex => segments.includes(ex));
-        },
-        onFile: full => results.push(full)
-    });
-    return results;
+    return sharedGetAllFiles(dirPath, exclusions);
 }
 
 // ---------- Project detection ----------
@@ -120,30 +108,12 @@ function parseSarif(output) {
     try { doc = JSON.parse(output.slice(start, end + 1)); } catch (e) { return null; }
     const results = (doc.runs && doc.runs[0] && doc.runs[0].results) || [];
 
-    const ruleCounts = {}, errorRuleCounts = {}, warningRuleCounts = {};
-    let errors = 0, warnings = 0;
-    for (const r of results) {
-        const rule = r.ruleId || 'error';
-        ruleCounts[rule] = (ruleCounts[rule] || 0) + 1;
-        if (r.level === 'warning') {
-            warnings++;
-            warningRuleCounts[rule] = (warningRuleCounts[rule] || 0) + 1;
-        } else {
-            errors++; // "error" and "fatal" both count as errors; "note" isn't emitted as a top-level result
-            errorRuleCounts[rule] = (errorRuleCounts[rule] || 0) + 1;
-        }
-    }
-    const toMessages = counts => Object.entries(counts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([rule, count]) => `${friendlyRuleName(rule)}: ${count}`);
-
-    return {
-        errors, warnings,
-        messages: toMessages(ruleCounts),
-        errorMessages: toMessages(errorRuleCounts),
-        warningMessages: toMessages(warningRuleCounts),
-        ruleCounts,
-    };
+    // "error" and "fatal" both count as errors; "note" isn't emitted as a top-level result.
+    return aggregateDiagnostics(results, {
+        code: r => r.ruleId || 'error',
+        isError: r => r.level !== 'warning',
+        friendlyName: friendlyRuleName,
+    });
 }
 
 // Runs the compiler for a "loose" project and returns BOTH shapes a caller might want:
@@ -169,9 +139,16 @@ async function sarifFormatValue(compiler) {
     return sarifFlagCache.get(compiler);
 }
 
-async function compileLoose(project, config) {
+// `syntaxOnly` runs -fsyntax-only instead of a full compile+link: it produces the same
+// compiler diagnostics without emitting any object file or executable. Used by lint()
+// (see below) so a diagnostics-only pass never links a real artifact into the student's
+// submission directory — link errors (missing main, unresolved symbols) are a build
+// concern, not a lint one, and shouldn't masquerade as lint findings.
+async function compileLoose(project, config, { syntaxOnly = false } = {}) {
     const compiler = compilerBin(config);
-    const args = ['-std=c++17', '-Wall', `-fdiagnostics-format=${await sarifFormatValue(compiler)}`, ...project.sourceFiles, '-o', project.artifactPath];
+    const args = syntaxOnly
+        ? ['-std=c++17', '-Wall', '-fsyntax-only', `-fdiagnostics-format=${await sarifFormatValue(compiler)}`, ...project.sourceFiles]
+        : ['-std=c++17', '-Wall', `-fdiagnostics-format=${await sarifFormatValue(compiler)}`, ...project.sourceFiles, '-o', project.artifactPath];
     try {
         const { stderr } = await execFileAsync(compiler, args, { cwd: project.dir, timeout: 20000 });
         // A successful compile can still emit -Wall warnings on stderr with exit code 0.
@@ -230,9 +207,8 @@ async function lint(files, cwd, configOverride, config) {
     const sourceFiles = files.filter(f => SOURCE_EXTENSIONS.some(ext => f.toLowerCase().endsWith(ext)));
     if (sourceFiles.length === 0) return { ...EMPTY_DIAGNOSTICS };
 
-    const project = { dir: cwd, type: 'loose', artifactPath: path.join(cwd, exeName('a_out_lint')), sourceFiles };
-    const { diagnostics } = await compileLoose(project, config);
-    try { fs.rmSync(project.artifactPath, { force: true }); } catch (e) { /* best-effort cleanup */ }
+    const project = { dir: cwd, type: 'loose', sourceFiles };
+    const { diagnostics } = await compileLoose(project, config, { syntaxOnly: true });
 
     return diagnostics || { ...EMPTY_DIAGNOSTICS };
 }

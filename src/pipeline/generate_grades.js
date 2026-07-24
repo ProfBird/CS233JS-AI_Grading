@@ -225,6 +225,9 @@ const LINT_TOP_ISSUES = 6;  // how many offending rules to list in the lint comm
 function lintResult(map, student) {
     const lint = student.lint || {};
     if (!(lint.sourceFiles > 0)) return { score: 0, comment: 'No source files to lint' };
+    // Fail closed: a linter crash/missing-install is a grader-tooling failure, not a clean
+    // pass — score 0 and flag for manual review rather than awarding full lint credit.
+    if (lint.toolError) return { score: 0, comment: `NEEDS MANUAL CHECK: linter failed — ${lint.toolError}`, keepComment: true };
 
     const severity = map.severity; // 'errors', 'warnings', or undefined (all)
 
@@ -493,6 +496,7 @@ registerHandler('part_feature', (map, student) => {
 registerHandler('repo_hygiene', (map, student) => {
     const rh = student.analysis && student.analysis.repoHygiene;
     if (!rh) return { score: map.maxScore, comment: 'NEEDS MANUAL CHECK' };
+    if (rh.error) return { score: 0, comment: `NEEDS MANUAL CHECK: ${rh.error}`, keepComment: true };
     if (rh.passed) return { score: map.maxScore, comment: 'No non-source files in repo' };
     return { score: 0, comment: `Non-source files found in repo: ${rh.foundDirs.join(', ')}` };
 });
@@ -1112,7 +1116,8 @@ export default async function(students, config, labDir, opts = {}) {
                         lintWarnings: lint.warnings,
                         lintTopIssues: lint.messages || [],
                         runtimeSuccess: rt.success,
-                        runtimeErrors: rt.errors || []
+                        runtimeErrors: rt.errors || [],
+                        language: config.language || 'JavaScript'
                     });
                     if (aiResult) {
                         console.log('OK');

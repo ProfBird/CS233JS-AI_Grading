@@ -175,32 +175,42 @@ describe('applyCustomAnalyzer', () => {
     beforeEach(() => { warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
     afterEach(() => { warnSpy.mockRestore(); });
 
-    it('merges the analyzer return value into analysis', () => {
+    it('merges the analyzer return value into analysis', async () => {
         const analysis = { features: { a: 1 } };
         const analyzer = () => ({ features: { a: 1, b: 2 }, custom: 'x' });
-        applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' });
+        await applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' });
         expect(analysis.custom).toBe('x');
         expect(analysis.features).toEqual({ a: 1, b: 2 });
     });
 
-    it('swallows a throwing analyzer and leaves analysis intact', () => {
+    it('awaits an async analyzer before merging its result', async () => {
+        const analysis = { features: {} };
+        const analyzer = async () => {
+            await new Promise(r => setTimeout(r, 5));
+            return { custom: 'async-x' };
+        };
+        await applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' });
+        expect(analysis.custom).toBe('async-x');
+    });
+
+    it('swallows a throwing analyzer and leaves analysis intact', async () => {
         const analysis = { features: { a: 1 } };
         const analyzer = () => { throw new Error('boom'); };
-        expect(() => applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' })).not.toThrow();
+        await expect(applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' })).resolves.not.toThrow();
         expect(analysis).toEqual({ features: { a: 1 } });
         expect(warnSpy).toHaveBeenCalled();
     });
 
-    it('ignores a non-object return value', () => {
+    it('ignores a non-object return value', async () => {
         const analysis = { features: {} };
-        applyCustomAnalyzer(() => 42, [], analysis, {}, { name: 'S' });
+        await applyCustomAnalyzer(() => 42, [], analysis, {}, { name: 'S' });
         expect(analysis).toEqual({ features: {} });
     });
 
-    it('passes jsFiles, analysis, config, and student through to the analyzer', () => {
+    it('passes jsFiles, analysis, config, and student through to the analyzer', async () => {
         const seen = {};
         const analyzer = (jsFiles, _analysis, config, student) => { Object.assign(seen, { jsFiles, config, student }); };
-        applyCustomAnalyzer(analyzer, ['a.js'], { features: {} }, { x: 1 }, { name: 'S' });
+        await applyCustomAnalyzer(analyzer, ['a.js'], { features: {} }, { x: 1 }, { name: 'S' });
         expect(seen.jsFiles).toEqual(['a.js']);
         expect(seen.config).toEqual({ x: 1 });
         expect(seen.student).toEqual({ name: 'S' });
@@ -220,23 +230,23 @@ describe('hasDeveloperComments', () => {
         rmSync(tmpDir, { recursive: true });
     });
 
-    const runAnalysis = (tmpDir, fileName, content) => {
+    const runAnalysis = async (tmpDir, fileName, content) => {
         writeFileSync(join(tmpDir, fileName), content);
         const students = [{ name: 'Zoey McKee', extractedDir: tmpDir, urls: {} }];
-        analyzeStudents(students, { analysis: { features: [] } }, tmpDir);
+        await analyzeStudents(students, { analysis: { features: [] } }, tmpDir);
         return students[0].analysis.hasDeveloperComments;
     };
 
-    it('detects last name in a .js file', () => {
-        expect(runAnalysis(tmpDir, 'app.js', '/* Written by Zoey McKee */')).toBe(true);
+    it('detects last name in a .js file', async () => {
+        expect(await runAnalysis(tmpDir, 'app.js', '/* Written by Zoey McKee */')).toBe(true);
     });
 
-    it('detects last name in a .mjs file', () => {
-        expect(runAnalysis(tmpDir, 'app.mjs', '/* Code Written by Brian Bird, Modified by Zoey McKee */')).toBe(true);
+    it('detects last name in a .mjs file', async () => {
+        expect(await runAnalysis(tmpDir, 'app.mjs', '/* Code Written by Brian Bird, Modified by Zoey McKee */')).toBe(true);
     });
 
-    it('returns false when no name is present in .mjs file', () => {
-        expect(runAnalysis(tmpDir, 'app.mjs', 'export function foo() {}')).toBe(false);
+    it('returns false when no name is present in .mjs file', async () => {
+        expect(await runAnalysis(tmpDir, 'app.mjs', 'export function foo() {}')).toBe(false);
     });
 });
 

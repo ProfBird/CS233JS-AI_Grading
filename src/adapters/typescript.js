@@ -18,11 +18,25 @@ import jsAdapter from './javascript.js';
 // won't have TypeScript installed at all) — the same pattern lint_code.js already uses
 // for ESLint: the checking tool comes from the grader's environment, resolved against
 // the student's tsconfig.json (if present) via cwd.
-const TSC_BIN = path.join(import.meta.dirname, '..', '..', 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
+//
+// Runs tsc's actual JS entry point (typescript/bin/tsc) via `node`, rather than the
+// node_modules/.bin/tsc.cmd shim — a .cmd file can only be spawned on Windows with
+// `shell: true`, and shell:true concatenates argv into a single command line without
+// escaping, which breaks the moment the repo path contains a space. Invoking the script
+// directly through process.execPath needs no shell at all, on any platform.
+// config.toolchains.typescript.tsc overrides the resolved path, matching the pattern the
+// python/cpp/csharp adapters use for their own toolchain overrides.
+function resolveTscScript(config) {
+    if (config && config.toolchains && config.toolchains.typescript && config.toolchains.typescript.tsc) {
+        return config.toolchains.typescript.tsc;
+    }
+    return path.join(import.meta.dirname, '..', '..', 'node_modules', 'typescript', 'bin', 'tsc');
+}
 
-async function build(project) {
+async function build(project, config) {
+    const tscScript = resolveTscScript(config);
     try {
-        await execFileAsync(TSC_BIN, ['--noEmit'], { cwd: project.dir, timeout: 30000, shell: true });
+        await execFileAsync(process.execPath, [tscScript, '--noEmit'], { cwd: project.dir, timeout: 30000 });
         return { success: true, errors: [], artifacts: [] };
     } catch (err) {
         // tsc writes compiler diagnostics to stdout and exits non-zero; each error line
@@ -37,12 +51,12 @@ async function build(project) {
     }
 }
 
-function lintConfigCandidates(configsDir, labName, parentName, courseName = null) {
-    const candidates = jsAdapter.lintConfigCandidates(configsDir, labName, parentName, courseName);
+function lintConfigCandidates(configsDir, labName, parentName, courseName = null, repoRootOverride = null) {
+    const candidates = jsAdapter.lintConfigCandidates(configsDir, labName, parentName, courseName, repoRootOverride);
     // The last candidate is always the shipped default in priority order — swap it for
     // the TypeScript-specific shipped ruleset; per-lab overrides (step/lab-specific
     // eslint.config.mjs) still take priority exactly as they do for JS.
-    const repoRoot = path.join(configsDir, '..');
+    const repoRoot = repoRootOverride || path.join(configsDir, '..');
     candidates[candidates.length - 1] = path.join(repoRoot, 'eslint', 'student.typescript.eslint.config.mjs');
     return candidates;
 }

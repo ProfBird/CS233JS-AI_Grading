@@ -47,10 +47,10 @@ function getAvailableModel() {
 
 // Returns a one-sentence summary string, or null on failure.
 // Retries with exponential backoff to handle cold-start delays.
-function generateSummary({ model, features, lintErrors, lintWarnings, lintTopIssues, runtimeSuccess, runtimeErrors }) {
+function generateSummary({ model, features, lintErrors, lintWarnings, lintTopIssues, runtimeSuccess, runtimeErrors, language = 'code' }) {
     const topIssues = lintTopIssues.length ? ` (${lintTopIssues.slice(0, 3).join(', ')})` : '';
     const prompt =
-        `Write one brief sentence (under 20 words) for an instructor's rubric summarizing this JS lab submission.\n\n` +
+        `Write one brief sentence (under 20 words) for an instructor's rubric summarizing this ${language} lab submission.\n\n` +
         `Features detected: ${JSON.stringify(features)}\n` +
         `Lint: ${lintErrors} errors, ${lintWarnings} warnings${topIssues}\n` +
         `Runtime: ${runtimeSuccess ? 'clean' : 'errors: ' + runtimeErrors.slice(0, 2).join('; ')}\n\n` +

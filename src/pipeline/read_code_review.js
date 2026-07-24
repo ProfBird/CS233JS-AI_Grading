@@ -13,6 +13,9 @@
 import fs from 'fs';
 import path from 'path';
 import mammoth from 'mammoth';
+import { writePhaseReport } from '../lib/per_student_phase.js';
+
+const CODE_REVIEW_REPORT = 'code_review_report.json';
 
 // --- Finding the .docx file ---
 
@@ -228,7 +231,7 @@ export { parseCellValue, parseGroupFromTable, findScoresTable, parseTableScores 
 
 // --- Main export ---
 
-export default async function (students, _config) {
+export default async function (students, _config, labDir = null) {
     console.log('--- Code Review Reading Phase ---');
 
     for (const student of students) {
@@ -277,5 +280,11 @@ export default async function (students, _config) {
             };
             console.log(`  PARSE ERROR: ${student.name} — ${err.message}`);
         }
+    }
+
+    // labDir is optional so existing direct callers/tests that only care about the
+    // student-attachment side effect keep working unchanged.
+    if (labDir) {
+        writePhaseReport(labDir, CODE_REVIEW_REPORT, students, s => ({ student: s.name, ...(s.codeReview || {}) }));
     }
 };

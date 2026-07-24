@@ -18,14 +18,22 @@ const OPENROUTER_MODELS = [
     { label: 'LLaMA 3.3 70B (free)',    value: 'meta-llama/llama-3.3-70b-instruct:free', desc: 'Meta LLaMA 3.3 via OpenRouter — free tier' },
 ];
 
+// OpenRouter's HTTP-Referer/X-Title headers are optional app-attribution metadata (shown
+// on OpenRouter's own dashboard) — generic defaults so this shared lib doesn't hardcode
+// one institution's domain/name; a deployment can override via LLMClient's appUrl/appTitle.
+const DEFAULT_APP_URL = 'https://localhost';
+const DEFAULT_APP_TITLE = 'AI Grading Pipeline';
+
 class LLMClient {
-    constructor({ provider, apiKey, model, fallbackModel, baseUrl, timeout = 60000 }) {
+    constructor({ provider, apiKey, model, fallbackModel, baseUrl, timeout = 60000, appUrl, appTitle }) {
         this.provider      = provider;
         this.apiKey        = apiKey;
         this.model         = model || DEFAULTS[provider]?.model;
         this.fallbackModel = fallbackModel || null;
         this.baseUrl       = baseUrl || DEFAULTS[provider]?.baseUrl;
         this.timeout       = timeout;
+        this.appUrl        = appUrl || DEFAULT_APP_URL;
+        this.appTitle      = appTitle || DEFAULT_APP_TITLE;
     }
 
     // Returns response text or null on failure.
@@ -65,8 +73,8 @@ class LLMClient {
         };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
         if (this.provider === 'openrouter') {
-            headers['HTTP-Referer'] = 'https://lanecc.edu';
-            headers['X-Title'] = 'CS233JS AI Grader';
+            headers['HTTP-Referer'] = this.appUrl;
+            headers['X-Title'] = this.appTitle;
         }
 
         const res = await this._request(`${this.baseUrl}/chat/completions`, headers, body);

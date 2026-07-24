@@ -42,6 +42,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+// A runaway printer (accidental infinite loop, not malice) shouldn't be able to exhaust
+// grader memory inside the timeout window. Past this cap, further output is dropped and
+// `outputTruncated` is set — callers can still pattern-match against what was captured.
+const MAX_OUTPUT_CHARS = 2_000_000;
+
 // Kill a spawned process and its whole tree, cross-platform. On POSIX we signal the
 // negative PID (the detached process group). Windows has no process groups, so use
 // taskkill /T to walk and terminate the child tree — this is the same pattern already
@@ -80,15 +85,20 @@ async function runDirect(argv, execConfig) {
             }
 
             let stdout = '', stderr = '';
-            child.stdout.on('data', d => { stdout += d; });
-            child.stderr.on('data', d => { stderr += d; });
+            let outputTruncated = false;
+            const appendCapped = (buf, chunk) => {
+                if (buf.length >= MAX_OUTPUT_CHARS) { outputTruncated = true; return buf; }
+                return buf + chunk;
+            };
+            child.stdout.on('data', d => { stdout = appendCapped(stdout, d); });
+            child.stderr.on('data', d => { stderr = appendCapped(stderr, d); });
 
             let resolved = false;
             const done = (code, timedOut) => {
                 if (resolved) return;
                 resolved = true;
                 clearTimeout(timer);
-                resolve({ code, stdout, stderr, timedOut });
+                resolve({ code, stdout, stderr, timedOut, outputTruncated });
             };
 
             const timer = setTimeout(() => {
@@ -102,6 +112,10 @@ async function runDirect(argv, execConfig) {
                 done(null, false);
             });
 
+            // A fast-crashing program (or one that never reads stdin) can close its stdin
+            // pipe before write()/end() land, raising EPIPE — without this handler that's an
+            // unhandled 'error' event on the stream, which crashes the grader process.
+            if (typeof child.stdin.on === 'function') child.stdin.on('error', () => {});
             child.stdin.write(stdin);
             child.stdin.end();
         });

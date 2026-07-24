@@ -16,7 +16,9 @@ import path from 'path';
 import { execFile } from 'child_process';
 import util from 'util';
 const execFileAsync = util.promisify(execFile);
-import { walk, toPosix } from '../lib/file_walker.js';
+import { getAllFiles as sharedGetAllFiles } from '../lib/file_walker.js';
+import { makeCommentStripper } from '../lib/comment_stripper.js';
+import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 
 const DEFAULT_EXCLUSIONS = ['.git', 'bin', 'obj'];
 
@@ -30,35 +32,22 @@ function dotnetBin(config) {
 // end the match early) and C# 11 raw string literals ("""..."""). Both must be protected
 // before the generic quoted-string pass runs, the same ordering principle as cpp.js's
 // raw-string handling.
-function stripComments(code) {
-    const strings = [];
-    const protect = re => { code = code.replace(re, m => { strings.push(m); return `\x00${strings.length - 1}\x00`; }); };
-
-    code = code.replace(/\/\*[\s\S]*?\*\//g, ''); // block comments first
-
-    protect(/"""[\s\S]*?"""/g);                    // raw string literals (C# 11+)
-    protect(/[$@]{1,2}"(?:""|[^"])*"/g);            // verbatim / interpolated-verbatim strings
-    protect(/("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g); // ordinary strings and char literals
-
-    code = code.replace(/\/\/[^\n]*/g, '');
-    code = code.replace(/\x00(\d+)\x00/g, (_, i) => strings[+i]);
-    return code;
-}
+const stripComments = makeCommentStripper({
+    blockComment: /\/\*[\s\S]*?\*\//g,
+    lineComment: /\/\/[^\n]*/g,
+    protectPatterns: [
+        /"""[\s\S]*?"""/g,                                     // raw string literals (C# 11+)
+        /[$@]{1,2}"(?:""|[^"])*"/g,                             // verbatim / interpolated-verbatim strings
+        /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g,          // ordinary strings and char literals
+    ],
+});
 
 // ---------- File collection ----------
 // bin/ and obj/ (MSBuild output dirs) are excluded by path SEGMENT, not substring — see
 // cpp.js's getAllFiles for why substring matching is the wrong choice here (a submission
 // folder literally named "Combinator" would otherwise be excluded for containing "bin").
 function getAllFiles(dirPath, exclusions = DEFAULT_EXCLUSIONS) {
-    const results = [];
-    walk(dirPath, {
-        shouldSkip: full => {
-            const segments = toPosix(full).split('/');
-            return exclusions.some(ex => segments.includes(ex));
-        },
-        onFile: full => results.push(full)
-    });
-    return results;
+    return sharedGetAllFiles(dirPath, exclusions);
 }
 
 // ---------- Project detection ----------
@@ -104,7 +93,25 @@ function detectProject(dir) {
         runCommand: ['dotnet', 'run', '--project', csprojPath],
         artifactPath: null,
         csprojPath,
+        // The "class library + console app + test project" layout this adapter's header
+        // comment documents means not every .csproj is runnable — a class library or test
+        // project has no entry point and `dotnet run` on it fails. run_check picks the
+        // first project with executable:true (falling back to projects[0] only when none
+        // is tagged, so a solution this can't classify doesn't silently break).
+        executable: isExecutableCsproj(csprojPath),
     }));
+}
+
+// An SDK-style project defaults to OutputType=Library when the tag is absent (the case for
+// class libraries and, conventionally, test projects); a console app template always emits
+// an explicit <OutputType>Exe</OutputType> (or WinExe for a GUI app).
+function isExecutableCsproj(csprojPath) {
+    try {
+        const content = fs.readFileSync(csprojPath, 'utf8');
+        return /<OutputType>\s*(Exe|WinExe)\s*<\/OutputType>/i.test(content);
+    } catch (e) {
+        return false;
+    }
 }
 
 // ---------- Build (MSBuild plain-text diagnostics) ----------
@@ -112,32 +119,12 @@ function detectProject(dir) {
 const MSBUILD_DIAG_RE = /^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+([A-Za-z]+\d+):\s+(.+?)\s+\[.+\]$/gm;
 
 function parseMsBuildOutput(output) {
-    const ruleCounts = {}, errorRuleCounts = {}, warningRuleCounts = {};
-    let errors = 0, warnings = 0;
     MSBUILD_DIAG_RE.lastIndex = 0;
-    let m;
-    while ((m = MSBUILD_DIAG_RE.exec(output)) !== null) {
-        const [, , , , severity, code] = m;
-        ruleCounts[code] = (ruleCounts[code] || 0) + 1;
-        if (severity === 'warning') {
-            warnings++;
-            warningRuleCounts[code] = (warningRuleCounts[code] || 0) + 1;
-        } else {
-            errors++;
-            errorRuleCounts[code] = (errorRuleCounts[code] || 0) + 1;
-        }
-    }
-    const toMessages = counts => Object.entries(counts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([code, count]) => `${code}: ${count}`);
-
-    return {
-        errors, warnings,
-        messages: toMessages(ruleCounts),
-        errorMessages: toMessages(errorRuleCounts),
-        warningMessages: toMessages(warningRuleCounts),
-        ruleCounts,
-    };
+    const matches = [...output.matchAll(MSBUILD_DIAG_RE)];
+    return aggregateDiagnostics(matches, {
+        code: m => m[5],
+        isError: m => m[4] !== 'warning',
+    });
 }
 
 async function runDotnetBuild(project, config) {

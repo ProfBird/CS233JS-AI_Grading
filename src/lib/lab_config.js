@@ -351,7 +351,7 @@ function keywordsToFolderPattern(keywords) {
 const MAPPING_TYPES = [
     { label: 'feature',               value: 'feature',               desc: 'Counts regex matches in student code; full credit if count meets minimum' },
     { label: 'manual',                value: 'manual',                desc: 'No automation; score pulled from student\'s peer code review form' },
-    { label: 'lint',                  value: 'lint',                  desc: 'Runs ESLint on .js files; choose errors (syntax) or warnings (style)' },
+    { label: 'lint',                  value: 'lint',                  desc: 'Runs the lab language\'s linter/compiler diagnostics (ESLint/ruff/compiler warnings); choose errors (syntax) or warnings (style)' },
     { label: 'html_validate',         value: 'html_validate',         desc: 'Validates HTML files; partial credit up to a configurable error tolerance' },
     { label: 'css_validate',          value: 'css_validate',          desc: 'Validates CSS files; partial credit up to a configurable error tolerance' },
     { label: 'name_check',            value: 'name_check',            desc: 'File and folder names must be Linux-safe (no spaces or special characters)' },

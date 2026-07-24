@@ -10,20 +10,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { walk, toPosix } from './file_walker.js';
-
-// Collects every file under dirPath. Exclusions are substring matches against the full
-// path. A small local copy of analyze_code.js's getAllFiles — kept here rather than
-// imported to avoid a circular analyze_code.js <-> this-module dependency; analyze_code.js
-// exports its own copy separately for its other (non-variation) callers/tests.
-function getAllFiles(dirPath, exclusions = []) {
-    const results = [];
-    walk(dirPath, {
-        shouldSkip: full => exclusions.some(ex => toPosix(full).includes(toPosix(ex))),
-        onFile: full => results.push(full)
-    });
-    return results;
-}
+import { getAllFiles } from './file_walker.js';
 
 // Common words that appear in many app names and are not useful for distinguishing variations.
 const VARIATION_KEYWORD_STOPWORDS = new Set(['web', 'page', 'app', 'list', 'tool', 'maker', 'mini', 'lite', 'plus']);
@@ -46,7 +33,7 @@ function variationKeywords(appName) {
  * @param {string} extractedDir
  * @returns {string} lowercase combined text
  */
-function buildVariationCorpus(extractedDir) {
+function buildVariationCorpus(extractedDir, extraNameExclusions = []) {
     const parts = [];
     // Exclude build artifacts, deps, and directory names that mark distributed
     // starter/template files — they often contain ALL variation keywords and
@@ -54,8 +41,14 @@ function buildVariationCorpus(extractedDir) {
     // (checked via path.basename of each directory entry), not full-path substrings,
     // to avoid incorrectly excluding repos whose root folder happens to contain
     // one of these words (e.g., a repo named "LCC-CIT CourseMaterials ...").
+    //
+    // The defaults below (_starter/_template/filestostudents) are CS233JS's own
+    // Moodle-distribution naming convention, not a universal one — kept as the default
+    // for backward compatibility, but a course with different conventions can add its
+    // own via config.variations.excludeNamePatterns (threaded through from
+    // checkVersionVariation) rather than this generic lib assuming CS233JS's naming.
     const hardExclusions = new Set(['node_modules', 'dist', '.git']);
-    const nameExclusionPatterns = [/_starter$/i, /_template$/i, /^filestostudents$/i];
+    const nameExclusionPatterns = [/_starter$/i, /_template$/i, /^filestostudents$/i, ...extraNameExclusions];
 
     function isExcluded(fullPath) {
         const segments = fullPath.split(path.sep);
@@ -115,10 +108,14 @@ function buildVariationCorpus(extractedDir) {
  * Only applies when top-level config.variations exists.
  * @param {string} extractedDir
  * @param {Object} variations  config.variations map (letter → { appName })
+ * @param {string[]} [excludeNamePatterns]  extra regex-source strings (directory-name
+ *        components) to exclude from the corpus, beyond the built-in CS233JS-convention
+ *        defaults (_starter/_template/filestostudents) — for a course whose distributed
+ *        starter files use a different naming convention.
  * @returns {{ detected: string|null, appName: string|null, scores: Object }}
  */
-function checkVersionVariation(extractedDir, variations) {
-    const corpus = buildVariationCorpus(extractedDir);
+function checkVersionVariation(extractedDir, variations, excludeNamePatterns = []) {
+    const corpus = buildVariationCorpus(extractedDir, excludeNamePatterns.map(p => new RegExp(p, 'i')));
     const scores = {};
 
     for (const [letter, info] of Object.entries(variations)) {

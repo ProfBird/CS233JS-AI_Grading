@@ -22,7 +22,8 @@ import fs from 'fs';
 import path from 'path';
 import { JSDOM } from 'jsdom';
 import { parse as parseCss, walk as walkCss, generate as generateCss } from 'css-tree';
-import { walk as walkDir, getAllFilesByExt } from '../lib/file_walker.js';
+import { walk as walkDir, getAllFilesByExt, toPosix, DEFAULT_SKIP_DIRS } from '../lib/file_walker.js';
+import { runPerStudentPhase, writePhaseReport } from '../lib/per_student_phase.js';
 
 const WEB_CONTENT_REPORT = 'web_content_report.json';
 
@@ -137,7 +138,7 @@ function checkWebContent(extractedDir, webConfig, exclusions = []) {
             continue; // grossly malformed markup; validation phase reports it
         }
         const doc = dom.window.document;
-        const relPath = path.relative(extractedDir, file);
+        const relPath = toPosix(path.relative(extractedDir, file));
 
         for (const entry of required) {
             if (entry.dirPattern && !entry.dirPattern.test(relPath)) continue;
@@ -194,8 +195,12 @@ function checkWebContent(extractedDir, webConfig, exclusions = []) {
     if (fileCounts.length > 0) {
         const patterns = fileCounts.map(fc => new RegExp(fc.pattern, 'i'));
         walkDir(extractedDir, {
+            // Build output left behind by a runtime-check build step (node_modules/dist/
+            // build) must not inflate a file-count check — same skip list validate_html.js
+            // and validate_css.js use.
+            shouldDescend: (full, name) => !name.startsWith('.') && !DEFAULT_SKIP_DIRS.has(name),
             onFile: (filePath) => {
-                if (exclusions.some(ex => filePath.includes(ex))) return;
+                if (exclusions.some(ex => toPosix(filePath).includes(toPosix(ex)))) return;
                 const base = path.basename(filePath);
                 fileCounts.forEach((fc, i) => {
                     if (patterns[i].test(base)) fc.count++;
@@ -215,35 +220,36 @@ function checkWebContent(extractedDir, webConfig, exclusions = []) {
     };
 }
 
-const EMPTY_RESULT = { htmlFiles: 0, cssFiles: 0, elements: [], cssSelectors: [], cssProperties: [], fileCounts: [] };
+// A fresh object per call — NOT a shared constant. Spreading one shared object's nested
+// arrays (`{...EMPTY_RESULT}`) still hands every skipped student the SAME elements/
+// cssSelectors/etc. array references; one downstream mutation would then corrupt every
+// other skipped student's result.
+const emptyResult = () => ({ htmlFiles: 0, cssFiles: 0, elements: [], cssSelectors: [], cssProperties: [], fileCounts: [] });
 
 export default async function(students, config, labDir) {
-    console.log('--- Web Content Check Phase ---');
-
     const webConfig = config.webContent || {};
     const exclusions = webConfig.exclude
         || (config.validate && config.validate.exclude)
         || [];
 
-    for (const student of students) {
-        if (!student.extractedDir || !fs.existsSync(student.extractedDir)) {
-            student.webContent = { ...EMPTY_RESULT };
-            continue;
+    await runPerStudentPhase(students, {
+        name: 'Web Content Check Phase',
+        attachKey: 'webContent',
+        noCodeResult: emptyResult,
+        errorResult: (e) => ({ ...emptyResult(), error: e.message }),
+        checkStudent: (student) => {
+            const result = checkWebContent(student.extractedDir, webConfig, exclusions);
+            const elPassed = result.elements.filter(e => e.passed).length;
+            const selPassed = result.cssSelectors.filter(s => s.found).length;
+            const propPassed = result.cssProperties.filter(p => p.found).length;
+            console.log(`  ${student.name}: elements ${elPassed}/${result.elements.length}, ` +
+                `selectors ${selPassed}/${result.cssSelectors.length}, ` +
+                `properties ${propPassed}/${result.cssProperties.length}`);
+            return result;
         }
+    });
 
-        const result = checkWebContent(student.extractedDir, webConfig, exclusions);
-        const elPassed = result.elements.filter(e => e.passed).length;
-        const selPassed = result.cssSelectors.filter(s => s.found).length;
-        const propPassed = result.cssProperties.filter(p => p.found).length;
-        console.log(`  ${student.name}: elements ${elPassed}/${result.elements.length}, ` +
-            `selectors ${selPassed}/${result.cssSelectors.length}, ` +
-            `properties ${propPassed}/${result.cssProperties.length}`);
-        student.webContent = result;
-    }
-
-    const report = students.map(s => ({ student: s.name, ...(s.webContent || EMPTY_RESULT) }));
-    fs.writeFileSync(path.join(labDir, WEB_CONTENT_REPORT), JSON.stringify(report, null, 2));
-    console.log(`Created ${WEB_CONTENT_REPORT} for ${report.length} students.`);
+    writePhaseReport(labDir, WEB_CONTENT_REPORT, students, s => ({ student: s.name, ...(s.webContent || emptyResult()) }));
 }
 
 export { checkWebContent, normalizeSelector, normalizeProperty };

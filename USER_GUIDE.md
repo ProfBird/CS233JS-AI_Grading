@@ -286,7 +286,13 @@ node bin/grade.js
 ```
 
 Walks through, in order: **course** (always shown, even with one option — see
-[Courses & terms](#courses--terms)), **term**, **assignment**, then a menu of grading modes:
+[Courses & terms](#courses--terms)), **term**, **submission source**, **assignment**, then a
+menu of grading modes. The submission-source prompt (shown right after the term) is:
+
+1. **Assignment's configured source** *(default)* — the Moodle download folder, or Canvas for a lab that already has a Canvas assignment saved in its config
+2. **Download from Canvas** — same as the `--canvas` flag: runs the interactive Canvas setup (course ID confirmation + assignment picker) so you can set up a lab for the first time or re-select its Canvas assignment, then downloads submissions via the Canvas API
+
+Grading modes:
 
 1. **Normal** — grade new submissions (skips students who already have a grade spreadsheet)
 2. **Regrade** — re-run all grading phases but keep existing cloned/extracted code; automatically runs `git pull` on each student's repo to pick up any updates

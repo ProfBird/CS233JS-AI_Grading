@@ -11,9 +11,9 @@
  * including the wrappers' quirks and inconsistencies.
  *
  * Documented quirks captured below:
- *   - getAllFiles:        exclusions are SUBSTRING matches on the full path; does
- *                         NOT skip dot-dirs/dot-files; skips symlinks; returns all
- *                         file types.
+ *   - getAllFiles:        exclusions are exact PATH-SEGMENT matches (a dir named
+ *                         "mydist" is not excluded by "dist"); does NOT skip
+ *                         dot-dirs/dot-files; skips symlinks; returns all file types.
  *   - getSubdirs:         returns NAMES of immediate child dirs; skips dot-dirs and
  *                         symlinks.
  *   - getAllJsFiles:      exclusions are CASE-INSENSITIVE substring matches; skips
@@ -135,7 +135,7 @@ describe('getAllFiles', () => {
         ]));
     });
 
-    it('with exclusions: drops paths containing any excluded substring (but keeps dot-dirs and __MACOSX)', () => {
+    it('with exclusions: drops paths under a dir whose exact segment name is excluded (but keeps dot-dirs and __MACOSX)', () => {
         expect(rel(getAllFiles(root, ['node_modules', 'dist', '.git']))).toEqual(sorted([
             '.eslintrc.js',
             '.hidden/index.html',
@@ -152,6 +152,23 @@ describe('getAllFiles', () => {
             'sub/nested/deep.js',
             'sub/package.json',
         ]));
+    });
+
+    it('does not falsely exclude a dir whose name merely contains an excluded segment as a substring', () => {
+        const withLookalike = mkdtempSync(join(tmpdir(), 'walkers-lookalike-'));
+        try {
+            const f = (rp, c = '') => {
+                const abs = join(withLookalike, rp);
+                mkdirSync(join(abs, '..'), { recursive: true });
+                writeFileSync(abs, c);
+            };
+            f('mydist/keep.js');
+            f('dist/drop.js');
+            const relLookalike = paths => paths.map(p => relative(withLookalike, p).split(sep).join('/')).sort();
+            expect(relLookalike(getAllFiles(withLookalike, ['dist']))).toEqual(['mydist/keep.js']);
+        } finally {
+            rmSync(withLookalike, { recursive: true, force: true });
+        }
     });
 
     it('does not follow symlinks', () => {

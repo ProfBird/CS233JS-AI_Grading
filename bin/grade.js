@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * grade.js (formerly run_all.js)
+ * grade.js
  *
  * Master orchestrator script for CS233JS lab grading.
  * Each pipeline phase attaches results directly to student objects.
@@ -24,6 +24,8 @@ import { runPipeline } from '../src/pipeline/run_pipeline.js';
 
 import { getExistingSteps, getExistingCourses, writeCourseConfig } from '../src/lib/lab_config.js';
 import { validateConfig, loadHandlerModules } from '../src/lib/config_validation.js';
+import { selectFromList } from '../src/lib/select_from_list.js';
+import { resolveLegacyLabDir } from '../src/lib/resolve_lab_dir.js';
 import * as canvasClient from '../src/lib/canvas_client.js';
 
 // This file lives in bin/; course config + the default-config template live at the repo root.
@@ -44,9 +46,13 @@ USAGE
 
   If no arguments are given, an interactive menu is shown: it always asks you
   to pick a course, then a term (e.g. "Spring 2026"), even when there's only
-  one of each — that's where "Add new course"/"Add new term" live. Shortcuts
-  like "node bin/grade.js Lab03" skip both prompts and auto-resolve the single
-  course/term, so existing muscle-memory usage keeps working unchanged.
+  one of each — with "Add new course"/"Add new term" options (also offered
+  automatically the very first time, when none exist yet). After the term it
+  asks where submissions come from: the assignment's configured source
+  (Moodle folder, or Canvas if already set up), or "Download from Canvas"
+  (same as the --canvas flag). Shortcuts like "node bin/grade.js Lab03" skip
+  these prompts and auto-resolve the single course/term, so existing
+  muscle-memory usage keeps working unchanged.
   courseName is only needed as an argument once more than one course exists.
   For multi-step labs, stepName selects which submission set to grade.
 
@@ -81,6 +87,8 @@ OPTIONS
                    confirms the course name before continuing, then lets you
                    pick the assignment; the choice is saved to the lab's config
                    file so later runs (even without --canvas) use Canvas again.
+                   The interactive menu offers the same thing as a "Download
+                   from Canvas" submission-source option after the term prompt.
 
   --help, -h       Show this help message.
 
@@ -179,7 +187,7 @@ async function main() {
     const aiModelFlag = (args.find(a => a.startsWith('--ai-model=')) || '').split('=')[1] || null;
     const aiComments = args.includes('--ai-comments') || !!aiModelFlag;
     let textReport = args.includes('--text-report');
-    const canvasFlag = args.includes('--canvas');
+    let canvasFlag = args.includes('--canvas'); // also set by the interactive submission-source menu below
     const hasAnyFlag = hasRegradeFlag || hasRecloneFlag;
 
     // labName is resolved after course selection below — position 0 of `positional` means
@@ -211,49 +219,66 @@ async function main() {
 
         const configsDir = path.join(REPO_ROOT, 'configs');
 
+        // Prompts for a new course's directory name + display fields and writes its
+        // course_config.json — the plain-menu equivalent of configure-lab.js's "Add new
+        // course" wizard step, so a from-scratch install doesn't have to shell out to a
+        // second script just to get past the course picker.
+        async function createCourse() {
+            const dirNameInput = await askRl('Course directory name, used as configs/<name>/ (e.g. CS233JS): ');
+            const dirName = dirNameInput.trim();
+            if (!dirName) { console.log('  A course directory name is required.'); return null; }
+            if (/[\\/]/.test(dirName)) { console.log('  Course directory name cannot contain slashes.'); return null; }
+            if (fs.existsSync(path.join(configsDir, dirName))) { console.log(`  A course directory named "${dirName}" already exists.`); return null; }
+
+            const courseName = (await askRl(`Course display name [${dirName}]: `)).trim() || dirName;
+            const courseCode = (await askRl(`Course code, shown in the interactive banner [${dirName}]: `)).trim() || dirName;
+            const rubricPrefix = (await askRl(`Rubric filename prefix, e.g. "${dirName}_Lab03_Rubric.xlsm" [${courseCode}]: `)).trim() || courseCode;
+
+            const coursePath = path.join(configsDir, dirName);
+            writeCourseConfig(coursePath, { courseName, courseCode, rubricPrefix });
+            console.log(`  Created course: ${coursePath}\n`);
+            return { name: dirName, path: coursePath, courseName, courseCode, rubricPrefix, canvasCourseId: null };
+        }
+
         // --- Course selection ---
         // Runs before the assignment menu so every config/data path below can be scoped to
         // configs/<Course>/ and <labRoot|codeRoot>/<Course>/. The plain interactive menu
-        // (no CLI args at all) always shows the picker, even with one course — but a
-        // shortcut like "node bin/grade.js Lab03" still auto-resolves a single course
-        // silently, so existing single-course usage keeps working unchanged.
-        const courses = getExistingCourses(configsDir);
+        // (no CLI args at all) always shows the picker, even with one course, with an
+        // "Add new course" option — but a shortcut like "node bin/grade.js Lab03" still
+        // auto-resolves a single course silently, so existing single-course usage keeps
+        // working unchanged.
+        let courses = getExistingCourses(configsDir);
         if (courses.length === 0) {
-            console.error(`ERROR: No courses found under ${configsDir}.`);
-            console.error(`  Run "node bin/configure-lab.js" to set up your first course and lab.`);
-            process.exit(1);
+            console.log(`No courses found under ${configsDir} yet — let's create one.\n`);
+            while (!course) {
+                course = await createCourse();
+            }
+            courses = [course];
         }
 
         if (courses.length === 1 && !isPlainMenu) {
-            course = courses[0];
+            course = course || courses[0];
         } else {
             // Once there's more than one course, position 0 is always the course argument
             // (e.g. "node bin/grade.js CS233JS Lab03"); assignment/step shift down one slot.
             const courseArg = positional[0];
-            course = courseArg
+            course = course || (courseArg
                 ? courses.find(c => c.name.toLowerCase() === courseArg.toLowerCase() || c.courseName.toLowerCase() === courseArg.toLowerCase())
-                : null;
+                : null);
             positional = positional.slice(1);
 
             if (!course) {
                 console.log('\nAvailable courses:');
                 courses.forEach((c, i) => console.log(`  ${i + 1}) ${c.courseName}`));
+                console.log(`  ${courses.length + 1}) Add new course`);
                 console.log();
                 completions = courses.map(c => c.courseName);
-                while (!course) {
-                    const input = await askRl('Select a course (number or name): ');
-                    const num = parseInt(input);
-                    if (!isNaN(num) && num >= 1 && num <= courses.length) {
-                        course = courses[num - 1];
-                    } else {
-                        const found = courses.find(c =>
-                            c.name.toLowerCase() === input.trim().toLowerCase() ||
-                            c.courseName.toLowerCase() === input.trim().toLowerCase()
-                        );
-                        if (found) course = found;
-                        else console.log('  Invalid selection, try again.');
-                    }
-                }
+                course = await selectFromList(askRl, {
+                    items: courses,
+                    matchNames: c => [c.name, c.courseName],
+                    promptText: 'Select a course (number or name): ',
+                    extraOption: { action: createCourse },
+                });
                 completions = [];
                 console.log(`  Course: ${course.courseName}\n`);
             }
@@ -310,28 +335,40 @@ async function main() {
             console.log(`  ${list.length + 1}) Add new term`);
             console.log();
             completions = list.flatMap(t => [t.label, t.id]);
-            while (!activeTermId) {
-                const input = await askRl('Select a term (number or name): ');
-                const num = parseInt(input);
-                if (!isNaN(num) && num >= 1 && num <= list.length) {
-                    activeTermId = list[num - 1].id;
-                } else if (!isNaN(num) && num === list.length + 1) {
-                    activeTermId = await createTerm();
-                } else {
-                    const found = list.find(t =>
-                        t.id.toLowerCase() === input.trim().toLowerCase() ||
-                        t.label.toLowerCase() === input.trim().toLowerCase()
-                    );
-                    if (found) activeTermId = found.id;
-                    else console.log('  Invalid selection, try again.');
-                }
-            }
+            activeTermId = await selectFromList(askRl, {
+                items: list,
+                matchNames: t => [t.id, t.label],
+                getValue: t => t.id,
+                promptText: 'Select a term (number or name): ',
+                extraOption: { action: createTerm },
+            });
             completions = [];
             console.log(`  Term: ${terms[activeTermId].label}\n`);
         }
 
         let labRoot = terms[activeTermId].labRoot;
         let codeRoot = terms[activeTermId].codeRoot;
+
+        // --- Submission source (plain interactive menu only) ---
+        // The --canvas flag has always been the CLI way to force a Canvas download; give
+        // the plain menu the same power right after the term is chosen. The default keeps
+        // each assignment's configured source: the Moodle download folder, or Canvas for a
+        // lab whose config already has canvas.assignmentId. Choosing Canvas here behaves
+        // exactly like --canvas (runs the interactive Canvas setup, letting you set up a
+        // lab for the first time or re-select its Canvas assignment).
+        if (isPlainMenu && !canvasFlag) {
+            console.log('Submission source:');
+            console.log("  1) Assignment's configured source — Moodle download folder, or Canvas if already set up");
+            console.log('  2) Download from Canvas — first-time setup, or re-select the Canvas assignment');
+            console.log();
+            for (;;) {
+                const input = (await askRl('Select a source [1]: ')).trim();
+                if (input === '' || input === '1') break;
+                if (input === '2') { canvasFlag = true; break; }
+                console.log('  Invalid selection, try again.');
+            }
+            console.log(canvasFlag ? '  Source: Canvas download\n' : '  Source: configured (Moodle folder by default)\n');
+        }
 
         labName = positional[0];
 
@@ -567,15 +604,16 @@ async function main() {
         }
 
         labDir = path.join(labRoot, courseName, labName);
-        // One-time migration ease: Moodle downloads are external (on Google Drive, not
-        // managed by this tool), so rather than requiring an upfront reorganization, fall
-        // back to the pre-course-tier flat path if that's where the download still is.
         const legacyLabDir = path.join(labRoot, labName);
-        if (!usingCanvas && !fs.existsSync(labDir) && fs.existsSync(legacyLabDir)) {
-            labDir = legacyLabDir;
-            console.log(`  Note: reading submissions from ${legacyLabDir} (not yet moved under <labRoot>/${courseName}/).`);
-            console.log(`  Consider moving it under <labRoot>/${courseName}/${labName}/ to match the course-scoped layout.\n`);
-        }
+        labDir = await resolveLegacyLabDir({
+            labDir,
+            legacyLabDir,
+            courseName,
+            labName,
+            usingCanvas,
+            courses,
+            askRl,
+        });
         if (!usingCanvas && !fs.existsSync(labDir)) {
             // Common mistake: user entered the lab subdirectory as labRoot instead of its parent
             if (path.basename(labRoot).toLowerCase() === labName.toLowerCase() ||

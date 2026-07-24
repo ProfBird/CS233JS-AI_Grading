@@ -15,7 +15,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { walk, DEFAULT_SKIP_DIRS } from '../lib/file_walker.js';
+import { walk, DEFAULT_SKIP_DIRS, toPosix } from '../lib/file_walker.js';
 
 const NAME_REPORT = 'name_check_report.json';
 
@@ -47,7 +47,9 @@ function findInvalidNames(dir, { exclusions = [], extraAllowed = '' } = {}) {
         if (bad) badNames.push({ name, path: path.relative(dir, full), reason: bad.reason });
     };
     walk(dir, {
-        shouldSkip: full => exclusions.some(ex => full.toLowerCase().includes(ex.toLowerCase())),
+        // toPosix so a config exclusion written with "/" (the convention used everywhere
+        // else in this codebase) matches on Windows, where `full` has backslashes.
+        shouldSkip: full => exclusions.some(ex => toPosix(full).toLowerCase().includes(toPosix(ex).toLowerCase())),
         shouldDescend: (full, name) => !name.startsWith('.') && !DEFAULT_SKIP_DIRS.has(name),
         onFile: check,
         onDir: check,

@@ -22,9 +22,14 @@ import { resolveAdapter } from '../../src/adapters/index.js';
 // missing tool skips gracefully instead of failing on an assertion that can never pass
 // without it. Mirrors the beforeAll+ctx.skip() pattern in cpp.spec.mjs/csharp.spec.mjs.
 const PY_BIN = process.platform === 'win32' ? 'py' : 'python3';
+let pythonAvailable = false;
 let ruffAvailable = false;
 let pytestAvailable = false;
 beforeAll(async () => {
+    // build() shells out to `py_compile` via the interpreter itself — on a Node-only CI
+    // machine with no Python installed at all, that's a different (broader) gap than
+    // "ruff/pytest aren't pip-installed", so it needs its own gate.
+    try { await execFileAsync(PY_BIN, ['--version'], { timeout: 5000 }); pythonAvailable = true; } catch (e) { /* not installed */ }
     try { await execFileAsync(PY_BIN, ['-m', 'ruff', '--version'], { timeout: 5000 }); ruffAvailable = true; } catch (e) { /* not installed */ }
     try { await execFileAsync(PY_BIN, ['-m', 'pytest', '--version'], { timeout: 5000 }); pytestAvailable = true; } catch (e) { /* not installed */ }
 });
@@ -105,7 +110,8 @@ describe('python adapter — lint() via ruff', () => {
 });
 
 describe('python adapter — build() via py_compile', () => {
-    it('succeeds for syntactically valid Python', async () => {
+    it('succeeds for syntactically valid Python', async (ctx) => {
+        if (!pythonAvailable) return ctx.skip();
         const root = mkdtempSync(join(tmpdir(), 'pybuild-ok-'));
         try {
             writeFileSync(join(root, 'app.py'), 'def add(a, b):\n    return a + b\n');
@@ -116,7 +122,8 @@ describe('python adapter — build() via py_compile', () => {
         }
     }, 15000);
 
-    it('reports a syntax error', async () => {
+    it('reports a syntax error', async (ctx) => {
+        if (!pythonAvailable) return ctx.skip();
         const root = mkdtempSync(join(tmpdir(), 'pybuild-fail-'));
         try {
             writeFileSync(join(root, 'app.py'), 'def add(a, b)\n    return a + b\n'); // missing colon

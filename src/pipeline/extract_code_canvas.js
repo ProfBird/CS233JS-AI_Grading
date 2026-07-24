@@ -18,8 +18,9 @@
 import fs from 'fs';
 const fsp = fs.promises;
 import path from 'path';
-import { toSafeName, matchUrlCategories, acquireCode, applyGithubSubdir, CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS } from './extract_code.js';
+import { toSafeName, matchUrlCategories, acquireCode, applyGithubSubdir, CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS, emptyUrls } from './extract_code.js';
 import * as canvas from '../lib/canvas_client.js';
+import { makeStudent } from '../lib/student.js';
 
 const FILES_DIR = 'canvas_files';
 const UNSAFE_FILENAME_RE = /[^A-Za-z0-9_.\-]+/g;
@@ -55,7 +56,7 @@ async function importOneSubmission(submission, submissionsDir, urlPatterns) {
     const safeName = toSafeName(displayName);
     const studentDir = path.join(submissionsDir, safeName);
 
-    const student = { name: displayName, gradeDir: studentDir, urls: {} };
+    const student = makeStudent({ name: displayName, gradeDir: studentDir, urls: emptyUrls(urlPatterns) });
 
     const submissionType = submission.submission_type ?? null;
     const workflowState = submission.workflow_state ?? 'unknown';
@@ -65,7 +66,11 @@ async function importOneSubmission(submission, submissionsDir, urlPatterns) {
         return student;
     }
 
-    let urls = {};
+    // Always one key per configured pattern (never a bare {}) — matches Moodle's
+    // extractUrls()/emptyUrls() convention so student.urls.github is reliable regardless
+    // of which acquisition source ran (an online_upload submission never touches
+    // matchUrlCategories, so without this it would stay {}).
+    let urls = emptyUrls(urlPatterns);
     if (submissionType === 'online_upload') {
         // Idempotent, same convention as the Moodle path: don't re-download attachments a
         // previous run already extracted successfully.
@@ -135,7 +140,11 @@ export default async function importFromCanvas({ courseId, assignmentId, submiss
         } catch (e) {
             const name = submission?.user?.name || `user_${submission?.user_id ?? '?'}`;
             console.log(`  ERROR: Failed to process ${name}: ${e.message}`);
-            students.push({ name, gradeDir: null, urls: {}, error: e.message });
+            // makeStudent() so this fallback carries the same extractedDir/filesDir: null
+            // keys the success path does — a bare {name, gradeDir, urls, error} literal
+            // used to omit them entirely, which downstream code only worked around by
+            // falsiness accident (undefined and null both read as "no code").
+            students.push(makeStudent({ name, gradeDir: null, urls: emptyUrls(urlPatterns || DEFAULT_URL_PATTERNS), error: e.message }));
         }
     }
     return students;

@@ -13,7 +13,9 @@ import path from 'path';
 import { execFile } from 'child_process';
 import util from 'util';
 const execFileAsync = util.promisify(execFile);
-import { walk, toPosix } from '../lib/file_walker.js';
+import { getAllFiles as sharedGetAllFiles } from '../lib/file_walker.js';
+import { makeCommentStripper } from '../lib/comment_stripper.js';
+import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 
 const DEFAULT_EXCLUSIONS = ['__pycache__', '.venv', 'venv', '.git'];
 
@@ -28,24 +30,17 @@ function pythonBin(config) {
 // Python has no block-comment syntax; triple-quoted strings are just string literals
 // (sometimes used as docstrings) that must be protected before stripping "#" comments,
 // the same way JS's stripComments protects string/template literals before stripping "//".
-function stripComments(code) {
-    const strings = [];
-    const protect = re => { code = code.replace(re, m => { strings.push(m); return `\x00${strings.length - 1}\x00`; }); };
-    protect(/("""[\s\S]*?"""|'''[\s\S]*?''')/g);          // triple-quoted first (may span lines, contain # or quotes)
-    protect(/("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g); // then single-line quoted strings
-    code = code.replace(/#[^\n]*/g, '');
-    code = code.replace(/\x00(\d+)\x00/g, (_, i) => strings[+i]);
-    return code;
-}
+const stripComments = makeCommentStripper({
+    lineComment: /#[^\n]*/g,
+    protectPatterns: [
+        /("""[\s\S]*?"""|'''[\s\S]*?''')/g,           // triple-quoted first (may span lines, contain # or quotes)
+        /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g, // then single-line quoted strings
+    ],
+});
 
 // ---------- File collection ----------
 function getAllFiles(dirPath, exclusions = DEFAULT_EXCLUSIONS) {
-    const results = [];
-    walk(dirPath, {
-        shouldSkip: full => exclusions.some(ex => toPosix(full).includes(toPosix(ex))),
-        onFile: full => results.push(full)
-    });
-    return results;
+    return sharedGetAllFiles(dirPath, exclusions);
 }
 
 // ---------- Manifest (requirements.txt) ----------
@@ -149,49 +144,27 @@ async function lint(files, cwd, configOverride, config) {
         // diagnostics are still on stdout. A genuine invocation failure has no JSON stdout.
         stdout = err.stdout;
         if (!stdout) {
-            return { errors: 0, warnings: 0, messages: ['ruff not installed or failed to run'], errorMessages: [], warningMessages: [], ruleCounts: {} };
+            return { errors: 0, warnings: 0, messages: ['ruff not installed or failed to run'], errorMessages: [], warningMessages: [], ruleCounts: {}, toolError: 'ruff not installed or failed to run' };
         }
     }
 
     let issues;
     try { issues = JSON.parse(stdout); } catch (e) {
-        return { errors: 0, warnings: 0, messages: ['Could not parse ruff output'], errorMessages: [], warningMessages: [], ruleCounts: {} };
-    }
-
-    const ruleCounts = {};
-    const errorRuleCounts = {};
-    const warningRuleCounts = {};
-    let errors = 0, warnings = 0;
-
-    for (const issue of issues) {
-        const code = issue.code || 'unknown';
-        ruleCounts[code] = (ruleCounts[code] || 0) + 1;
-        if (isErrorCode(code)) {
-            errors++;
-            errorRuleCounts[code] = (errorRuleCounts[code] || 0) + 1;
-        } else {
-            warnings++;
-            warningRuleCounts[code] = (warningRuleCounts[code] || 0) + 1;
-        }
+        return { errors: 0, warnings: 0, messages: ['Could not parse ruff output'], errorMessages: [], warningMessages: [], ruleCounts: {}, toolError: 'Could not parse ruff output' };
     }
 
     const nameByCode = {};
     for (const issue of issues) nameByCode[issue.code] = issue.name;
-    const toMessages = counts => Object.entries(counts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([code, count]) => `${friendlyRuffName(nameByCode[code], code)}: ${count}`);
 
-    return {
-        errors, warnings,
-        messages: toMessages(ruleCounts),
-        errorMessages: toMessages(errorRuleCounts),
-        warningMessages: toMessages(warningRuleCounts),
-        ruleCounts,
-    };
+    return aggregateDiagnostics(issues, {
+        code: issue => issue.code || 'unknown',
+        isError: issue => isErrorCode(issue.code || 'unknown'),
+        friendlyName: code => friendlyRuffName(nameByCode[code], code),
+    });
 }
 
-function lintConfigCandidates(configsDir, labName, parentName, courseName = null) {
-    const repoRoot = path.join(configsDir, '..');
+function lintConfigCandidates(configsDir, labName, parentName, courseName = null, repoRootOverride = null) {
+    const repoRoot = repoRootOverride || path.join(configsDir, '..');
     const labConfigsDir = courseName ? path.join(configsDir, courseName) : configsDir;
     const candidates = [];
     if (parentName) candidates.push(path.join(labConfigsDir, parentName, labName, 'ruff.toml'));

@@ -8,10 +8,13 @@
 
 import fs from 'fs';
 import path from 'path';
-import { exec, spawn, execFileSync } from 'child_process';
+import { exec, spawn } from 'child_process';
 import util from 'util';
 const execAsync = util.promisify(exec);
-import { walk, toPosix } from '../lib/file_walker.js';
+import { walk, getAllFiles } from '../lib/file_walker.js';
+import { killProcessTree } from '../lib/sandbox.js';
+import { makeCommentStripper } from '../lib/comment_stripper.js';
+import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 
 // ---------- Comment stripping (moved from analyze_code.js) ----------
 
@@ -19,28 +22,11 @@ import { walk, toPosix } from '../lib/file_walker.js';
 // Preserves string/template literal contents to avoid stripping // inside URLs, etc.
 // NOTE: block comments are stripped first to prevent apostrophes in JSDoc comments
 // (e.g. "user's") from being mistakenly treated as the start of a string literal.
-function stripComments(code) {
-    code = code.replace(/\/\*[\s\S]*?\*\//g, '');
-    const strings = [];
-    code = code.replace(/(['"`])((?:\\[\s\S]|(?!\1)[^\\])*?)\1/g, match => {
-        strings.push(match);
-        return `\x00${strings.length - 1}\x00`;
-    });
-    code = code.replace(/\/\/[^\n]*/g, '');
-    code = code.replace(/\x00(\d+)\x00/g, (_, i) => strings[+i]);
-    return code;
-}
-
-// ---------- File collection helper (local, avoids importing pipeline modules) ----------
-
-function getAllFiles(dirPath, exclusions = []) {
-    const results = [];
-    walk(dirPath, {
-        shouldSkip: full => exclusions.some(ex => toPosix(full).includes(toPosix(ex))),
-        onFile: full => results.push(full)
-    });
-    return results;
-}
+const stripComments = makeCommentStripper({
+    blockComment: /\/\*[\s\S]*?\*\//g,
+    lineComment: /\/\/[^\n]*/g,
+    protectPatterns: [/(['"`])((?:\\[\s\S]|(?!\1)[^\\])*?)\1/g],
+});
 
 const DEFAULT_EXCLUSIONS = ['node_modules', 'dist', '.git'];
 
@@ -205,39 +191,25 @@ function friendlyRuleName(ruleId) {
 }
 
 function parseLintOutput(results) {
+    // ESLint's own per-file errorCount/warningCount are used for the totals (not a count
+    // of the flattened messages below) — they're the authoritative source and, unlike a
+    // message count, still correct if ESLint ever reports a count without an accompanying
+    // message for some reason.
     let totalErrors = 0;
     let totalWarnings = 0;
-    const ruleCounts = {};
-    const errorRuleCounts = {};
-    const warningRuleCounts = {};
-
     for (const file of results) {
         totalErrors += file.errorCount;
         totalWarnings += file.warningCount;
-
-        for (const msg of file.messages) {
-            const rule = msg.ruleId || 'parse-error';
-            ruleCounts[rule] = (ruleCounts[rule] || 0) + 1;
-            if (msg.severity === 2) {
-                errorRuleCounts[rule] = (errorRuleCounts[rule] || 0) + 1;
-            } else {
-                warningRuleCounts[rule] = (warningRuleCounts[rule] || 0) + 1;
-            }
-        }
     }
 
-    const toMessages = counts => Object.entries(counts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([rule, count]) => `${friendlyRuleName(rule)}: ${count}`);
+    const allMessages = results.flatMap(file => file.messages);
+    const diagnostics = aggregateDiagnostics(allMessages, {
+        code: msg => msg.ruleId || 'parse-error',
+        isError: msg => msg.severity === 2,
+        friendlyName: friendlyRuleName,
+    });
 
-    return {
-        errors: totalErrors,
-        warnings: totalWarnings,
-        messages: toMessages(ruleCounts),
-        errorMessages: toMessages(errorRuleCounts),
-        warningMessages: toMessages(warningRuleCounts),
-        ruleCounts
-    };
+    return { ...diagnostics, errors: totalErrors, warnings: totalWarnings };
 }
 
 async function lint(jsFiles, cwd, configOverride) {
@@ -248,7 +220,7 @@ async function lint(jsFiles, cwd, configOverride) {
         const mod = await import('eslint');
         ESLint = mod.ESLint ?? mod.default?.ESLint;
     } catch (e) {
-        return { errors: 0, warnings: 0, messages: ['ESLint not installed'], errorMessages: [], warningMessages: [], ruleCounts: {} };
+        return { errors: 0, warnings: 0, messages: ['ESLint not installed'], errorMessages: [], warningMessages: [], ruleCounts: {}, toolError: 'ESLint not installed' };
     }
 
     try {
@@ -259,18 +231,21 @@ async function lint(jsFiles, cwd, configOverride) {
         const results = await eslint.lintFiles(jsFiles);
         return parseLintOutput(results);
     } catch (e) {
-        return { errors: 0, warnings: 0, messages: ['ESLint execution failed: ' + e.message.substring(0, 100)], errorMessages: [], warningMessages: [], ruleCounts: {} };
+        const msg = 'ESLint execution failed: ' + e.message.substring(0, 100);
+        return { errors: 0, warnings: 0, messages: [msg], errorMessages: [], warningMessages: [], ruleCounts: {}, toolError: msg };
     }
 }
 
 // Resolution priority: step-specific override > lab-specific override > shipped default.
 // labName/stepName mirror lint_code.js's existing derivation from the Artifacts labDir path
 // (for multi-step labs, "labName" here is actually the step name and "parentName" the lab name).
-function lintConfigCandidates(configsDir, labName, parentName, courseName = null) {
+function lintConfigCandidates(configsDir, labName, parentName, courseName = null, repoRootOverride = null) {
     // The shipped-default fallback is always repo-root-relative and course-agnostic, so
-    // repoRoot is derived from the unmodified configsDir; courseName only affects where the
-    // per-lab/per-step override candidates are looked for.
-    const repoRoot = path.join(configsDir, '..');
+    // repoRoot is derived from the unmodified configsDir by default; courseName only
+    // affects where the per-lab/per-step override candidates are looked for.
+    // repoRootOverride lets a caller point configsDir at a scratch directory (for tests)
+    // without losing the ability to resolve the real shipped default.
+    const repoRoot = repoRootOverride || path.join(configsDir, '..');
     const labConfigsDir = courseName ? path.join(configsDir, courseName) : configsDir;
     const candidates = [];
     if (parentName) candidates.push(path.join(labConfigsDir, parentName, labName, 'eslint.config.mjs'));
@@ -361,19 +336,6 @@ function spawnScript(pkgDir, scriptName, timeoutMs) {
     });
 }
 
-// Kill a spawned process and its whole tree, cross-platform. On POSIX we signal
-// the negative PID (the detached process group). Windows has no process groups,
-// so use taskkill /T to walk and terminate the child tree (npm -> node -> vite).
-function killProcessTree(pid) {
-    if (!pid) return;
-    if (process.platform === 'win32') {
-        try { execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch (_) {}
-    } else {
-        try { process.kill(-pid, 'SIGKILL'); }
-        catch (_) { try { process.kill(pid, 'SIGKILL'); } catch (_) {} }
-    }
-}
-
 // Checks whether `name` is defined in project's package.json, and (unless verifyOnly)
 // actually runs it. verifyOnly is used by the pipeline for scripts that start persistent
 // servers (dev/start/serve/watch/preview) — see SERVER_SCRIPTS in runtime_check.js;
@@ -427,6 +389,7 @@ export default {
     install,
     build,
     runScript,
+    runTests: null, // no test-runner integration for JS/TS labs yet — same capability-gap convention as any other adapter
     preflight,
 };
 

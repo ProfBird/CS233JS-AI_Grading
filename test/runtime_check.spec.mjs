@@ -4,9 +4,8 @@
  * Characterization tests for the pre-refactor runtime-check phase, written as a
  * regression fence BEFORE runtime_check.js is generalized into a check-strategy
  * registry. `child_process.exec`/`spawn` are mocked so "build" mode and scripts_check
- * never shell out to a real npm install — only the "browser" mode integration test
- * launches real headless Chrome (kept to a single test, skipped if Puppeteer can't
- * launch in this environment).
+ * never shell out to a real npm install — only the two "browser" mode integration tests
+ * launch real headless Chrome (skipped if Puppeteer can't launch in this environment).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';

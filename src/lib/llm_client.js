@@ -7,7 +7,7 @@ import fs from 'fs';
 
 const ENV_KEYS = { openrouter: 'OPENROUTER_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
 const DEFAULTS = {
-    ollama:      { baseUrl: 'http://localhost:11434',           model: null },
+    ollama:      { baseUrl: 'http://localhost:11434/v1',        model: null },
     openrouter:  { baseUrl: 'https://openrouter.ai/api/v1',    model: 'deepseek/deepseek-chat-v3-0324:free' },
     anthropic:   { baseUrl: 'https://api.anthropic.com/v1',    model: 'claude-haiku-4-5-20251001' },
 };
@@ -25,7 +25,7 @@ const DEFAULT_APP_URL = 'https://localhost';
 const DEFAULT_APP_TITLE = 'AI Grading Pipeline';
 
 class LLMClient {
-    constructor({ provider, apiKey, model, fallbackModel, baseUrl, timeout = 60000, appUrl, appTitle }) {
+    constructor({ provider, apiKey, model, fallbackModel, baseUrl, timeout = 60000, appUrl, appTitle, quiet = false }) {
         this.provider      = provider;
         this.apiKey        = apiKey;
         this.model         = model || DEFAULTS[provider]?.model;
@@ -34,6 +34,10 @@ class LLMClient {
         this.timeout       = timeout;
         this.appUrl        = appUrl || DEFAULT_APP_URL;
         this.appTitle      = appTitle || DEFAULT_APP_TITLE;
+        // Suppresses this client's own console.error on failure — for callers (e.g.
+        // ollama_comments.js, called once per student) that already report the failure
+        // themselves and don't want a duplicate line per attempt.
+        this.quiet         = quiet;
     }
 
     // Returns response text or null on failure.
@@ -46,14 +50,14 @@ class LLMClient {
                     : await this._chatOpenAI(systemPrompt, userPrompt, model);
             } catch (e) {
                 if (e.status === 429 && this.fallbackModel && model !== this.fallbackModel) {
-                    console.error(`\n  Rate-limited on ${model}, trying fallback: ${this.fallbackModel}`);
+                    if (!this.quiet) console.error(`\n  Rate-limited on ${model}, trying fallback: ${this.fallbackModel}`);
                     return attempt(this.fallbackModel, 0);
                 }
                 if (n < 2) {
                     await new Promise(r => setTimeout(r, Math.pow(2, n) * 1000));
                     return attempt(model, n + 1);
                 }
-                console.error(`\n  LLM request failed: ${e.message}`);
+                if (!this.quiet) console.error(`\n  LLM request failed: ${e.message}`);
                 return null;
             }
         };
@@ -151,10 +155,14 @@ function loadLLMClient(localConfigPath) {
     return new LLMClient({ provider: llm.provider, apiKey, model: llm.model, fallbackModel: llm.fallbackModel, baseUrl: llm.baseUrl });
 }
 
-// Probes Ollama for an available model name.
-function detectOllamaModel() {
+// Probes Ollama for an available model name. `baseUrl` is the client-facing chat
+// baseUrl (e.g. "http://localhost:11434/v1", DEFAULTS.ollama.baseUrl by default) —
+// Ollama's tag-listing endpoint lives at the host root, not under /v1, so a
+// trailing /v1 is stripped before appending /api/tags.
+function detectOllamaModel(baseUrl = DEFAULTS.ollama.baseUrl) {
+    const tagsUrl = `${baseUrl.replace(/\/v1\/?$/, '')}/api/tags`;
     return new Promise(resolve => {
-        const req = http.get('http://localhost:11434/api/tags', res => {
+        const req = http.get(tagsUrl, res => {
             let raw = '';
             res.on('data', c => raw += c);
             res.on('end', () => {
@@ -287,4 +295,4 @@ async function selectModel(localConfigPath, { ask, askOptions }) {
     return new LLMClient({ provider: choice.provider, apiKey, model });
 }
 
-export { LLMClient, loadLLMClient, setupLLMInteractive, selectModel };
+export { LLMClient, loadLLMClient, setupLLMInteractive, selectModel, detectOllamaModel };

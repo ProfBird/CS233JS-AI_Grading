@@ -769,8 +769,10 @@ Wraps Ollama, OpenRouter, and Anthropic behind a single `chat(systemPrompt, user
 - `loadLLMClient(localConfigPath)` — reads `llm` block from `local-config.json`; resolves API key from environment first, then stored value
 - `setupLLMInteractive(localConfigPath, driver)` — full guided provider/model/key setup; saves to `local-config.json`
 - `selectModel(localConfigPath, driver)` — simplified 4-option picker used by `configure_lab.js`; shows current selection as default
-- `detectOllamaModel()` — probes `localhost:11434/api/tags` for a running model name (2s timeout)
+- `detectOllamaModel(baseUrl = DEFAULTS.ollama.baseUrl)` — probes `{host}/api/tags` for a running model name (2s timeout); strips a trailing `/v1` off the given chat `baseUrl` first, since Ollama's tag-listing endpoint lives at the host root, not under `/v1`. Used by both `setupLLMInteractive`/`selectModel` and by `ollama_comments.js`'s `getAvailableModel` (a thin re-export).
 - On HTTP 429, automatically retries with `fallbackModel` if configured; otherwise retries up to 3 times with exponential backoff
+- `DEFAULTS.ollama.baseUrl` is `http://localhost:11434/v1` — Ollama's OpenAI-compatible chat endpoint (`chat()` POSTs to `${baseUrl}/chat/completions`) lives under `/v1`, unlike its native `/api/*` endpoints
+- `new LLMClient({ ..., quiet: true })` suppresses this client's own `console.error` calls on failure/retry — for callers that already report failure themselves and don't want a duplicate line (e.g. `ollama_comments.js`, called once per student)
 
 ### `lib/tui.js` — Terminal UI
 
@@ -785,13 +787,13 @@ Provides the full-screen interface for `configure_lab.js` using `neo-blessed`.
 
 ### `ollama_comments.js` — AI Summary Generator
 
-Hits a local Ollama instance (`http://localhost:11434`) to generate one-sentence rubric summaries.
+Thin wrapper around `llm_client.js`'s `LLMClient` (Ollama provider) — generates one-sentence rubric summaries. Owns only the grading-specific prompt template and an 8s per-student timeout; HTTP/retry/model-probe machinery is shared with `llm_client.js`'s other providers (no longer a separate HTTP client).
 
-- Discovers available models via `/api/tags`
-- Sends a prompt with feature counts, lint issues, and runtime results
-- Requests a 20-word-max sentence at `temperature: 0`
-- Retries up to 3 times with exponential backoff (1s, 2s, 4s) to handle cold-start delays
-- Returns `null` if all retries fail — caller falls back to placeholder text
+- `getAvailableModel()` — re-exports `llm_client.js`'s `detectOllamaModel()`
+- `generateSummary({ model, features, lintErrors, lintWarnings, lintTopIssues, runtimeSuccess, runtimeErrors, language })` — builds the prompt, calls `new LLMClient({ provider: 'ollama', model, timeout: 8000, quiet: true }).chat(...)`
+- Sends a prompt with feature counts, lint issues, and runtime results; requests a 20-word-max sentence at `temperature: 0`
+- Retries up to 3 times with exponential backoff (1s, 2s, 4s) to handle cold-start delays (via `LLMClient.chat`)
+- Returns `null` if all retries fail — caller (`generate_grades.js`) falls back to placeholder text and prints its own per-student failure line, so this client is constructed with `quiet: true` to avoid a duplicate log line
 
 ### `rubric_to_md.js` — Standalone Utility
 

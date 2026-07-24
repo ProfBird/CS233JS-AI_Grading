@@ -1,52 +1,18 @@
-import http from 'http';
+// AI-generated one-sentence rubric summaries via a local Ollama server. Thin wrapper
+// around LLMClient (src/lib/llm_client.js) — this module owns only the grading-specific
+// prompt template and the shorter per-student timeout; the HTTP/retry/model-probe
+// machinery is shared with llm_client.js's other providers.
+import { LLMClient, detectOllamaModel } from './llm_client.js';
 
-const OLLAMA_BASE = 'http://localhost:11434';
 const TIMEOUT_MS = 8000;
-const MAX_RETRIES = 3;
-
-function httpRequest(method, path, body = null, timeout = TIMEOUT_MS) {
-    return new Promise((resolve, reject) => {
-        const url = `${OLLAMA_BASE}${path}`;
-        const req = http.request(url, {
-            method,
-            headers: body ? {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(body)
-            } : {}
-        }, res => {
-            let raw = '';
-            res.on('data', chunk => raw += chunk);
-            res.on('end', () => resolve({ status: res.statusCode, body: raw }));
-        });
-        req.on('error', reject);
-        req.setTimeout(timeout, () => { req.destroy(); reject(new Error('timeout')); });
-        if (body) req.write(body);
-        req.end();
-    });
-}
 
 // Returns the name of the first available model, or null if Ollama is unreachable or has no models.
 function getAvailableModel() {
-    return new Promise(resolve => {
-        const req = http.get(`${OLLAMA_BASE}/api/tags`, res => {
-            let raw = '';
-            res.on('data', chunk => raw += chunk);
-            res.on('end', () => {
-                try {
-                    const models = JSON.parse(raw).models;
-                    resolve(models && models.length ? models[0].name : null);
-                } catch {
-                    resolve(null);
-                }
-            });
-        });
-        req.on('error', () => resolve(null));
-        req.setTimeout(2000, () => { req.destroy(); resolve(null); });
-    });
+    return detectOllamaModel();
 }
 
 // Returns a one-sentence summary string, or null on failure.
-// Retries with exponential backoff to handle cold-start delays.
+// Retries with exponential backoff (via LLMClient) to handle cold-start delays.
 function generateSummary({ model, features, lintErrors, lintWarnings, lintTopIssues, runtimeSuccess, runtimeErrors, language = 'code' }) {
     const topIssues = lintTopIssues.length ? ` (${lintTopIssues.slice(0, 3).join(', ')})` : '';
     const prompt =
@@ -56,31 +22,8 @@ function generateSummary({ model, features, lintErrors, lintWarnings, lintTopIss
         `Runtime: ${runtimeSuccess ? 'clean' : 'errors: ' + runtimeErrors.slice(0, 2).join('; ')}\n\n` +
         `Summary:`;
 
-    const body = JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0,
-        stream: false
-    });
-
-    async function attempt(n) {
-        try {
-            const res = await httpRequest('POST', '/v1/chat/completions', body);
-            if (res.status === 200) {
-                return JSON.parse(res.body).choices[0].message.content.trim();
-            }
-        } catch (e) {
-            /* retry on timeout or network error */
-        }
-        if (n < MAX_RETRIES - 1) {
-            const delay = Math.pow(2, n) * 1000;
-            await new Promise(r => setTimeout(r, delay));
-            return attempt(n + 1);
-        }
-        return null;
-    }
-
-    return attempt(0);
+    const client = new LLMClient({ provider: 'ollama', model, timeout: TIMEOUT_MS, quiet: true });
+    return client.chat(null, prompt);
 }
 
 export { getAvailableModel, generateSummary };

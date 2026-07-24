@@ -4,6 +4,7 @@
  * Checks student apps for runtime errors using a named check strategy, registered via
  * registerCheckStrategy() below (mirrors the mapping-handler registry pattern in
  * generate_grades.js). Built-in strategies:
+ *   "none"      — no-op for labs with nothing to run (static multi-page markup labs)
  *   "browser"   — serves source index.html in headless Chrome to capture console errors
  *   "build"     — runs the language adapter's install + build steps
  *   "both"      — runs build first, then opens built dist/ in headless Chrome
@@ -329,6 +330,14 @@ async function checkStudentTests(extractedDir, adapter, config = {}) {
 }
 
 // ========== Built-in strategies ==========
+
+// No-op strategy for labs with nothing to run — e.g. static multi-page HTML/CSS sites
+// (CIS195) that need neither a build nor a Puppeteer pass. runtimeCheck is a required
+// config key, so markup-only labs set "none" rather than paying for a browser check.
+registerCheckStrategy('none', async (student) => {
+    console.log(`  SKIP: ${student.name}: runtime check disabled ("none")`);
+    return { success: true, skipped: true, errors: [] };
+});
 
 registerCheckStrategy('build', async (student, config, ctx) => {
     const result = await checkBuild(student.extractedDir, ctx.adapter, config);

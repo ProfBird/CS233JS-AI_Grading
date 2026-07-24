@@ -266,11 +266,15 @@ async function lint(jsFiles, cwd, configOverride) {
 // Resolution priority: step-specific override > lab-specific override > shipped default.
 // labName/stepName mirror lint_code.js's existing derivation from the Artifacts labDir path
 // (for multi-step labs, "labName" here is actually the step name and "parentName" the lab name).
-function lintConfigCandidates(configsDir, labName, parentName) {
+function lintConfigCandidates(configsDir, labName, parentName, courseName = null) {
+    // The shipped-default fallback is always repo-root-relative and course-agnostic, so
+    // repoRoot is derived from the unmodified configsDir; courseName only affects where the
+    // per-lab/per-step override candidates are looked for.
     const repoRoot = path.join(configsDir, '..');
+    const labConfigsDir = courseName ? path.join(configsDir, courseName) : configsDir;
     const candidates = [];
-    if (parentName) candidates.push(path.join(configsDir, parentName, labName, 'eslint.config.mjs'));
-    candidates.push(path.join(configsDir, labName, 'eslint.config.mjs'));
+    if (parentName) candidates.push(path.join(labConfigsDir, parentName, labName, 'eslint.config.mjs'));
+    candidates.push(path.join(labConfigsDir, labName, 'eslint.config.mjs'));
     candidates.push(path.join(repoRoot, 'eslint', 'student.eslint.config.mjs'));
     return candidates;
 }

@@ -1,0 +1,126 @@
+{
+  "titleText": "CIS 195 Lab 2: Lists, Quotes, and Figures",
+  "textReport": true,
+  "runtimeCheck": "none",
+  "webContent": {
+    "requiredElements": [
+      {
+        "id": "title",
+        "selector": "title",
+        "description": "page title"
+      },
+      {
+        "id": "links",
+        "selector": "a[href]",
+        "description": "hyperlink"
+      },
+      {
+        "id": "figure_img",
+        "selector": "figure > img",
+        "description": "image in a figure"
+      },
+      {
+        "id": "figcaption",
+        "selector": "figure > figcaption",
+        "description": "figure caption"
+      },
+      {
+        "id": "img_alt",
+        "selector": "img[alt]",
+        "description": "image with alt text"
+      },
+      {
+        "id": "hr",
+        "selector": "hr",
+        "description": "horizontal rule"
+      },
+      {
+        "id": "blockquote",
+        "selector": "blockquote",
+        "description": "block quote"
+      },
+      {
+        "id": "list_item",
+        "selector": "li",
+        "description": "list item"
+      },
+      {
+        "id": "nested_list",
+        "selector": ":is(ol ol), :is(ol ul), :is(ul ol), :is(ul ul)",
+        "description": "nested list"
+      }
+    ],
+    "fileCounts": [
+      {
+        "id": "html",
+        "pattern": "\\.html?$",
+        "min": 4
+      }
+    ]
+  },
+  "analysis": {
+    "features": [
+      {
+        "id": "head_comment",
+        "regex": "<head>[\\s\\S]*<!--",
+        "fileRegex": "\\.html?$"
+      },
+      {
+        "id": "special_symbol",
+        "regex": "&[a-zA-Z0-9]*;",
+        "fileRegex": "\\.html?$"
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "type": "element_check",
+      "maxScore": 1,
+      "msg": "Required HTML elements present"
+    },
+    {
+      "type": "file_count",
+      "countId": "html",
+      "maxScore": 1,
+      "msg": "At least 4 HTML files"
+    },
+    {
+      "type": "path_exists",
+      "pathPattern": "index.htm",
+      "maxScore": 1,
+      "msg": "Home page named index.html"
+    },
+    {
+      "type": "feature",
+      "featureId": "head_comment",
+      "maxScore": 1,
+      "msg": "Comment in the head section"
+    },
+    {
+      "type": "feature",
+      "featureId": "special_symbol",
+      "maxScore": 1,
+      "msg": "Special symbol (HTML entity) used"
+    },
+    {
+      "type": "html_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "HTML is valid"
+    },
+    {
+      "type": "name_check",
+      "maxScore": 1,
+      "msg": "File/folder names are web-safe"
+    }
+  ],
+  "validate": {
+    "htmlRules": {
+      "no-inline-style": "off",
+      "attr-quotes": "off",
+      "element-case": "off",
+      "no-implicit-button-type": "off",
+      "wcag/h63": "off"
+    }
+  }
+}

@@ -29,9 +29,10 @@ const {
     heuristicDraft, mergeLLMResponse, guardFeatureType, findCriteria, printDraftTable,
 } = await import('../bin/configure-lab.js');
 
-const TERM_RUBRIC = join(import.meta.dirname, '..', 'configs', 'TermProject',
+// Real lab configs live under configs/{Course}/{Lab}/ (course tier).
+const TERM_RUBRIC = join(import.meta.dirname, '..', 'configs', 'CS233JS', 'TermProject',
     'DevEnvAndStaticSite', 'CS233JS_TermProjectDevEnv_Rubric.xlsm');
-const LAB04_RUBRIC = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
+const LAB04_RUBRIC = join(import.meta.dirname, '..', 'configs', 'CS233JS', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
 
 // ── mock driver factory ──────────────────────────────────────────────────
 // Satisfies the driver interface expected by config_prompts.js:
@@ -283,7 +284,7 @@ describe('readRubricCriteria', () => {
 // ── promptRubricRows ────────────────────────────────────────────────────
 
 describe('promptRubricRows', () => {
-    const realRubric = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
+    const realRubric = LAB04_RUBRIC;
 
     it('returns rows when default header is found and user confirms columns', async () => {
         const driver = mockDriver(['']);  // empty = accept default for "Are these columns correct?"
@@ -305,7 +306,7 @@ describe('promptRubricRows', () => {
 describe('promptRubricCriteria', () => {
     it('returns the criteria array unchanged from readRubricCriteria', async () => {
         const driver = mockDriver([]);
-        const rubric = join(import.meta.dirname, '..', 'configs', 'TermProject', 'DevEnvAndStaticSite', 'CS233JS_TermProjectDevEnv_Rubric.xlsm');
+        const rubric = TERM_RUBRIC;
         const result = await promptRubricCriteria(driver, rubric);
         expect(result).toEqual(readRubricCriteria(rubric));
         expect(result.length).toBeGreaterThan(0);
@@ -872,7 +873,7 @@ describe('buildMappingEntry', () => {
 
 describe('copyRubric', () => {
     let tmpDir;
-    const realRubric = join(import.meta.dirname, '..', 'configs', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
+    const realRubric = LAB04_RUBRIC;
 
     beforeEach(() => {
         tmpDir = mkdtempSync(join(tmpdir(), 'configure_lab_test_'));

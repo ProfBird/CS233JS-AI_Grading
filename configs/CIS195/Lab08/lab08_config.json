@@ -1,0 +1,105 @@
+{
+  "titleText": "CIS 195 Lab 8: Forms",
+  "textReport": true,
+  "runtimeCheck": "none",
+  "webContent": {
+    "requiredElements": [
+      {
+        "id": "title",
+        "selector": "title",
+        "description": "page title"
+      },
+      {
+        "id": "header",
+        "selector": "header",
+        "description": "page header"
+      },
+      {
+        "id": "h1",
+        "selector": "h1",
+        "description": "main heading"
+      },
+      {
+        "id": "input_name_id",
+        "selector": "input[name][id]",
+        "description": "input with name and id"
+      },
+      {
+        "id": "input_tel",
+        "selector": "input[type='tel']",
+        "description": "telephone input"
+      },
+      {
+        "id": "input_submit",
+        "selector": "input[type='submit']",
+        "description": "submit button"
+      },
+      {
+        "id": "textarea",
+        "selector": "textarea",
+        "description": "text area"
+      },
+      {
+        "id": "fieldset",
+        "selector": "fieldset",
+        "description": "fieldset"
+      },
+      {
+        "id": "legend",
+        "selector": "legend",
+        "description": "fieldset legend"
+      },
+      {
+        "id": "label_for",
+        "selector": "label[for]",
+        "description": "label with for attribute"
+      },
+      {
+        "id": "footer",
+        "selector": "footer",
+        "description": "page footer"
+      }
+    ],
+    "requiredCssProperties": [
+      "background-color"
+    ]
+  },
+  "mappings": [
+    {
+      "type": "element_check",
+      "maxScore": 1,
+      "msg": "Required form elements present"
+    },
+    {
+      "type": "css_property_check",
+      "maxScore": 1,
+      "msg": "Required CSS properties used"
+    },
+    {
+      "type": "html_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "HTML is valid"
+    },
+    {
+      "type": "css_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "CSS is valid"
+    },
+    {
+      "type": "name_check",
+      "maxScore": 1,
+      "msg": "File/folder names are web-safe"
+    }
+  ],
+  "validate": {
+    "htmlRules": {
+      "no-inline-style": "off",
+      "attr-quotes": "off",
+      "element-case": "off",
+      "no-implicit-button-type": "off",
+      "wcag/h63": "off"
+    }
+  }
+}

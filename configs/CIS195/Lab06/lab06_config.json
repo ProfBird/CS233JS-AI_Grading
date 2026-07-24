@@ -1,0 +1,152 @@
+{
+  "titleText": "CIS 195 Lab 6: Page Layout",
+  "textReport": true,
+  "runtimeCheck": "none",
+  "webContent": {
+    "requiredElements": [
+      {
+        "id": "header",
+        "selector": "header",
+        "description": "page header"
+      },
+      {
+        "id": "footer",
+        "selector": "footer",
+        "description": "page footer"
+      },
+      {
+        "id": "title",
+        "selector": "title",
+        "description": "page title"
+      },
+      {
+        "id": "links",
+        "selector": "a",
+        "description": "hyperlink"
+      },
+      {
+        "id": "external_css",
+        "selector": "link[href][rel='stylesheet']",
+        "description": "external style sheet link"
+      }
+    ],
+    "requiredCssSelectors": [
+      "footer",
+      "nav",
+      "header"
+    ],
+    "requiredCssProperties": [
+      "grid-template-areas",
+      "grid-area",
+      "display: grid",
+      "display: flex",
+      "flex-direction",
+      "align-items",
+      "justify-content"
+    ],
+    "fileCounts": [
+      {
+        "id": "html",
+        "pattern": "\\.html?$",
+        "min": 4
+      },
+      {
+        "id": "css",
+        "pattern": "\\.css$",
+        "min": 2
+      }
+    ]
+  },
+  "analysis": {
+    "features": [
+      {
+        "id": "head_comment",
+        "regex": "<head>[\\s\\S]*<!--",
+        "fileRegex": "\\.html?$"
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "type": "element_check",
+      "maxScore": 1,
+      "msg": "Required HTML elements present"
+    },
+    {
+      "type": "css_selector_check",
+      "maxScore": 1,
+      "msg": "Layout selectors styled (footer/nav/header — optional in original rubric)"
+    },
+    {
+      "type": "css_property_check",
+      "properties": [
+        "grid-template-areas",
+        "grid-area",
+        "display: grid"
+      ],
+      "maxScore": 1,
+      "msg": "CSS grid layout used"
+    },
+    {
+      "type": "css_property_check",
+      "properties": [
+        "display: flex",
+        "flex-direction",
+        "align-items",
+        "justify-content"
+      ],
+      "maxScore": 1,
+      "msg": "Flexbox layout used (align-items/justify-content optional in original rubric)"
+    },
+    {
+      "type": "file_count",
+      "countId": "html",
+      "maxScore": 1,
+      "msg": "At least 4 HTML files"
+    },
+    {
+      "type": "file_count",
+      "countId": "css",
+      "maxScore": 1,
+      "msg": "At least 2 CSS files"
+    },
+    {
+      "type": "path_exists",
+      "pathPattern": "index.htm",
+      "maxScore": 1,
+      "msg": "Home page named index.html"
+    },
+    {
+      "type": "feature",
+      "featureId": "head_comment",
+      "maxScore": 1,
+      "msg": "Comment in the head section"
+    },
+    {
+      "type": "html_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "HTML is valid"
+    },
+    {
+      "type": "css_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "CSS is valid"
+    },
+    {
+      "type": "name_check",
+      "maxScore": 1,
+      "msg": "File/folder names are web-safe"
+    }
+  ],
+  "validate": {
+    "htmlRules": {
+      "no-inline-style": "off",
+      "attr-quotes": "off",
+      "element-case": "off",
+      "no-implicit-button-type": "off",
+      "wcag/h63": "off"
+    }
+  }
+}

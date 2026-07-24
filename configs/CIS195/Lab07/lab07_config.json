@@ -1,0 +1,117 @@
+{
+  "titleText": "CIS 195 Lab 7: Tables",
+  "textReport": true,
+  "runtimeCheck": "none",
+  "webContent": {
+    "requiredElements": [
+      {
+        "id": "title",
+        "selector": "title",
+        "description": "page title"
+      },
+      {
+        "id": "table",
+        "selector": "table",
+        "description": "table"
+      },
+      {
+        "id": "tr",
+        "selector": "tr",
+        "description": "table row"
+      },
+      {
+        "id": "th",
+        "selector": "th",
+        "description": "table header cell"
+      },
+      {
+        "id": "td",
+        "selector": "td",
+        "description": "table data cell"
+      },
+      {
+        "id": "caption",
+        "selector": "caption",
+        "description": "table caption"
+      },
+      {
+        "id": "rowspan",
+        "selector": "td[rowspan]",
+        "description": "cell spanning rows"
+      },
+      {
+        "id": "colspan",
+        "selector": "td[colspan]",
+        "description": "cell spanning columns"
+      },
+      {
+        "id": "thead",
+        "selector": "thead",
+        "description": "table head section"
+      },
+      {
+        "id": "tbody",
+        "selector": "tbody",
+        "description": "table body section"
+      },
+      {
+        "id": "tfoot",
+        "selector": "tfoot",
+        "description": "table foot section"
+      },
+      {
+        "id": "colgroup",
+        "selector": "colgroup",
+        "description": "column group"
+      },
+      {
+        "id": "col",
+        "selector": "col",
+        "description": "column definition"
+      }
+    ],
+    "requiredCssProperties": [
+      "border",
+      "background-color",
+      "text-align"
+    ]
+  },
+  "mappings": [
+    {
+      "type": "element_check",
+      "maxScore": 1,
+      "msg": "Required table elements present"
+    },
+    {
+      "type": "css_property_check",
+      "maxScore": 1,
+      "msg": "Table styling properties used"
+    },
+    {
+      "type": "html_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "HTML is valid"
+    },
+    {
+      "type": "css_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "CSS is valid"
+    },
+    {
+      "type": "name_check",
+      "maxScore": 1,
+      "msg": "File/folder names are web-safe"
+    }
+  ],
+  "validate": {
+    "htmlRules": {
+      "no-inline-style": "off",
+      "attr-quotes": "off",
+      "element-case": "off",
+      "no-implicit-button-type": "off",
+      "wcag/h63": "off"
+    }
+  }
+}

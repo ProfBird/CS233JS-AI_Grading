@@ -22,7 +22,9 @@ const REPO_DIR = 'repo';
 const DEFAULT_URL_PATTERNS = { github: 'github.com', citstudent: 'citstudent.lanecc.edu' };
 
 // Replace spaces and filesystem-unfriendly characters with hyphens for directory/file names.
-const toSafeName = name => name.replace(/[\s/\\:*?"<>|]+/g, '-');
+// Exported for reuse by other acquisition sources (e.g. Canvas) that need the same
+// directory-naming convention.
+export const toSafeName = name => name.replace(/[\s/\\:*?"<>|]+/g, '-');
 
 // Read a file with a timeout — protects against Google Drive blocking reads on unsynced files
 async function readFileWithTimeout(filePath, timeoutMs = 10000) {
@@ -88,25 +90,34 @@ function getStudents(labDir) {
     return Object.values(students);
 }
 
+// If the GitHub URL points to a subdirectory (tree URL), adjust student.extractedDir to point
+// at that subdirectory. Exported so any acquisition source that clones a GitHub repo (Moodle's
+// onlinetext.html link or a Canvas-submitted URL) applies the same tree-URL handling.
+function applyGithubSubdir(student, urls) {
+    if (!(urls.github && student.extractedDir && fs.existsSync(student.extractedDir))) return;
+    const subdir = getGithubSubdir(urls.github);
+    if (!subdir) return;
+    const subdirPath = path.join(student.extractedDir, subdir);
+    if (fs.existsSync(subdirPath)) {
+        student.extractedDir = subdirPath;
+        console.log(`  Using subdirectory: ${subdir} for ${student.name}`);
+    } else {
+        console.log(`  Warning: tree URL subdirectory "${subdir}" not found in cloned repo for ${student.name} — repo may have been reorganized since submission`);
+    }
+}
+
 function emptyUrls(urlPatterns) {
     const urls = {};
     for (const key of Object.keys(urlPatterns)) urls[key] = null;
     return urls;
 }
 
-async function extractUrls(textDir, urlPatterns = DEFAULT_URL_PATTERNS) {
-    if (!textDir) return emptyUrls(urlPatterns);
-    const textFile = path.join(textDir, 'onlinetext.html');
-    if (!fs.existsSync(textFile)) return emptyUrls(urlPatterns);
-
-    let content;
-    try {
-        content = await readFileWithTimeout(textFile, 10000);
-    } catch (e) {
-        // Google Drive timeout — skip this student rather than hanging the pipeline
-        console.log(`  Warning: timeout reading onlinetext.html for a student (Google Drive may be slow) — skipping`);
-        return emptyUrls(urlPatterns);
-    }
+// Scans raw text (an HTML fragment or a bare URL string) for URLs matching each configured
+// category, preferring an href="..." match over a bare-URL match for the same category.
+// Exported so any acquisition source that already has the text/URL in hand (e.g. a Canvas
+// submission body or a directly-submitted URL) can reuse the same category matching that
+// extractUrls() applies to onlinetext.html, without needing a file on disk.
+export function matchUrlCategories(content, urlPatterns = DEFAULT_URL_PATTERNS) {
     const urls = emptyUrls(urlPatterns);
     const entries = Object.entries(urlPatterns);
 
@@ -127,6 +138,22 @@ async function extractUrls(textDir, urlPatterns = DEFAULT_URL_PATTERNS) {
     return urls;
 }
 
+async function extractUrls(textDir, urlPatterns = DEFAULT_URL_PATTERNS) {
+    if (!textDir) return emptyUrls(urlPatterns);
+    const textFile = path.join(textDir, 'onlinetext.html');
+    if (!fs.existsSync(textFile)) return emptyUrls(urlPatterns);
+
+    let content;
+    try {
+        content = await readFileWithTimeout(textFile, 10000);
+    } catch (e) {
+        // Google Drive timeout — skip this student rather than hanging the pipeline
+        console.log(`  Warning: timeout reading onlinetext.html for a student (Google Drive may be slow) — skipping`);
+        return emptyUrls(urlPatterns);
+    }
+    return matchUrlCategories(content, urlPatterns);
+}
+
 // Extracts student.zipFile into codeDir, sets student.extractedDir on success, and returns
 // whether it worked. Uses adm-zip (in-process) rather than shelling out to `unzip`, which is
 // not installed on stock Windows. true = overwrite existing files (-o).
@@ -141,48 +168,22 @@ function extractZip(student, codeDir) {
     }
 }
 
-async function extractStudentCode(student, labDir, repoClonePath, urlPatterns = DEFAULT_URL_PATTERNS) {
-    const urls = await extractUrls(student.textDir, urlPatterns);
-    // Prefer the GitHub repository over a submitted zip when both are present, so the dir is
-    // named for the repo (the zip is only used as a fallback if the clone fails).
-    const codeDirName = urls.github ? REPO_DIR : CODE_DIR;
-
-    // Determine where to put the code: repoClonePath (SubmissionsAndAssessment) or fallback to filesDir
-    let codeDir;
-    if (repoClonePath) {
-        const safeName   = toSafeName(student.name);
-        const studentDir = path.join(repoClonePath, safeName);
-        codeDir          = path.join(studentDir, codeDirName);
-        student.gradeDir = studentDir;
-
-        // Backward compatibility: if already-extracted code lives at the old path with spaces,
-        // reuse it rather than forcing a re-clone into the new hyphenated path.
-        if (safeName !== student.name) {
-            const legacyDir  = path.join(repoClonePath, student.name);
-            const legacyCode = path.join(legacyDir, codeDirName);
-            if (!fs.existsSync(codeDir) && fs.existsSync(legacyCode)) {
-                const contents = fs.readdirSync(legacyCode).filter(f => !f.startsWith('.'));
-                if (contents.length > 0) {
-                    codeDir          = legacyCode;
-                    student.gradeDir = legacyDir;
-                }
-            }
-        }
-    } else {
-        codeDir = path.join(student.filesDir || labDir, codeDirName);
-        student.gradeDir = student.filesDir || null;
-    }
-
+// Given an already-resolved codeDir and urls map, does the actual clone/unzip into codeDir,
+// setting student.extractedDir/student.error. Idempotent — skips if codeDir already has real
+// content. Shared by extractStudentCode() (Moodle path resolution below) and any other
+// acquisition source (e.g. Canvas) that resolves codeDir/urls its own way but wants the same
+// clone-with-fallback/unzip mechanics.
+function acquireCode(student, codeDir, urls) {
     // We only skip if the folder exists AND has actual content (not just .git or empty)
     if (fs.existsSync(codeDir)) {
         const contents = fs.readdirSync(codeDir).filter(f => !f.startsWith('.'));
         if (contents.length > 0) {
             student.extractedDir = codeDir;
             console.log(`  Already ${urls.github ? 'cloned' : 'extracted'}: ${student.name}`);
-            return urls;
+            return;
         }
         // Directory exists but is empty/broken — remove it so we retry
-        console.log(`  Found empty ${codeDirName} for ${student.name}, retrying...`);
+        console.log(`  Found empty ${path.basename(codeDir)} for ${student.name}, retrying...`);
         fs.rmSync(codeDir, { recursive: true, force: true });
     }
 
@@ -226,6 +227,41 @@ async function extractStudentCode(student, labDir, repoClonePath, urlPatterns = 
         console.log(`  No code source found for ${student.name}`);
         student.error = 'No ZIP file or GitHub URL found';
     }
+}
+
+async function extractStudentCode(student, labDir, repoClonePath, urlPatterns = DEFAULT_URL_PATTERNS) {
+    const urls = await extractUrls(student.textDir, urlPatterns);
+    // Prefer the GitHub repository over a submitted zip when both are present, so the dir is
+    // named for the repo (the zip is only used as a fallback if the clone fails).
+    const codeDirName = urls.github ? REPO_DIR : CODE_DIR;
+
+    // Determine where to put the code: repoClonePath (SubmissionsAndAssessment) or fallback to filesDir
+    let codeDir;
+    if (repoClonePath) {
+        const safeName   = toSafeName(student.name);
+        const studentDir = path.join(repoClonePath, safeName);
+        codeDir          = path.join(studentDir, codeDirName);
+        student.gradeDir = studentDir;
+
+        // Backward compatibility: if already-extracted code lives at the old path with spaces,
+        // reuse it rather than forcing a re-clone into the new hyphenated path.
+        if (safeName !== student.name) {
+            const legacyDir  = path.join(repoClonePath, student.name);
+            const legacyCode = path.join(legacyDir, codeDirName);
+            if (!fs.existsSync(codeDir) && fs.existsSync(legacyCode)) {
+                const contents = fs.readdirSync(legacyCode).filter(f => !f.startsWith('.'));
+                if (contents.length > 0) {
+                    codeDir          = legacyCode;
+                    student.gradeDir = legacyDir;
+                }
+            }
+        }
+    } else {
+        codeDir = path.join(student.filesDir || labDir, codeDirName);
+        student.gradeDir = student.filesDir || null;
+    }
+
+    acquireCode(student, codeDir, urls);
 
     return urls;
 }
@@ -261,19 +297,7 @@ export default async function(labDir, repoClonePath, config = {}) {
             }
             student.urls = urls;
 
-            // If the GitHub URL points to a subdirectory (tree URL), adjust extractedDir
-            if (urls.github && student.extractedDir && fs.existsSync(student.extractedDir)) {
-                const subdir = getGithubSubdir(urls.github);
-                if (subdir) {
-                    const subdirPath = path.join(student.extractedDir, subdir);
-                    if (fs.existsSync(subdirPath)) {
-                        student.extractedDir = subdirPath;
-                        console.log(`  Using subdirectory: ${subdir} for ${student.name}`);
-                    } else {
-                        console.log(`  Warning: tree URL subdirectory "${subdir}" not found in cloned repo for ${student.name} — repo may have been reorganized since submission`);
-                    }
-                }
-            }
+            applyGithubSubdir(student, urls);
         } catch (e) {
             console.log(`  ERROR: Failed to process ${student.name}: ${e.message}`);
             student.error = e.message;
@@ -283,4 +307,4 @@ export default async function(labDir, repoClonePath, config = {}) {
     return students; // returns array of augmented student objects
 };
 
-export { CODE_DIR, REPO_DIR, extractStudentCode };
+export { CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS, extractStudentCode, extractUrls, acquireCode, applyGithubSubdir, extractZip, normalizeGithubUrl };

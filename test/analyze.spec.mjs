@@ -15,8 +15,9 @@ import analyzeCode, { stripComments, normalizeDirName, detectPartsPresent, apply
 xlsx.set_fs(fs);
 
 // Helper: load a shipped config's analysis.features so tests exercise the real config.
+// Real lab configs live under configs/{Course}/{Lab}/ (course tier).
 const loadFeatures = lab => JSON.parse(
-    readFileSync(join(import.meta.dirname, '..', 'configs', lab, `${lab.toLowerCase()}_config.json`), 'utf8')
+    readFileSync(join(import.meta.dirname, '..', 'configs', 'CS233JS', lab, `${lab.toLowerCase()}_config.json`), 'utf8')
 ).analysis.features;
 
 const analyzeStudents = analyzeCode;

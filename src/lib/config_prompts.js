@@ -89,7 +89,7 @@ async function promptRubricCriteria(driver, rubricPath) {
 // Prompts for a rubric file path (up to 3 attempts), suggests a canonical
 // name, and returns { rubricPath, rubricName, ext }.
 
-async function copyRubric(driver, labName) {
+async function copyRubric(driver, labName, rubricPrefix = 'CS233JS') {
     driver.print('\n--- Rubric Spreadsheet ---');
     driver.print('  Provide a path to the .xlsx or .xlsm rubric file.');
 
@@ -116,7 +116,7 @@ async function copyRubric(driver, labName) {
         driver.print('  Warning: rubric should be .xlsx or .xlsm. Copying anyway.');
     }
 
-    const suggestedName = `CS233JS_${labName}_Rubric${ext}`;
+    const suggestedName = `${rubricPrefix}_${labName}_Rubric${ext}`;
     const nameInput = await driver.ask('Rubric filename', suggestedName);
     const rubricName = path.basename(nameInput || suggestedName);
 

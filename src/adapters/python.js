@@ -190,11 +190,12 @@ async function lint(files, cwd, configOverride, config) {
     };
 }
 
-function lintConfigCandidates(configsDir, labName, parentName) {
+function lintConfigCandidates(configsDir, labName, parentName, courseName = null) {
     const repoRoot = path.join(configsDir, '..');
+    const labConfigsDir = courseName ? path.join(configsDir, courseName) : configsDir;
     const candidates = [];
-    if (parentName) candidates.push(path.join(configsDir, parentName, labName, 'ruff.toml'));
-    candidates.push(path.join(configsDir, labName, 'ruff.toml'));
+    if (parentName) candidates.push(path.join(labConfigsDir, parentName, labName, 'ruff.toml'));
+    candidates.push(path.join(labConfigsDir, labName, 'ruff.toml'));
     candidates.push(path.join(repoRoot, 'python', 'student.ruff.toml'));
     return candidates;
 }

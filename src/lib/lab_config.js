@@ -287,6 +287,59 @@ function getExistingAssignments(configsDir = CONFIGS_DIR) {
     return results.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// ── Courses ───────────────────────────────────────────────────────────────
+
+// Reads configs/{Course}/course_config.json tolerantly — a missing or unparsable file
+// returns {}, and callers (getExistingCourses) fill in defaults from the directory name.
+function readCourseConfig(coursePath) {
+    try {
+        return JSON.parse(fs.readFileSync(path.join(coursePath, 'course_config.json'), 'utf8'));
+    } catch (e) {
+        return {};
+    }
+}
+
+function writeCourseConfig(coursePath, obj) {
+    fs.mkdirSync(coursePath, { recursive: true });
+    const configPath = path.join(coursePath, 'course_config.json');
+    fs.writeFileSync(configPath, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+    console.log(`  Written: ${configPath}`);
+}
+
+/**
+ * Returns every course directory under configs/ — a subdir that either has its own
+ * course_config.json, or (for a not-yet-migrated single-course install) contains at least
+ * one assignment with a config. Missing course_config.json fields default to the directory
+ * name, so a course with no course_config.json at all is still discovered and usable.
+ *
+ * @param {string} [configsDir] - Override the default CONFIGS_DIR (useful for tests).
+ */
+function getExistingCourses(configsDir = CONFIGS_DIR) {
+    const results = [];
+    let entries;
+    try { entries = fs.readdirSync(configsDir); } catch (e) { return results; }
+    for (const entry of entries) {
+        const full = path.join(configsDir, entry);
+        let stat;
+        try { stat = fs.statSync(full); } catch (e) { continue; }
+        if (!stat.isDirectory()) continue;
+
+        const courseConfig = readCourseConfig(full);
+        const hasCourseConfig = Object.keys(courseConfig).length > 0;
+        if (!hasCourseConfig && !getExistingAssignments(full).some(a => a.hasConfig)) continue;
+
+        results.push({
+            name: entry,
+            path: full,
+            courseName:     courseConfig.courseName     || entry,
+            courseCode:     courseConfig.courseCode     || entry,
+            rubricPrefix:   courseConfig.rubricPrefix    || entry,
+            canvasCourseId: courseConfig.canvasCourseId  ?? null,
+        });
+    }
+    return results.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function keywordsToFolderPattern(keywords) {
     const words = keywords.trim().split(/\s+/).filter(Boolean);
     if (!words.length) return '';
@@ -325,6 +378,10 @@ const MAPPING_TYPES = [
     { label: 'test_check',            value: 'test_check',            desc: 'Runs the language\'s test runner (pytest/dotnet test/CTest); scores proportionally to tests passed' },
     { label: 'package_usage',         value: 'package_usage',         desc: 'Language-neutral alias of npm_package — checks that a specific package/module is used' },
     { label: 'manifest_check',        value: 'manifest_check',        desc: 'Language-neutral alias of package_check — checks the dependency manifest for required/forbidden entries' },
+    { label: 'element_check',         value: 'element_check',         desc: 'Required HTML elements (webContent CSS-selector queries) found in student pages' },
+    { label: 'css_selector_check',    value: 'css_selector_check',    desc: 'Required CSS selectors present in external or embedded styles' },
+    { label: 'css_property_check',    value: 'css_property_check',    desc: 'Required CSS properties (or property: value pairs) used anywhere in styles' },
+    { label: 'file_count',            value: 'file_count',            desc: 'Minimum number of files matching a webContent.fileCounts pattern (e.g. 4 HTML files)' },
 ];
 
 const MAPPING_TYPE_SCHEMA = {
@@ -409,6 +466,30 @@ const MAPPING_TYPE_SCHEMA = {
             { key: 'scripts',  prompt: '  Scripts to check (comma-separated)',                      default: 'dev,build,test' },
         ],
     },
+    element_check: {
+        fields: [
+            { key: 'maxScore', prompt: '  Max score [0]: ',                                            type: 'int', default: 0 },
+            { key: 'ids',      prompt: '  Element ids to check (comma-separated, blank = all): ',      optional: true },
+        ],
+    },
+    css_selector_check: {
+        fields: [
+            { key: 'maxScore',  prompt: '  Max score [0]: ',                                           type: 'int', default: 0 },
+            { key: 'selectors', prompt: '  Selectors to check (comma-separated, blank = all): ',       optional: true },
+        ],
+    },
+    css_property_check: {
+        fields: [
+            { key: 'maxScore',   prompt: '  Max score [0]: ',                                          type: 'int', default: 0 },
+            { key: 'properties', prompt: '  Properties to check (comma-separated, blank = all): ',     optional: true },
+        ],
+    },
+    file_count: {
+        fields: [
+            { key: 'maxScore', prompt: '  Max score [0]: ',                            type: 'int', default: 0 },
+            { key: 'countId',  prompt: '  fileCounts entry id (e.g. html): ',          required: true },
+        ],
+    },
 };
 
 const GENERIC_MAPPING_SCHEMA = {
@@ -443,6 +524,12 @@ function guessMappingType(label) {
     if (hasBrowser) return 'browser_check';
     if (/package\.json|npm\s*package|dependency/.test(l))       return 'package_check';
     if (/lint|eslint|code\s*style/.test(l))                     return 'lint';
+    // Web-content checks must be tested before the html/css *validation* guesses —
+    // "required HTML elements" would otherwise fall into the html_validate branch.
+    if (/required.{0,15}(element|tag)|element.{0,10}(present|found|used)/.test(l)) return 'element_check';
+    if (/css\s*selector/.test(l))                               return 'css_selector_check';
+    if (/css\s*propert/.test(l))                                return 'css_property_check';
+    if (/number\s*of\s*(html|css)?\s*files|\d+\s*(html|css)\s*files/.test(l)) return 'file_count';
     if (/\bhtml\b|index\.html/.test(l))                         return 'html_validate';
     if (/\bcss\b|stylesheet|style\s*sheet/.test(l))             return 'css_validate';
     if (/file\s*nam|folder\s*(structure|nam)|directory\s*(structure|nam)|naming\s*conventi/.test(l)) return 'name_check';
@@ -536,6 +623,7 @@ export {
     detectRubricLayout,
     readRubricRows, readRubricCriteria,
     findSpreadsheets, getExistingAssignments, getExistingSteps, keywordsToFolderPattern,
+    getExistingCourses, readCourseConfig, writeCourseConfig,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA,
     guessMappingType,
     assembleConfig, mergeFeatureDefs, writeLab,

@@ -677,6 +677,86 @@ registerHandler('test_check', (map, student) => {
     };
 });
 
+// --- Web content checks (student.webContent, from check_web_content.js) ---
+
+// Shared scorer for the element/selector/property checks: proportional credit for the
+// checked entries that passed, comment listing up to 5 misses. keepComment protects the
+// missing-item diagnostic from being masked by stockComments.zero.
+function scoreWebEntries(map, entries, label, describe) {
+    if (entries.length === 0) {
+        return { score: 0, comment: `No ${label} configured (check config.webContent)`, keepComment: true };
+    }
+    const missing = entries.filter(e => !(e.passed ?? e.found));
+    if (missing.length === 0) {
+        return { score: map.maxScore, comment: `All ${entries.length} ${label} found` };
+    }
+    const shown = missing.slice(0, 5).map(describe).join(', ');
+    const more = missing.length > 5 ? `, +${missing.length - 5} more` : '';
+    const passed = entries.length - missing.length;
+    return {
+        score: Math.round(map.maxScore * passed / entries.length),
+        comment: `${passed}/${entries.length} ${label} found — missing: ${shown}${more}`,
+        keepComment: true,
+    };
+}
+
+function noWebContent() {
+    return { score: 0, comment: 'NEEDS MANUAL CHECK (no web content data — is config.webContent set?)', keepComment: true };
+}
+
+// ids/selectors/properties filters accept an array or a comma-separated string
+// (the wizard writes strings — same convention as scripts_check's `scripts` field).
+function asList(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') return value.split(',').map(s => s.trim()).filter(Boolean);
+    return [];
+}
+
+registerHandler('element_check', (map, student) => {
+    const wc = student.webContent;
+    if (!wc) return noWebContent();
+    let entries = wc.elements || [];
+    const ids = asList(map.ids);
+    if (ids.length > 0) entries = entries.filter(e => ids.includes(e.id));
+    return scoreWebEntries(map, entries, 'required elements',
+        e => e.description ? `${e.selector} (${e.description})` : e.selector);
+});
+
+registerHandler('css_selector_check', (map, student) => {
+    const wc = student.webContent;
+    if (!wc) return noWebContent();
+    let entries = wc.cssSelectors || [];
+    const selectors = asList(map.selectors);
+    if (selectors.length > 0) entries = entries.filter(e => selectors.includes(e.selector));
+    return scoreWebEntries(map, entries, 'required CSS selectors', e => e.selector);
+});
+
+registerHandler('css_property_check', (map, student) => {
+    const wc = student.webContent;
+    if (!wc) return noWebContent();
+    let entries = wc.cssProperties || [];
+    const properties = asList(map.properties);
+    if (properties.length > 0) entries = entries.filter(e => properties.includes(e.property));
+    return scoreWebEntries(map, entries, 'required CSS properties', e => e.property);
+});
+
+registerHandler('file_count', (map, student) => {
+    const wc = student.webContent;
+    if (!wc) return noWebContent();
+    const fc = (wc.fileCounts || []).find(f => f.id === map.countId);
+    if (!fc) {
+        return { score: 0, comment: `NEEDS MANUAL CHECK (no fileCounts entry with id "${map.countId}")`, keepComment: true };
+    }
+    if (fc.count >= fc.min) {
+        return { score: map.maxScore, comment: `${fc.count} file(s) matching ${fc.pattern} (expected ${fc.min})` };
+    }
+    return {
+        score: 0,
+        comment: `Found ${fc.count} file(s) matching ${fc.pattern}, expected ${fc.min}`,
+        keepComment: true,
+    };
+});
+
 // --- Mapping types that can produce a score even when code extraction failed ---
 
 // Types that report an extraction error rather than 'N/A' when code could not be obtained.
@@ -717,6 +797,10 @@ function mappingDescription(map) {
         case 'env_file_check': return '.env file with API key';
         case 'path_exists': return map.pathPattern ? `File exists: ${map.pathPattern}` : 'File exists check';
         case 'gitignore_check': return map.requiredEntry ? `.gitignore contains ${map.requiredEntry}` : '.gitignore exists';
+        case 'element_check': return 'Required HTML elements present';
+        case 'css_selector_check': return 'Required CSS selectors used';
+        case 'css_property_check': return 'Required CSS properties used';
+        case 'file_count': return map.countId ? `File count: ${map.countId}` : 'File count check';
         default: return map.type;
     }
 }

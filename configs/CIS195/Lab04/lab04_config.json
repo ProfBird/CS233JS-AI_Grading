@@ -1,0 +1,72 @@
+{
+  "titleText": "CIS 195 Lab 4: Introduction to CSS",
+  "textReport": true,
+  "runtimeCheck": "none",
+  "webContent": {
+    "requiredElements": [
+      {
+        "id": "title",
+        "selector": "title",
+        "description": "page title"
+      },
+      {
+        "id": "embedded_css",
+        "selector": "style",
+        "description": "embedded style sheet"
+      },
+      {
+        "id": "external_css",
+        "selector": "link[href][rel='stylesheet']",
+        "description": "external style sheet link"
+      },
+      {
+        "id": "inline_css",
+        "selector": "[style]",
+        "description": "inline style attribute"
+      },
+      {
+        "id": "id_attr",
+        "selector": "[id]",
+        "description": "element with an id attribute"
+      },
+      {
+        "id": "class_attr",
+        "selector": "[class]",
+        "description": "element with a class attribute"
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "type": "element_check",
+      "maxScore": 1,
+      "msg": "Required HTML/CSS hookup elements present"
+    },
+    {
+      "type": "html_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "HTML is valid"
+    },
+    {
+      "type": "css_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "CSS is valid"
+    },
+    {
+      "type": "name_check",
+      "maxScore": 1,
+      "msg": "File/folder names are web-safe"
+    }
+  ],
+  "validate": {
+    "htmlRules": {
+      "no-inline-style": "off",
+      "attr-quotes": "off",
+      "element-case": "off",
+      "no-implicit-button-type": "off",
+      "wcag/h63": "off"
+    }
+  }
+}

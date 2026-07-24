@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { getExistingSteps } from '../src/lib/lab_config.js';
+import { getExistingSteps, getExistingCourses, readCourseConfig, writeCourseConfig } from '../src/lib/lab_config.js';
 import { runPipeline } from '../src/pipeline/run_pipeline.js';
 
 describe('multi-step lab layout — getExistingSteps + runPipeline integration', () => {
@@ -99,5 +99,72 @@ describe('multi-step lab layout — getExistingSteps + runPipeline integration',
         expect(results.ApiDoc).not.toContain('Review Beta');
         expect(results.Beta).toContain('Review Beta');
         expect(results.Beta).not.toContain('Review ApiDoc');
+    });
+});
+
+// ── Course tier ──────────────────────────────────────────────────────────
+// bin/grade.js and bin/configure-lab.js now root every config-side path at
+// configs/{Course}/ (getExistingCourses) rather than configs/ directly. These tests build
+// the real nested layout (configs/{Course}/{Lab}/{Step}/...) and confirm course discovery
+// composes correctly with the existing step-detection covered above.
+describe('course tier — getExistingCourses + nested step layout', () => {
+    let configsRoot;
+    const COURSE = 'CS233JS';
+    const LAB = 'TermProject';
+    const STEPS = ['ApiDoc', 'Beta'];
+
+    beforeEach(() => {
+        configsRoot = mkdtempSync(join(tmpdir(), 'msconfigs-course-'));
+        for (const step of STEPS) {
+            const stepConfigDir = join(configsRoot, COURSE, LAB, step);
+            mkdirSync(stepConfigDir, { recursive: true });
+            writeFileSync(join(stepConfigDir, `${step.toLowerCase()}_config.json`), JSON.stringify({
+                runtimeCheck: 'browser',
+                mappings: [{ type: 'manual', maxScore: 5, msg: `Review ${step}`, cell: 'B2', commentCell: 'C2' }],
+            }));
+        }
+    });
+
+    afterEach(() => rmSync(configsRoot, { recursive: true, force: true }));
+
+    it('is discovered even with no course_config.json yet (pre-migration tolerance)', () => {
+        const courses = getExistingCourses(configsRoot);
+        expect(courses).toHaveLength(1);
+        expect(courses[0]).toMatchObject({
+            name: COURSE,
+            courseName: COURSE,   // defaults to the directory name when course_config.json is absent
+            courseCode: COURSE,
+            rubricPrefix: COURSE,
+            canvasCourseId: null,
+        });
+    });
+
+    it('reads courseName/rubricPrefix/canvasCourseId from course_config.json when present', () => {
+        writeCourseConfig(join(configsRoot, COURSE), {
+            courseName: 'Web Dev with JS',
+            courseCode: 'CS233JS',
+            rubricPrefix: 'CS233JS',
+            canvasCourseId: 680,
+        });
+
+        const courses = getExistingCourses(configsRoot);
+        expect(courses).toHaveLength(1);
+        expect(courses[0]).toMatchObject({
+            name: COURSE,
+            courseName: 'Web Dev with JS',
+            canvasCourseId: 680,
+        });
+        expect(readCourseConfig(join(configsRoot, COURSE)).courseName).toBe('Web Dev with JS');
+    });
+
+    it('a directory with neither course_config.json nor any assignment config is not a course', () => {
+        mkdirSync(join(configsRoot, 'not-a-course'), { recursive: true });
+        const courses = getExistingCourses(configsRoot);
+        expect(courses.map(c => c.name)).toEqual([COURSE]);
+    });
+
+    it('getExistingSteps composes with the course-scoped dir exactly like the flat-configs case above', () => {
+        const course = getExistingCourses(configsRoot)[0];
+        expect(getExistingSteps(LAB, course.path)).toEqual(['ApiDoc', 'Beta']);
     });
 });

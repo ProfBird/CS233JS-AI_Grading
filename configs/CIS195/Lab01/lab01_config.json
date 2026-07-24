@@ -1,0 +1,140 @@
+{
+  "titleText": "CIS 195 Lab 1: Text and Links",
+  "textReport": true,
+  "runtimeCheck": "none",
+  "webContent": {
+    "requiredElements": [
+      {
+        "id": "title",
+        "selector": "title",
+        "description": "page title"
+      },
+      {
+        "id": "headings",
+        "selector": "h1, h2, h3, h4, h5, h6",
+        "minCount": 2,
+        "description": "heading elements"
+      },
+      {
+        "id": "links",
+        "selector": "a[href]",
+        "minCount": 2,
+        "description": "hyperlinks"
+      },
+      {
+        "id": "img_alt",
+        "selector": "img[alt]",
+        "description": "image with alt text"
+      },
+      {
+        "id": "br",
+        "selector": "br",
+        "description": "line break"
+      },
+      {
+        "id": "ol_items",
+        "selector": "ol > li",
+        "minCount": 2,
+        "description": "ordered list items"
+      },
+      {
+        "id": "ul_items",
+        "selector": "ul > li",
+        "description": "unordered list item"
+      },
+      {
+        "id": "bold",
+        "selector": "b, strong",
+        "description": "bold text"
+      },
+      {
+        "id": "italic",
+        "selector": "i, em",
+        "description": "italic text"
+      }
+    ],
+    "fileCounts": [
+      {
+        "id": "html",
+        "pattern": "\\.html?$",
+        "min": 2
+      }
+    ]
+  },
+  "analysis": {
+    "features": [
+      {
+        "id": "external_link",
+        "regex": "<a\\s*href\\s*=\\s*[\"']http",
+        "fileRegex": "\\.html?$"
+      },
+      {
+        "id": "internal_link",
+        "regex": "<a\\s*href\\s*=\\s*[\"'](?!http)",
+        "fileRegex": "\\.html?$"
+      },
+      {
+        "id": "head_comment",
+        "regex": "<head>[\\s\\S]*<!--",
+        "fileRegex": "\\.html?$"
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "type": "element_check",
+      "maxScore": 1,
+      "msg": "Required HTML elements present"
+    },
+    {
+      "type": "file_count",
+      "countId": "html",
+      "maxScore": 1,
+      "msg": "At least 2 HTML files"
+    },
+    {
+      "type": "path_exists",
+      "pathPattern": "index.htm",
+      "maxScore": 1,
+      "msg": "Home page named index.html"
+    },
+    {
+      "type": "feature",
+      "featureId": "external_link",
+      "maxScore": 1,
+      "msg": "External (absolute) link present"
+    },
+    {
+      "type": "feature",
+      "featureId": "internal_link",
+      "maxScore": 1,
+      "msg": "Internal (relative) link present"
+    },
+    {
+      "type": "feature",
+      "featureId": "head_comment",
+      "maxScore": 1,
+      "msg": "Comment in the head section"
+    },
+    {
+      "type": "html_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "HTML is valid"
+    },
+    {
+      "type": "name_check",
+      "maxScore": 1,
+      "msg": "File/folder names are web-safe"
+    }
+  ],
+  "validate": {
+    "htmlRules": {
+      "no-inline-style": "off",
+      "attr-quotes": "off",
+      "element-case": "off",
+      "no-implicit-button-type": "off",
+      "wcag/h63": "off"
+    }
+  }
+}

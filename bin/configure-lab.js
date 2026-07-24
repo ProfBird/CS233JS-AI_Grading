@@ -11,6 +11,7 @@ import {
     normalizeAssignmentName,
     findSpreadsheets,
     getExistingAssignments, getExistingSteps,
+    getExistingCourses, writeCourseConfig,
     assembleConfig, mergeFeatureDefs, writeLab,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
 } from '../src/lib/lab_config.js';
@@ -23,6 +24,19 @@ import { TUI } from '../src/lib/tui.js';
 
 const CONFIGS_DIR       = path.join(import.meta.dirname, '..', 'configs');
 const LOCAL_CONFIG_PATH = path.join(CONFIGS_DIR, 'local-config.json');
+
+// bin/grade.js stores labRoot/codeRoot per named term (local-config.json's `terms` map —
+// see that file for the schema/migration). These two lookups here are best-effort
+// convenience (a step-hint message, an auto-detected rubric search) so there's no need to
+// prompt for a term here — just use the first one found. Falls back to the old flat
+// labRoot/codeRoot keys too, in case this runs before grade.js has ever migrated them.
+function firstTermRoots() {
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(LOCAL_CONFIG_PATH, 'utf8')); } catch (_) { /* optional */ }
+    const firstTerm = cfg.terms && Object.values(cfg.terms)[0];
+    if (firstTerm) return { labRoot: firstTerm.labRoot || '', codeRoot: firstTerm.codeRoot || '' };
+    return { labRoot: cfg.labRoot || '', codeRoot: cfg.codeRoot || '' };
+}
 
 // ── Helpers passed to selectModel ────────────────────────────────────────
 
@@ -349,7 +363,54 @@ async function main() {
         const llm = await selectModel(LOCAL_CONFIG_PATH, makeHelpers(tui));
         if (!llm) tui.print('  Proceeding with heuristic mapping (no AI).\n');
 
-        // 2. Assignment name — selection menu or CLI arg
+        // 2. Course — selection menu or create new. Runs before the assignment step since
+        // getExistingAssignments/getExistingSteps below need to be scoped to the course dir.
+        let course;
+        {
+            const courses = getExistingCourses(CONFIGS_DIR);
+            const options = [
+                ...courses.map(c => ({ label: c.courseName, value: c.name, desc: c.path })),
+                { label: 'Add new course', value: '__new__', color: 'green', desc: 'Create a brand-new course' },
+            ];
+            const choice = courses.length === 0
+                ? '__new__'
+                : await tui.askOptions('Select a course to configure', options, 0);
+
+            if (choice === '__new__') {
+                let dirName;
+                while (true) {
+                    const raw = (await tui.ask('Course directory name (e.g. CS233JS)')).trim();
+                    if (!raw) { tui.print('  Course name is required.'); continue; }
+                    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw)) {
+                        tui.print('  Invalid name. Use letters, numbers, underscores, or hyphens.');
+                        continue;
+                    }
+                    if (fs.existsSync(path.join(CONFIGS_DIR, raw))) {
+                        tui.print(`  configs/${raw}/ already exists — pick a different name or select it from the list.`);
+                        continue;
+                    }
+                    dirName = raw;
+                    break;
+                }
+                const courseName   = await tui.ask('Course display name', dirName);
+                const courseCode   = await tui.ask('Course code (shown in the interactive banner)', dirName);
+                const rubricPrefix = await tui.ask('Rubric filename prefix (e.g. CS233JS_Lab03_Rubric.xlsm)', courseCode);
+                const coursePath   = path.join(CONFIGS_DIR, dirName);
+                writeCourseConfig(coursePath, { courseName, courseCode, rubricPrefix });
+                course = { name: dirName, path: coursePath, courseName, courseCode, rubricPrefix, canvasCourseId: null };
+                tui.print(`  Created course: ${coursePath}`);
+            } else {
+                course = courses.find(c => c.name === choice);
+            }
+        }
+        const courseConfigsDir = course.path;
+        tui.print(`\n--- Course: ${course.courseName} ---`);
+        // node bin/grade.js only needs an explicit course argument once a second course
+        // exists (see bin/grade.js's course-selection block) — recomputed here (rather than
+        // reusing the earlier `courses` list) since this run may have just created one.
+        const gradeCoursePrefix = getExistingCourses(CONFIGS_DIR).length > 1 ? `${course.name} ` : '';
+
+        // 3. Assignment name — selection menu or CLI arg
         let labName = '';
         const rawArg = process.argv[2];
         if (rawArg) {
@@ -360,7 +421,7 @@ async function main() {
             }
             tui.print(`\n--- Assignment: ${labName} ---`);
         } else {
-            const existing = getExistingAssignments();
+            const existing = getExistingAssignments(courseConfigsDir);
             const options = [
                 ...existing.map(a => ({
                     label:  a.name,
@@ -383,9 +444,9 @@ async function main() {
             }
         }
 
-        // 2b. Multi-step detection
-        const labTopDir     = path.join(CONFIGS_DIR, labName);
-        const existingSteps = getExistingSteps(labName);
+        // 3b. Multi-step detection
+        const labTopDir     = path.join(courseConfigsDir, labName);
+        const existingSteps = getExistingSteps(labName, courseConfigsDir);
         let stepName = null;
 
         if (existingSteps.length > 0) {
@@ -442,9 +503,8 @@ async function main() {
         // back to a manual group picker. Build a reminder to include in the final summary.
         let stepHint = [];
         if (stepName) {
-            let labRoot = '';
-            try { labRoot = JSON.parse(fs.readFileSync(LOCAL_CONFIG_PATH, 'utf8')).labRoot || ''; } catch (_) { /* optional */ }
-            const where = labRoot ? path.join(labRoot, labName, stepName) : `<labRoot>/${labName}/${stepName}`;
+            const { labRoot } = firstTermRoots();
+            const where = labRoot ? path.join(labRoot, course.name, labName, stepName) : `<labRoot>/${course.name}/${labName}/${stepName}`;
             stepHint = [
                 `  Submissions: download this step's Moodle files into a folder named "${stepName}":`,
                 `    ${where}`,
@@ -463,14 +523,12 @@ async function main() {
 
         if (found.length === 0) {
             let codeRootCandidates = [];
-            try {
-                const localCfg = JSON.parse(fs.readFileSync(LOCAL_CONFIG_PATH, 'utf8'));
-                if (localCfg.codeRoot) {
-                    const codeLabDir = path.join(localCfg.codeRoot, labName);
-                    codeRootCandidates = findSpreadsheets(codeLabDir)
-                        .map(rel => path.join(localCfg.codeRoot, labName, rel));
-                }
-            } catch (_) {}
+            const { codeRoot } = firstTermRoots();
+            if (codeRoot) {
+                const codeLabDir = path.join(codeRoot, course.name, labName);
+                codeRootCandidates = findSpreadsheets(codeLabDir)
+                    .map(rel => path.join(codeRoot, course.name, labName, rel));
+            }
 
             let sourceRubricPath = null;
             if (codeRootCandidates.length === 1) {
@@ -488,7 +546,7 @@ async function main() {
 
             if (sourceRubricPath) {
                 const rubricExt = path.extname(sourceRubricPath).toLowerCase();
-                rubricName = `CS233JS_${labName}_Rubric${rubricExt}`;
+                rubricName = `${course.rubricPrefix}_${labName}_Rubric${rubricExt}`;
             } else {
                 // No rubric found anywhere — offer extract-only as an alternative to
                 // providing a file path. Extract-only clones repos and writes a log;
@@ -511,12 +569,12 @@ async function main() {
                         `  Extract-only config written — repos will be cloned, no grading.`,
                         `  Config: ${configPath}`,
                         ...stepHint,
-                        `  Run: node bin/grade.js ${labName}${stepName ? ' ' + stepName : ''}`,
+                        `  Run: node bin/grade.js ${gradeCoursePrefix}${labName}${stepName ? ' ' + stepName : ''}`,
                     ];
                     return;   // skip rubric read, draft, review, and settings steps
                 }
 
-                const r = await copyRubric(tui, labName);
+                const r = await copyRubric(tui, labName, course.rubricPrefix);
                 rubricName       = r.rubricName;
                 sourceRubricPath = r.rubricPath;
             }

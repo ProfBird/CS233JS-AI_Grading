@@ -28,6 +28,7 @@ import lintCode from './lint_code.js';
 import validateHtml from './validate_html.js';
 import validateCss from './validate_css.js';
 import checkNames from './check_names.js';
+import checkWebContent from './check_web_content.js';
 import generateGrades from './generate_grades.js';
 import { resolveAdapter } from '../adapters/index.js';
 
@@ -54,7 +55,7 @@ const PHASES = [
     },
     {
         name: 'lintCode',
-        run: (students, config, dirs) => lintCode(students, config, dirs.artifactsDir, dirs.labName, dirs.stepName),
+        run: (students, config, dirs) => lintCode(students, config, dirs.artifactsDir, dirs.labName, dirs.stepName, dirs.courseName),
         when: () => true,
     },
     {
@@ -72,6 +73,11 @@ const PHASES = [
         run: (students, config, dirs) => checkNames(students, config, dirs.artifactsDir),
         when: () => true,
     },
+    {
+        name: 'checkWebContent',
+        run: (students, config, dirs) => checkWebContent(students, config, dirs.artifactsDir),
+        when: (config) => !!config.webContent,
+    },
 ];
 
 // Filters out students whose grade output already exists, unless regrading.
@@ -79,7 +85,7 @@ const PHASES = [
 function filterAlreadyGraded(students, config, options) {
     if (options.regrade) return { toGrade: students, alreadyDone: [] };
 
-    const outputExt = options.textReport ? '.txt' : (config.rubricName.endsWith('.xlsm') ? '.xlsm' : '.xlsx');
+    const outputExt = options.textReport ? '.txt' : ((config.rubricName || '').endsWith('.xlsm') ? '.xlsm' : '.xlsx');
     const alreadyDone = [];
     const toGrade = students.filter(s => {
         if (!s.gradeDir) return true;

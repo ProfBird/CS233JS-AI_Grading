@@ -117,6 +117,84 @@ describe('validateConfig', () => {
     });
 });
 
+describe('validateConfig: textReport and webContent', () => {
+    function webBaseConfig() {
+        return {
+            textReport: true,
+            runtimeCheck: 'none',
+            webContent: {
+                requiredElements: [{ id: 'title', selector: 'title' }],
+                requiredCssSelectors: ['nav'],
+                requiredCssProperties: ['display: grid'],
+                fileCounts: [{ id: 'html', pattern: '\\.html?$', min: 2 }],
+            },
+            mappings: [
+                { type: 'element_check', maxScore: 1 },
+                { type: 'file_count', countId: 'html', maxScore: 1 },
+            ],
+        };
+    }
+
+    it('textReport: true allows a missing rubricName (and "none" is a valid runtimeCheck)', () => {
+        expect(() => validateConfig(webBaseConfig(), 'Lab01')).not.toThrow();
+    });
+
+    it('still requires rubricName without textReport', () => {
+        const config = webBaseConfig();
+        delete config.textReport;
+        expect(() => validateConfig(config, 'Lab01')).toThrow(/rubricName/);
+    });
+
+    it('throws when web-content mappings are used without a webContent block', () => {
+        const config = webBaseConfig();
+        delete config.webContent;
+        expect(() => validateConfig(config, 'Lab01')).toThrow(/require a "webContent" config block/);
+    });
+
+    it('throws for a requiredElements entry with no selector', () => {
+        const config = webBaseConfig();
+        config.webContent.requiredElements = [{ id: 'oops' }];
+        expect(() => validateConfig(config, 'Lab01')).toThrow(/missing "selector"/);
+    });
+
+    it('throws for duplicate requiredElements ids', () => {
+        const config = webBaseConfig();
+        config.webContent.requiredElements = [
+            { id: 'x', selector: 'title' },
+            { id: 'x', selector: 'h1' },
+        ];
+        expect(() => validateConfig(config, 'Lab01')).toThrow(/duplicate id "x"/);
+    });
+
+    it('throws for a non-positive minCount', () => {
+        const config = webBaseConfig();
+        config.webContent.requiredElements = [{ id: 'x', selector: 'title', minCount: 0 }];
+        expect(() => validateConfig(config, 'Lab01')).toThrow(/minCount/);
+    });
+
+    it('throws for a fileCounts entry missing id or pattern, or with a bad regex', () => {
+        const config = webBaseConfig();
+        config.webContent.fileCounts = [{ pattern: '\\.css$' }];
+        expect(() => validateConfig(config, 'Lab01')).toThrow(/missing "id"/);
+
+        const config2 = webBaseConfig();
+        config2.webContent.fileCounts = [{ id: 'html', pattern: '(' }];
+        expect(() => validateConfig(config2, 'Lab01')).toThrow(/not a valid regex/);
+    });
+
+    it('throws when a file_count mapping references an unknown countId', () => {
+        const config = webBaseConfig();
+        config.mappings[1].countId = 'bogus';
+        expect(() => validateConfig(config, 'Lab01')).toThrow(/countId "bogus" has no matching/);
+    });
+
+    it('throws for a non-string-array requiredCssSelectors', () => {
+        const config = webBaseConfig();
+        config.webContent.requiredCssSelectors = 'nav';
+        expect(() => validateConfig(config, 'Lab01')).toThrow(/requiredCssSelectors must be an array of strings/);
+    });
+});
+
 describe('loadHandlerModules', () => {
     let root;
     beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'handlermods-')); });

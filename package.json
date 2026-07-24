@@ -29,9 +29,11 @@
   "license": "ISC",
   "dependencies": {
     "adm-zip": "^0.5.17",
+    "css-tree": "^3.2.1",
     "csstree-validator": "^4.0.1",
     "globals": "^17.6.0",
     "html-validate": "^11.4.0",
+    "jsdom": "^29.1.1",
     "mammoth": "^1.12.0",
     "neo-blessed": "^0.2.0",
     "puppeteer": "^24.42.0",

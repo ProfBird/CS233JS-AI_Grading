@@ -20,7 +20,7 @@ function getAllJsFiles(dir, exclusions = [], adapter = resolveAdapter({})) {
     return getAllFilesByExt(dir, adapter.sourceExtensions, exclusions);
 }
 
-export default async function(students, config, labDir, labName, stepName) {
+export default async function(students, config, labDir, labName, stepName, courseName) {
     console.log("--- Linting Phase ---");
 
     const adapter = resolveAdapter(config);
@@ -30,21 +30,24 @@ export default async function(students, config, labDir, labName, stepName) {
     // re-derived by climbing up from labDir — see refactoring_plan_2026-07-07.md
     // Priority 3: path-climbing baked in the codeRoot/Lab/Artifacts (flat) and
     // codeRoot/Lab/Step/Artifacts (multi-step) layout assumption, silently resolving
-    // the wrong config directory if that layout ever changed.
+    // the wrong config directory if that layout ever changed. courseName (added for the
+    // course tier) follows the same principle — passed in, not re-derived.
     const adapterLabName = stepName || labName;
     const adapterParentName = stepName ? labName : null;
     const labRoot = path.dirname(labDir);
 
     // Grader uses a config from inside this repo so that node_modules (globals, etc.) resolve correctly.
-    // Priority: per-lab override in configs/{Parent}/{Step}/ or configs/{Lab}/ > the shipped default.
+    // Priority: per-lab override in configs/{Course}/{Parent}/{Step}/ or configs/{Course}/{Lab}/ >
+    // the shipped default.
     const repoRoot = path.join(import.meta.dirname, '..', '..');
     const configsDir = path.join(repoRoot, 'configs');
     const candidates = adapter.lintConfigCandidates
-        ? adapter.lintConfigCandidates(configsDir, adapterLabName, adapterParentName)
+        ? adapter.lintConfigCandidates(configsDir, adapterLabName, adapterParentName, courseName)
         : [];
     const lintConfigFile = candidates.find(c => fs.existsSync(c)) || null;
     if (!lintConfigFile && adapter.lintConfigCandidates) {
-        console.warn(`WARNING: No lint config found in configs/${adapterLabName}/ or configs/. Linting may fail.`);
+        const labConfigsLabel = courseName ? `configs/${courseName}/${adapterLabName}/` : `configs/${adapterLabName}/`;
+        console.warn(`WARNING: No lint config found in ${labConfigsLabel} or configs/. Linting may fail.`);
     }
 
     // Also copy the resolved override into the lab folder so an editor can find it when

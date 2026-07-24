@@ -37,8 +37,8 @@ async function build(project) {
     }
 }
 
-function lintConfigCandidates(configsDir, labName, parentName) {
-    const candidates = jsAdapter.lintConfigCandidates(configsDir, labName, parentName);
+function lintConfigCandidates(configsDir, labName, parentName, courseName = null) {
+    const candidates = jsAdapter.lintConfigCandidates(configsDir, labName, parentName, courseName);
     // The last candidate is always the shipped default in priority order — swap it for
     // the TypeScript-specific shipped ruleset; per-lab overrides (step/lab-specific
     // eslint.config.mjs) still take priority exactly as they do for JS.

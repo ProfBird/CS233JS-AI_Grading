@@ -125,17 +125,19 @@ describe('lintCode phase — real ESLint run against the shipped ruleset', () =>
 });
 
 describe('lintCode phase — eslint.config.mjs resolution priority', () => {
-    let root, scratchLabName, scratchParentName;
+    let root, scratchLabName, scratchParentName, scratchCourseName;
 
     beforeEach(() => {
         root = mkdtempSync(join(tmpdir(), 'lintcfg-'));
         scratchLabName = '__scratch_lint_lab__';
         scratchParentName = '__scratch_lint_parent__';
+        scratchCourseName = '__scratch_lint_course__';
     });
     afterEach(() => {
         rmSync(root, { recursive: true, force: true });
         rmSync(join(CONFIGS_DIR, scratchLabName), { recursive: true, force: true });
         rmSync(join(CONFIGS_DIR, scratchParentName), { recursive: true, force: true });
+        rmSync(join(CONFIGS_DIR, scratchCourseName), { recursive: true, force: true });
     });
 
     // A config that disables no-undef entirely lets us tell, from the *scoring*, which
@@ -199,5 +201,27 @@ export default [{ files: ['**/*.js'], rules: { 'no-undef': 'error' } }];
         const student = { name: 'StepOverride', extractedDir };
         await lintCode([student], {}, labDir, scratchParentName, scratchLabName);
         expect(student.lint.errors).toBe(0);
+    });
+
+    it('resolves a course-scoped override (configs/{course}/{lab}/eslint.config.mjs) when courseName is passed', async () => {
+        mkdirSync(join(CONFIGS_DIR, scratchCourseName, scratchLabName), { recursive: true });
+        writeFileSync(join(CONFIGS_DIR, scratchCourseName, scratchLabName, 'eslint.config.mjs'), permissiveConfig);
+
+        const labDir = join(root, scratchCourseName, scratchLabName, 'Artifacts');
+        mkdirSync(labDir, { recursive: true });
+        const extractedDir = join(root, 'extracted');
+        mkdirSync(extractedDir, { recursive: true });
+        writeFileSync(join(extractedDir, 'app.js'), 'console.log(notDefined)\n');
+
+        // Without courseName: the course-scoped override isn't found, so the shipped
+        // default applies and both rules fire.
+        const withoutCourse = { name: 'NoCourseArg', extractedDir };
+        await lintCode([withoutCourse], {}, labDir, scratchLabName);
+        expect(withoutCourse.lint.errors).toBe(2);
+
+        // With courseName: the course-scoped override is found and wins (permissive).
+        const withCourse = { name: 'CourseOverride', extractedDir };
+        await lintCode([withCourse], {}, labDir, scratchLabName, null, scratchCourseName);
+        expect(withCourse.lint.errors).toBe(0);
     });
 });

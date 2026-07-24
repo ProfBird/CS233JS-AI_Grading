@@ -1,0 +1,133 @@
+{
+  "titleText": "CIS 195 Lab 3: Links and Image Maps",
+  "textReport": true,
+  "runtimeCheck": "none",
+  "webContent": {
+    "requiredElements": [
+      {
+        "id": "p1_title",
+        "selector": "title",
+        "description": "page title"
+      },
+      {
+        "id": "p1_nav_link",
+        "selector": "nav a[href]",
+        "description": "link in a nav element"
+      },
+      {
+        "id": "p1_fragment_link",
+        "selector": "a[href^='#']",
+        "description": "same-page (fragment) link"
+      },
+      {
+        "id": "p1_image_link",
+        "selector": "a[href] img",
+        "description": "image used as a link"
+      },
+      {
+        "id": "p1_mailto_link",
+        "selector": "a[href^='mailto']",
+        "description": "mailto link"
+      },
+      {
+        "id": "p1_id_attr",
+        "selector": "*[id]",
+        "description": "element with an id attribute"
+      },
+      {
+        "id": "p2_usemap",
+        "selector": "img[usemap]",
+        "description": "image with a usemap attribute"
+      },
+      {
+        "id": "p2_map",
+        "selector": "map[name]",
+        "description": "named map element"
+      },
+      {
+        "id": "p2_area_shape",
+        "selector": "map > area[shape]",
+        "description": "map area with a shape"
+      },
+      {
+        "id": "p2_area_href",
+        "selector": "area[href]",
+        "description": "map area with a link"
+      }
+    ],
+    "fileCounts": [
+      {
+        "id": "html",
+        "pattern": "\\.html?$",
+        "min": 5
+      }
+    ]
+  },
+  "analysis": {
+    "features": [
+      {
+        "id": "head_comment",
+        "regex": "<head>[\\s\\S]*<!--",
+        "fileRegex": "\\.html?$"
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "type": "element_check",
+      "ids": [
+        "p1_title",
+        "p1_nav_link",
+        "p1_fragment_link",
+        "p1_image_link",
+        "p1_mailto_link",
+        "p1_id_attr"
+      ],
+      "maxScore": 1,
+      "msg": "Part 1: required link elements present"
+    },
+    {
+      "type": "element_check",
+      "ids": [
+        "p2_usemap",
+        "p2_map",
+        "p2_area_shape",
+        "p2_area_href"
+      ],
+      "maxScore": 1,
+      "msg": "Part 2: image map elements present"
+    },
+    {
+      "type": "file_count",
+      "countId": "html",
+      "maxScore": 1,
+      "msg": "At least 5 HTML files"
+    },
+    {
+      "type": "feature",
+      "featureId": "head_comment",
+      "maxScore": 1,
+      "msg": "Comment in the head section"
+    },
+    {
+      "type": "html_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "HTML is valid"
+    },
+    {
+      "type": "name_check",
+      "maxScore": 1,
+      "msg": "File/folder names are web-safe"
+    }
+  ],
+  "validate": {
+    "htmlRules": {
+      "no-inline-style": "off",
+      "attr-quotes": "off",
+      "element-case": "off",
+      "no-implicit-button-type": "off",
+      "wcag/h63": "off"
+    }
+  }
+}

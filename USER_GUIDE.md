@@ -42,7 +42,7 @@ If a toolchain isn't on your PATH (e.g. a manually-installed MinGW g++), point a
 `toolchains` in `configs/local-config.json` instead of adding it to PATH:
 ```json
 {
-  "labRoot": "...", "codeRoot": "...",
+  "terms": { "2026Spring": { "label": "Spring 2026", "labRoot": "...", "codeRoot": "..." } },
   "toolchains": {
     "python": "py",
     "cpp": { "compiler": "C:\\path\\to\\mingw64\\bin\\g++.exe" },
@@ -69,11 +69,12 @@ node bin/configure-lab.js TermProject   # pre-specify a non-numbered assignment
 ```
 
 The wizard will:
-1. Ask whether the lab has **multiple sets of submissions** (e.g., Proposal, Beta, Production). If yes, it prompts for the first step name and creates a step-level config (`configs/{AssignmentName}/{StepName}/`). Run the wizard again to add more steps.
-2. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm) and copy it into the config directory with the standard naming convention.
-3. Read the rubric's Grade sheet and — using AI (or a heuristic fallback if no model is configured) — **draft a check type for each rubric row**. The types are listed under [Available checks](#available-checks-rubric-mapping-types) below.
-4. Let you **review and edit** the drafted checks before saving: a navigable table where you can change a row's check type, adjust its fields (max score, etc.), or mark a row "graded by hand."
-5. Prompt for the lab title, **language** (`javascript` by default; `typescript`/`python`/`cpp`/`csharp` also selectable), runtime-check mode (`browser` / `build` / `both` / `run_check`), and the optional summary / grader / title cells, then write `{assignmentname}_config.json`.
+1. Ask you to pick a **course** (or create a new one — display name, course code, rubric-filename prefix). Every assignment lives under `configs/{Course}/`; with one course already set up, you can still pick "Add new course" from the list.
+2. Ask whether the lab has **multiple sets of submissions** (e.g., Proposal, Beta, Production). If yes, it prompts for the first step name and creates a step-level config (`configs/{Course}/{AssignmentName}/{StepName}/`). Run the wizard again to add more steps.
+3. Ask you to provide the rubric spreadsheet (.xlsx or .xlsm) and copy it into the config directory with the standard naming convention (using the course's rubric-filename prefix).
+4. Read the rubric's Grade sheet and — using AI (or a heuristic fallback if no model is configured) — **draft a check type for each rubric row**. The types are listed under [Available checks](#available-checks-rubric-mapping-types) below.
+5. Let you **review and edit** the drafted checks before saving: a navigable table where you can change a row's check type, adjust its fields (max score, etc.), or mark a row "graded by hand."
+6. Prompt for the lab title, **language** (`javascript` by default; `typescript`/`python`/`cpp`/`csharp` also selectable), runtime-check mode (`browser` / `build` / `both` / `run_check`), and the optional summary / grader / title cells, then write `{assignmentname}_config.json`.
 
 > **`feature` / `match` checks in the wizard:** the AI/heuristic draft won't auto-pick `feature` (a code pattern can't be guessed from a rubric label), but you can choose `feature` for any row during the review/edit step. The wizard then guides you through the detection rule — which files to search (a plain extension list like `js, mjs`, which it turns into the right `fileRegex`), then a **single regex**, or a simple **all-of** (AND) / **any-of** (OR) set of patterns — and writes both the rubric mapping and its `analysis.features[]` definition for you. (Nested OR-of-ANDs rules aren't generated — hand-edit the config for those; custom JS analyzers are **deprecated**, use a `match` check instead.) See [Available checks](#available-checks-rubric-mapping-types).
 
@@ -136,6 +137,12 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
 - `path_exists` — any file whose path matches `pathPattern` exists (a "required file was created" check).
 - `part1_completed` / `part_completed` — files for a lab part are present (multi-part labs with named subfolders).
 
+**Web page content** (require a `webContent` block in the config; built for static HTML/CSS labs like CIS 195, where `runtimeCheck` is usually `"none"` and the lab sets `"textReport": true`):
+- `element_check` — required HTML elements are present, found by real CSS-selector queries (`figure > img`, `a[href^='mailto']`, `input[type='tel']`, …) summed across every HTML page; proportional credit, comment lists what's missing. An optional `ids` list scores a subset of the configured elements (e.g. one row per lab part).
+- `css_selector_check` — required CSS selectors (e.g. `nav`, `header`) appear as rules in external or embedded styles; optional `selectors` subset.
+- `css_property_check` — required CSS properties are used anywhere (external files, `<style>` blocks, or inline `style=""`); accepts bare names (`grid-area`) or `prop: value` pairs (`display: grid`); optional `properties` subset.
+- `file_count` — at least N files match a name pattern (e.g. 4 HTML files); `countId` names the `webContent.fileCounts` entry to score.
+
 **Deployment & links:**
 - `deploy_check` — fetches the deployment URL (`urlType`, default `citstudent`); full credit if live and bundled, half if live but unbundled (set `checkBundling: false` to skip that check entirely), flags for manual review if unreachable.
 - `url_check` — fetches a submitted URL; full credit on HTTP 200.
@@ -153,79 +160,120 @@ Any mapping may also carry `stockComments: { full, partial, zero }` to write a s
 AI_Grading/                   ← this tool (git repo)
   ├── bin/grade.js              ← main entry point
   └── configs/
-      ├── local-config.json   ← machine-specific paths (auto-created, gitignored)
-      └── {AssignmentName}/
-          ├── {assignmentname}_config.json     ← rubric config (flat lab)
-          ├── CS233JS_{AssignmentName}_Rubric.xlsx  ← rubric template
-          └── {StepName}/                      ← multi-step: one subdir per step
-              ├── {stepname}_config.json       ← e.g. apidoc_config.json
-              └── CS233JS_{StepName}_Rubric.xlsx
+      ├── local-config.json   ← machine-specific paths, per term (auto-created, gitignored)
+      └── {Course}/            ← e.g. CS233JS — see "Courses & terms" below
+          ├── course_config.json  ← courseName/courseCode/rubricPrefix (optional; defaults to dir name)
+          └── {AssignmentName}/
+              ├── {assignmentname}_config.json     ← rubric config (flat lab)
+              ├── CS233JS_{AssignmentName}_Rubric.xlsx  ← rubric template
+              └── {StepName}/                      ← multi-step: one subdir per step
+                  ├── {stepname}_config.json       ← e.g. apidoc_config.json
+                  └── CS233JS_{StepName}_Rubric.xlsx
 
-<labRoot>/                    ← your assignment data (on Google Drive)
-  └── {AssignmentName}/
-      ├── StudentName_12345_assignsubmission_file/
-      │   └── submission.zip
-      └── StudentName_12345_assignsubmission_onlinetext/
-          └── onlinetext.html
+<labRoot>/                    ← one term's assignment data (on Google Drive)
+  └── {Course}/
+      └── {AssignmentName}/
+          ├── StudentName_12345_assignsubmission_file/
+          │   └── submission.zip
+          └── StudentName_12345_assignsubmission_onlinetext/
+              └── onlinetext.html
 
   # Multi-step labs: Moodle downloads live in step subdirectories
-  └── {AssignmentName}/
-      └── {StepName}/
-          ├── StudentName_12345_assignsubmission_file/
-          └── StudentName_12345_assignsubmission_onlinetext/
+  └── {Course}/
+      └── {AssignmentName}/
+          └── {StepName}/
+              ├── StudentName_12345_assignsubmission_file/
+              └── StudentName_12345_assignsubmission_onlinetext/
 
-<codeRoot>/                   ← local folder outside Google Drive
-  └── {AssignmentName}/       ← created automatically per assignment (flat lab)
-      ├── Artifacts/
-      │   └── ...
-      └── SubmissionsAndAssessment/
-          └── StudentName/
-              ├── repo/  (or extracted_code/)
-              └── StudentName_Grade.xlsx
+  # Pre-course-tier installs: the grader also checks the flat <labRoot>/{AssignmentName}/
+  # path if the nested one above doesn't exist yet — no forced reorganization required.
 
-  # Multi-step labs: each step gets its own output tree
-  └── {AssignmentName}/
-      └── {StepName}/
+<codeRoot>/                   ← one term's local folder outside Google Drive
+  └── {Course}/
+      └── {AssignmentName}/   ← created automatically per assignment (flat lab)
           ├── Artifacts/
+          │   └── ...
           └── SubmissionsAndAssessment/
               └── StudentName/
+                  ├── repo/  (or extracted_code/)
                   └── StudentName_Grade.xlsx
+
+  # Multi-step labs: each step gets its own output tree
+  └── {Course}/
+      └── {AssignmentName}/
+          └── {StepName}/
+              ├── Artifacts/
+              └── SubmissionsAndAssessment/
+                  └── StudentName/
+                      └── StudentName_Grade.xlsx
 ```
 
 ### Flat labs vs. multi-step labs
 
 **Flat lab** — a single submission set graded as one unit (Lab03, Lab06, etc.):
-- One config file at `configs/{AssignmentName}/{assignmentname}_config.json`
+- One config file at `configs/{Course}/{AssignmentName}/{assignmentname}_config.json`
 - Rubric template lives alongside the config
 - Run: `node bin/grade.js Lab06`
 - `configure-lab.js` creates this layout by default (answer "No" when asked about multiple submission sets)
 
 **Multi-step lab** — separate submission sets for different stages of the same project (e.g., TermProject with DevEnvAndStaticSite, ApiDoc, Beta, Production):
-- No top-level config file; each step gets its own subdirectory under `configs/{AssignmentName}/{StepName}/`
+- No top-level config file; each step gets its own subdirectory under `configs/{Course}/{AssignmentName}/{StepName}/`
 - Each step subdir contains `{stepname_lower}_config.json` and its own rubric template
-- If the labRoot has a matching step subdirectory (e.g. `<labRoot>/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from the lab root directly — the labRoot step layout is optional
+- If the labRoot has a matching step subdirectory (e.g. `<labRoot>/{Course}/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from the lab root directly — the labRoot step layout is optional
 - Run a specific step: `node bin/grade.js TermProject DevEnvAndStaticSite`
 - Run interactively (step picker shown): `node bin/grade.js TermProject`
 - `configure-lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step
 
 **Converting a flat lab to multi-step** (e.g., you want to add a Beta step to a lab that currently only has a Production config):
 ```bash
-mkdir configs/LabName/StepName
-mv configs/LabName/labname_config.json configs/LabName/StepName/stepname_config.json
-mv configs/LabName/*.xlsm configs/LabName/StepName/
+mkdir configs/CourseName/LabName/StepName
+mv configs/CourseName/LabName/labname_config.json configs/CourseName/LabName/StepName/stepname_config.json
+mv configs/CourseName/LabName/*.xlsm configs/CourseName/LabName/StepName/
 # Then edit rubricName in the moved config to remove any path prefix
 ```
 
 ---
 
+### Courses & terms
+
+Every assignment lives under a **course** (e.g. `CS233JS`), and `labRoot`/`codeRoot` are
+resolved per named **term** (e.g. `"Spring 2026"`) rather than one fixed pair — so you can
+keep grading past semesters' data around without it colliding with the current one, and (down
+the road) grade more than one course.
+
+- **Course** — a subdirectory of `configs/` with its own assignments (`configs/{Course}/{Lab}/…`), optionally described by a `configs/{Course}/course_config.json` (display name, banner code, rubric-filename prefix).
+- **Term** — a named `{ label, labRoot, codeRoot }` entry, e.g. `"Spring 2026"` / id `2026Spring`, stored in `configs/local-config.json`'s `terms` map. This is what used to be the single flat `labRoot`/`codeRoot` pair.
+
+Running `node bin/grade.js` with **no arguments** always shows a course picker and then a term
+picker — even with just one option each, so "Add new course"/"Add new term" are always within
+reach. A **shortcut** like `node bin/grade.js Lab03` (any invocation with a lab name typed
+directly) skips both prompts and silently uses the single existing course/term, so your usual
+one-line commands keep working exactly as before. Once you add a second course, position 0 of
+the shortcut becomes the course name: `node bin/grade.js CS233JS Lab03`.
+
+**CIS 195 (Web Authoring)** ships as a second course: `configs/CIS195/` has configs for
+Lab01–Lab04, Lab06–Lab08, and TermProject, converted from the old standalone GradingAssistant
+app (see `docs/CIS195_INTEGRATION.md` for what was converted and how). These are
+`"textReport": true` labs — there are no rubric spreadsheets; each student gets a
+`<Student>_Grade.txt` report, no `--text-report` flag needed. Put the Moodle downloads under
+`<labRoot>/CIS195/Lab02/` (the same raw Moodle export layout as any other lab) and run:
+
+```bash
+node bin/grade.js CIS195 Lab02
+```
+
 ### First-time setup
 
-The first time you run the grader, it will prompt for two paths:
+The first time you run the grader with no arguments, it walks you through:
 
-1. **Lab root** — the Google Drive folder containing your lab directories (e.g., `StudentLabWork`). Saved to `AI_Grading/configs/local-config.json`.
-2. **Code storage root** — a folder *outside* Google Drive where student code will be cloned or unzipped. The grader creates subfolders for each lab automatically (e.g., `GradingCode/Lab03/SubmissionsAndAssessment/`), so you only need to provide the base path once. Saved to `AI_Grading/configs/local-config.json`.
+1. **Course** — pick from existing courses, or "Add new course" (only one option the very first time, so this is effectively automatic).
+2. **Term** — with none set up yet, you're prompted to create one: a label (e.g. `Spring 2026`), an id used as a folder-safe key (defaults to something like `2026Spring`), then the same two paths as before:
+   - **Lab root** — the Google Drive folder containing your lab directories (e.g., `StudentLabWork`).
+   - **Code storage root** — a folder *outside* Google Drive where student code will be cloned or unzipped. The grader creates subfolders for each course/lab automatically (e.g., `GradingCode/CS233JS/Lab03/SubmissionsAndAssessment/`), so you only need to provide the base path once.
 
-You only need to enter these once — they're saved for future runs.
+Everything here is saved to `AI_Grading/configs/local-config.json` — you only need to enter it
+once per term; future runs (and future courses in the same term) reuse it. To grade a new
+semester, run the grader and choose "Add new term" when prompted.
 
 ---
 
@@ -237,7 +285,8 @@ You only need to enter these once — they're saved for future runs.
 node bin/grade.js
 ```
 
-Shows a menu of available labs and grading modes:
+Walks through, in order: **course** (always shown, even with one option — see
+[Courses & terms](#courses--terms)), **term**, **assignment**, then a menu of grading modes:
 
 1. **Normal** — grade new submissions (skips students who already have a grade spreadsheet)
 2. **Regrade** — re-run all grading phases but keep existing cloned/extracted code; automatically runs `git pull` on each student's repo to pick up any updates
@@ -252,6 +301,9 @@ npm run test:watch      # re-run tests on file changes
 
 ### Command-line mode
 
+Any invocation with a lab name skips the course/term pickers entirely and auto-resolves the
+single existing course/term — see [Courses & terms](#courses--terms).
+
 ```bash
 node bin/grade.js Lab04                        # grade Lab04 (normal mode)
 node bin/grade.js Lab04 --regrade              # re-grade without re-cloning
@@ -261,6 +313,8 @@ node bin/grade.js Lab04 --ai-model=qwen3-coder # use a specific Ollama model
 node bin/grade.js Lab04 --text-report          # generate .txt reports instead of spreadsheets
 node bin/grade.js TermProject ApiDoc           # grade one step of a multi-step lab
 node bin/grade.js TermProject                  # interactive step picker for multi-step lab
+node bin/grade.js Lab04 --canvas               # import submissions from Canvas instead of a Moodle folder
+node bin/grade.js CS233JS Lab04                # explicit course — only needed once 2+ courses exist
 ```
 
 ### Flags
@@ -272,6 +326,7 @@ node bin/grade.js TermProject                  # interactive step picker for mul
 | `--ai-comments` | Generate a one-sentence AI summary for each student's rubric using a local Ollama model. Falls back to placeholder text if Ollama is not running. |
 | `--ai-model=NAME` | Specify which Ollama model to use. Implies `--ai-comments`. |
 | `--text-report` | Generate `.txt` grade reports instead of rubric spreadsheets. Use when a rubric template isn't available yet. |
+| `--canvas` | Import submissions directly from Canvas instead of a Moodle download folder. First use prompts for a Canvas course ID, confirms the course name, then lets you pick the assignment; saved for later runs. |
 | `--help`, `-h` | Show usage information. |
 
 ---
@@ -341,6 +396,6 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 
 **`run_check` executes student code directly on this machine:** unlike the browser check (sandboxed by Chrome) or `npm run build` (no arbitrary execution), `run_check` compiles/interprets and then *runs* the student's program with your machine's permissions. This is appropriate for grading known students in a classroom setting, not for anonymous or adversarial submissions — see `src/lib/sandbox.js`'s documentation if you need to understand the isolation model in more depth.
 
-**Rubric not found:** If the rubric spreadsheet isn't in `configs/{AssignmentName}/`, the grader will prompt you to provide one or automatically switch to `--text-report` mode (generates `.txt` files instead).
+**Rubric not found:** If the rubric spreadsheet isn't in `configs/{Course}/{AssignmentName}/`, the grader will prompt you to provide one or automatically switch to `--text-report` mode (generates `.txt` files instead).
 
-**Output files:** Each student gets a graded spreadsheet (or `.txt` report) in `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/` (flat) or `<codeRoot>/<labName>/<stepName>/SubmissionsAndAssessment/StudentName/` (multi-step). A `grading_log.txt` summary is written to the corresponding `Artifacts/` folder, alongside JSON reports for each pipeline phase.
+**Output files:** Each student gets a graded spreadsheet (or `.txt` report) in `<codeRoot>/<courseName>/<labName>/SubmissionsAndAssessment/StudentName/` (flat) or `<codeRoot>/<courseName>/<labName>/<stepName>/SubmissionsAndAssessment/StudentName/` (multi-step) — under that term's `codeRoot` (see [Courses & terms](#courses--terms)). A `grading_log.txt` summary is written to the corresponding `Artifacts/` folder, alongside JSON reports for each pipeline phase.

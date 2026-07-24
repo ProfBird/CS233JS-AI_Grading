@@ -48,7 +48,11 @@
  *             used by the npm_package/package_usage mapping type and by checkManifest's "unused extra
  *             dependency" check.
  * @property {((files: string[], cwd: string, configOverride: string|null, config?: Object) => Promise<Diagnostics>) | null} lint
- * @property {((configsDir: string, labName: string, stepName: string|null) => string[]) | null} lintConfigCandidates
+ * @property {((configsDir: string, labName: string, stepName: string|null, courseName?: string|null) => string[]) | null} lintConfigCandidates
+ *           - configsDir is always the repo-root-level configs/ dir (shipped-default fallback is
+ *             derived from it via configsDir/..); courseName, when given, is inserted as a path
+ *             segment ONLY for the per-lab/per-step override candidates (configs/{course}/{lab}/...),
+ *             not for the shipped default, which stays course-agnostic.
  * @property {(dir: string, config?: Object) => Project[]} detectProject
  * @property {((project: Project, config?: Object) => Promise<{success: boolean, errors: string[]}>) | null} install
  * @property {(project: Project, config?: Object) => Promise<{success: boolean, errors: string[], artifacts: string[], artifactPath?: string}>} build

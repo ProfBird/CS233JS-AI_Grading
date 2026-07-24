@@ -50,8 +50,10 @@ function validateConfig(config, labName) {
         return;
     }
 
-    if (!config.rubricName || typeof config.rubricName !== 'string') {
-        errors.push(`Missing or invalid "rubricName" (must be a string)`);
+    // Text-report labs (config.textReport === true) have no rubric spreadsheet —
+    // rubricName is only required when a spreadsheet will actually be written.
+    if (config.textReport !== true && (!config.rubricName || typeof config.rubricName !== 'string')) {
+        errors.push(`Missing or invalid "rubricName" (must be a string, or set "textReport": true)`);
     }
 
     if (!config.runtimeCheck) {
@@ -91,6 +93,56 @@ function validateConfig(config, labName) {
             // tree of allOf/anyOf/regex (boolean) — see analyze_code.js evalMatchNode.
             if (!feat.regex && !feat.match) errors.push(`${prefix}: needs "regex" or "match"`);
         });
+    }
+
+    // --- webContent block (check_web_content.js) + the mapping types that read it ---
+    const WEB_CONTENT_TYPES = new Set(['element_check', 'css_selector_check', 'css_property_check', 'file_count']);
+    const webMappings = Array.isArray(config.mappings)
+        ? config.mappings.filter(m => WEB_CONTENT_TYPES.has(m.type))
+        : [];
+    if (webMappings.length > 0 && !config.webContent) {
+        errors.push(`Mappings of type ${[...new Set(webMappings.map(m => m.type))].join('/')} require a "webContent" config block`);
+    }
+    if (config.webContent) {
+        const wc = config.webContent;
+        const seenIds = new Set();
+        (Array.isArray(wc.requiredElements) ? wc.requiredElements : []).forEach((entry, i) => {
+            const prefix = `webContent.requiredElements[${i}]`;
+            if (!entry.selector || typeof entry.selector !== 'string') {
+                errors.push(`${prefix}: missing "selector"`);
+                return;
+            }
+            if (entry.minCount !== undefined && (!Number.isInteger(entry.minCount) || entry.minCount < 1)) {
+                errors.push(`${prefix}: "minCount" must be a positive integer`);
+            }
+            const id = entry.id || entry.selector;
+            if (seenIds.has(id)) errors.push(`${prefix}: duplicate id "${id}"`);
+            seenIds.add(id);
+        });
+        for (const key of ['requiredCssSelectors', 'requiredCssProperties']) {
+            if (wc[key] !== undefined && (!Array.isArray(wc[key]) || wc[key].some(s => typeof s !== 'string'))) {
+                errors.push(`webContent.${key} must be an array of strings`);
+            }
+        }
+        const countIds = new Set();
+        (Array.isArray(wc.fileCounts) ? wc.fileCounts : []).forEach((fc, i) => {
+            const prefix = `webContent.fileCounts[${i}]`;
+            if (!fc.id) errors.push(`${prefix}: missing "id"`);
+            else countIds.add(fc.id);
+            if (!fc.pattern) {
+                errors.push(`${prefix}: missing "pattern"`);
+            } else {
+                try { new RegExp(fc.pattern); } catch { errors.push(`${prefix}: "pattern" is not a valid regex`); }
+            }
+            if (fc.min !== undefined && (!Number.isInteger(fc.min) || fc.min < 1)) {
+                errors.push(`${prefix}: "min" must be a positive integer`);
+            }
+        });
+        for (const map of webMappings) {
+            if (map.type === 'file_count' && !countIds.has(map.countId)) {
+                errors.push(`file_count mapping: countId "${map.countId}" has no matching webContent.fileCounts entry`);
+            }
+        }
     }
 
     if (config.repoHygiene) {

@@ -1,0 +1,193 @@
+{
+  "titleText": "CIS 195 Term Project Web Site",
+  "textReport": true,
+  "runtimeCheck": "none",
+  "webContent": {
+    "requiredElements": [
+      {
+        "id": "head",
+        "selector": "head",
+        "description": "head section"
+      },
+      {
+        "id": "title",
+        "selector": "title",
+        "description": "page title"
+      },
+      {
+        "id": "external_css",
+        "selector": "link[href][rel='stylesheet']",
+        "description": "external style sheet link"
+      },
+      {
+        "id": "embedded_css",
+        "selector": "style",
+        "description": "embedded style sheet"
+      },
+      {
+        "id": "body",
+        "selector": "body",
+        "description": "body section"
+      },
+      {
+        "id": "header",
+        "selector": "header",
+        "description": "page header"
+      },
+      {
+        "id": "h1",
+        "selector": "h1",
+        "description": "main heading"
+      },
+      {
+        "id": "nav",
+        "selector": "nav",
+        "description": "navigation element"
+      },
+      {
+        "id": "links",
+        "selector": "a",
+        "description": "hyperlink"
+      },
+      {
+        "id": "figure",
+        "selector": "figure",
+        "description": "figure"
+      },
+      {
+        "id": "img",
+        "selector": "img",
+        "description": "image"
+      },
+      {
+        "id": "img_alt",
+        "selector": "img[alt]",
+        "description": "image with alt text"
+      },
+      {
+        "id": "table",
+        "selector": "table",
+        "description": "table"
+      },
+      {
+        "id": "table_th",
+        "selector": "table th",
+        "description": "table header cell"
+      },
+      {
+        "id": "section",
+        "selector": "section",
+        "description": "section element"
+      },
+      {
+        "id": "article",
+        "selector": "article",
+        "description": "article element"
+      },
+      {
+        "id": "footer",
+        "selector": "footer",
+        "description": "page footer"
+      }
+    ],
+    "requiredCssSelectors": [
+      "footer",
+      "nav",
+      "header"
+    ],
+    "fileCounts": [
+      {
+        "id": "html",
+        "pattern": "\\.html?$",
+        "min": 5
+      },
+      {
+        "id": "css",
+        "pattern": "\\.css$",
+        "min": 1
+      }
+    ]
+  },
+  "analysis": {
+    "features": [
+      {
+        "id": "head_comment",
+        "regex": "<head>[\\s\\S]*<!--",
+        "fileRegex": "\\.html?$"
+      },
+      {
+        "id": "copyright",
+        "regex": "\\u00A9|&#169;|&#x000A9;|&copy;",
+        "fileRegex": "\\.html?$"
+      }
+    ]
+  },
+  "mappings": [
+    {
+      "type": "element_check",
+      "maxScore": 1,
+      "msg": "Required HTML elements present"
+    },
+    {
+      "type": "css_selector_check",
+      "maxScore": 1,
+      "msg": "Layout selectors styled (footer/nav/header — optional in original rubric)"
+    },
+    {
+      "type": "file_count",
+      "countId": "html",
+      "maxScore": 1,
+      "msg": "At least 5 HTML files"
+    },
+    {
+      "type": "file_count",
+      "countId": "css",
+      "maxScore": 1,
+      "msg": "At least 1 CSS file"
+    },
+    {
+      "type": "path_exists",
+      "pathPattern": "index.htm",
+      "maxScore": 1,
+      "msg": "Home page named index.html"
+    },
+    {
+      "type": "feature",
+      "featureId": "head_comment",
+      "maxScore": 1,
+      "msg": "Comment in the head section"
+    },
+    {
+      "type": "feature",
+      "featureId": "copyright",
+      "maxScore": 1,
+      "msg": "Copyright symbol in the footer"
+    },
+    {
+      "type": "html_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "HTML is valid"
+    },
+    {
+      "type": "css_validate",
+      "maxScore": 1,
+      "tolerance": 3,
+      "msg": "CSS is valid"
+    },
+    {
+      "type": "name_check",
+      "maxScore": 1,
+      "msg": "File/folder names are web-safe"
+    }
+  ],
+  "validate": {
+    "htmlRules": {
+      "no-inline-style": "off",
+      "attr-quotes": "off",
+      "element-case": "off",
+      "no-implicit-button-type": "off",
+      "wcag/h63": "off"
+    }
+  }
+}

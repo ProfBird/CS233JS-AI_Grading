@@ -1,6 +1,6 @@
 ## Overview
 
-AI grading pipeline built for CS233JS (Lane Community College), grading student JavaScript lab submissions downloaded from Moodle. The pipeline extracts student code, runs analysis/lint/runtime checks, then fills in rubric spreadsheets (.xlsx/.xlsm) with scores and comments. Language-specific mechanics (linting, building, running, testing) are behind a pluggable adapter layer (`src/adapters/`, `config.language`, default `"javascript"`) — TypeScript, Python, C++, and C# are also supported for courses that need them; see "Language adapters" below.
+AI grading pipeline originally built for CS233JS (Lane Community College), now generalized to grade multiple **courses** across multiple **terms** (e.g. "Spring 2026") — not just one course, one semester. The pipeline extracts student code (from a Moodle download or directly from Canvas), runs analysis/lint/runtime checks, then fills in rubric spreadsheets (.xlsx/.xlsm) with scores and comments — or, for labs with `"textReport": true` (or the `--text-report` flag), per-student `.txt` grade reports instead. A second shipped course, **CIS195** (Web Authoring — static HTML/CSS labs), uses the web-content check phase (`webContent` config + `element_check`/`css_selector_check`/`css_property_check`/`file_count` mappings, `runtimeCheck: "none"`, text reports) and supersedes the old standalone GradingAssistant repo — see `docs/CIS195_INTEGRATION.md`. Language-specific mechanics (linting, building, running, testing) are behind a pluggable adapter layer (`src/adapters/`, `config.language`, default `"javascript"`) — TypeScript, Python, C++, and C# are also supported for courses that need them; see "Language adapters" below. Every course/assignment/step config path is scoped under `configs/{Course}/…` (see "Courses" below), and `labRoot`/`codeRoot` are resolved per named term (see "Terms" below) rather than a single fixed pair. `bin/grade.js`'s plain interactive menu (no arguments) always shows a course picker then a term picker, even with one option each; any shortcut invocation (`node bin/grade.js Lab03`) auto-resolves a single course/term silently, so existing usage is unchanged.
 
 ## Commands
 
@@ -15,6 +15,8 @@ node bin/grade.js Lab03 --ai-comments     # grade with Ollama-generated rubric s
 node bin/grade.js Lab03 --ai-model=qwen3-coder  # grade with a specific Ollama model (implies --ai-comments)
 node bin/grade.js Lab06 --text-report     # grade without rubric spreadsheet, generates .txt reports
 node bin/grade.js TermProject ApiDoc      # grade one step of a multi-step lab
+node bin/grade.js Lab03 --canvas          # import submissions from Canvas instead of a Moodle folder
+node bin/grade.js CS233JS Lab03           # explicit course — only needed once 2+ courses exist under configs/
 
 node bin/rubric-to-md.js path/to/Rubric.xlsm  # dump Grade sheet as Markdown (or: cs233-rubric-to-md)
 node bin/configure-lab.js [AssignmentName]    # lab config wizard + copy rubric (or: cs233-configure-lab)
@@ -34,6 +36,8 @@ npx vitest                  # watch mode
 - **mammoth** — read `.docx` code review forms and convert to HTML for table parsing
 - **html-validate** — offline HTML validator used by `validate_html.js`
 - **csstree-validator** — offline CSS validator used by `validate_css.js`
+- **jsdom** — DOM parser for `check_web_content.js`'s required-element selector queries
+- **css-tree** — CSS AST parser for `check_web_content.js`'s selector/property scans (also csstree-validator's engine)
 - **globals** — browser/node global definitions for ESLint flat config
 - **eslint** — v9+ flat config
 - **typescript**, **@typescript-eslint/parser**, **@typescript-eslint/eslint-plugin** — the `typescript` language adapter's lint/build tooling
@@ -91,14 +95,16 @@ non-web language) without touching the loop. `runPipeline` also runs the resolve
 adapter's `preflight` check upfront, filters out already-graded students (unless
 `--regrade`), then generates grades and writes `grading_log.txt`.
 
-1. **src/pipeline/extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. URL categories are config-driven via `config.urlPatterns` (default `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }` — same behavior as before for existing labs); `github` is structurally special (decides clone-vs-zip), other keys are just labels for `url_check`/`deploy_check` mappings. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`.
+1. **src/pipeline/extract_code.js** — Reads Moodle submission dirs. Unzips `.zip` files or clones GitHub repos from URLs in `onlinetext.html`. URL categories are config-driven via `config.urlPatterns` (default `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }` — same behavior as before for existing labs); `github` is structurally special (decides clone-vs-zip), other keys are just labels for `url_check`/`deploy_check` mappings. Attaches `student.extractedDir`, `student.urls`, `student.filesDir`. Exports `toSafeName`, `matchUrlCategories`, `acquireCode`, `applyGithubSubdir` so other acquisition sources reuse the same directory-naming, URL-category-matching, and clone/unzip-with-fallback mechanics instead of reimplementing them.
+   - **src/pipeline/extract_code_canvas.js** — Alternative acquisition source: imports one assignment's submissions directly from Canvas via `src/lib/canvas_client.js` instead of scanning a Moodle folder, when a lab's config has `config.canvas.assignmentId` set (or `--canvas` is passed). `online_upload` submissions are downloaded and unzipped; `online_text_entry`/`online_url` submissions are scanned for a GitHub link the same way Moodle's `onlinetext.html` is. Produces the identical `students[]` shape (`name`/`extractedDir`/`gradeDir`/`filesDir`/`urls`/`error`) and writes into the same `submissionsDir/<Student>/{repo,extracted_code}/` layout, so every downstream phase and `bin/grade.js`'s `--reclone`/`--regrade` handling work unchanged regardless of acquisition source.
 2. **src/pipeline/runtime_check.js** — Dispatches to a named check **strategy** registered via `registerCheckStrategy(name, fn, opts)` (mirrors the mapping-handler registry). Built-in strategies: `"browser"` — Puppeteer captures console errors and failed loads (generic, not language-specific). `"build"` — delegates to the resolved adapter's `install`/`build`. `"both"` — build first, then browser-checks the built `dist/`; stores `buildSuccess`/`browserSuccess` sub-results separately. `"run_check"` — builds (if needed) then executes the produced artifact via the sandbox chokepoint above, matching stdout against `config.runCheck.expectPatterns`. `VALID_RUNTIME_MODES` (exported, used by `bin/grade.js`'s config validation) is populated automatically as strategies register — a new strategy doesn't require editing the validator. Also runs a `scripts_check` sub-phase (adapter-delegated; verifies named scripts are defined/pass) when `scripts_check` mappings are present, and a `test_check` sub-phase (adapter's `runTests`) when `test_check` mappings are present. Attaches to `student.runtimeCheck`, `student.scriptsCheck`, `student.testCheck`.
 3. **src/pipeline/read_code_review.js** — Reads each student's code review form (`.docx`). Parses the HTML table (via mammoth) to extract per-item beta and production scores, plus the lab assignment group letter. Attaches `student.codeReview` with `items[{betaScore, prodScore}]`, `productionCompleted`, and `group`. Runs *before* analysis so the group letter is available to the analyzer.
 4. **src/pipeline/analyze_code.js** — Regex-based feature detection per-lab config, driven by the resolved adapter's `sourceExtensions`/`stripComments`/`checkManifest`/`extractUsedPackages` (default JS). For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`. A configured `customAnalyzer` is invoked via `applyCustomAnalyzer()`, whose return object is merged into `analysis` (a throwing analyzer is logged and skipped). A custom analyzer can attach `analysis.reportSections` (see below) to add lab-specific output to text reports without touching generic code.
-5. **src/pipeline/lint_code.js** — Delegates to the resolved adapter's `lint()`/`lintConfigCandidates()`. For JS: runs ESLint (flat config) against each student's source files; ruleset resolution is a per-step or per-lab `configs/{Lab}/eslint.config.mjs` override if present, else the shipped `eslint/student.eslint.config.mjs`; the resolved config is also copied into the lab folder for editor consistency. Attaches to `student.lint` with `{ sourceFiles, errors, warnings, errorMessages, warningMessages, messages, ruleCounts }`.
+5. **src/pipeline/lint_code.js** — Delegates to the resolved adapter's `lint()`/`lintConfigCandidates()`. For JS: runs ESLint (flat config) against each student's source files; ruleset resolution is a per-step or per-lab `configs/{Course}/{Lab}/eslint.config.mjs` override if present, else the shipped `eslint/student.eslint.config.mjs`; the resolved config is also copied into the lab folder for editor consistency. `lintConfigCandidates(configsDir, labName, stepName, courseName)` takes `courseName` as an optional 4th arg — `configsDir` itself stays the repo-root-level `configs/` dir (so the shipped-default fallback, derived via `configsDir/..`, stays course-agnostic) while `courseName` only affects where the override candidates are looked for. Attaches to `student.lint` with `{ sourceFiles, errors, warnings, errorMessages, warningMessages, messages, ruleCounts }`.
 5b. **src/pipeline/validate_html.js** — Validates `.html`/`.htm` files with `html-validate` (pure JS, offline). Attaches `student.htmlValidation` with `{ htmlFiles, errors, warnings, messages, ruleCounts }`. Respects `config.validate.exclude`. Ruleset overrideable via `config.validate.htmlExtends` / `config.validate.htmlRules`; `no-trailing-whitespace` is off by default.
 5c. **src/pipeline/validate_css.js** — Validates `.css` files with `csstree-validator` (pure JS, offline). Attaches `student.cssValidation` with `{ cssFiles, errors, warnings, messages, ruleCounts }`. Reports validity errors only (no warning tier). Respects `config.validate.exclude`.
 5d. **src/pipeline/check_names.js** — Checks every file and folder name in the submission for Linux/web portability. A name is invalid if it contains any character outside `[A-Za-z0-9._-]` (spaces, parens, accented chars, etc.). Attaches `student.nameCheck` with `{ entriesChecked, errors, messages, badNames }`. Extra allowed characters configurable via `config.nameCheck.extraAllowed`.
+5e. **src/pipeline/check_web_content.js** — Runs only when `config.webContent` is present (the first phase to use a real `when` gate in `run_pipeline.js`'s `PHASES`). Checks required HTML elements via jsdom CSS-selector queries summed across all `.html`/`.htm` files, required CSS selectors/properties via css-tree scans of external `.css` files + embedded `<style>` + inline `style=""` attributes (a required property may be a bare name or a normalized `prop: value` pair), and minimum file counts by filename regex. Attaches `student.webContent`; scored by the `element_check` / `css_selector_check` / `css_property_check` / `file_count` mapping types. Built for CIS195's HTML/CSS labs (ported from the old GradingAssistant app) but fully generic.
 
 6. **src/pipeline/generate_grades.js** — Reads from `student.analysis`, `student.lint`, `student.runtimeCheck`, `student.codeReview`, `student.htmlValidation`, `student.cssValidation`, `student.nameCheck`, `student.scriptsCheck`, `student.testCheck`. Fills rubric `.xlsx`/`.xlsm` cells using handler functions per mapping type, registered via `../lib/handler_registry.js` (`registerHandler`/`getHandler`/`VALID_MAPPING_TYPES` — a standalone module so `bin/grade.js` can load `config.handlerModules` and validate mapping types without pulling in this file's heavier ollama/rubric_writer dependencies). For `.xlsm` rubrics, delegates OOXML/ZIP surgery to `src/lib/rubric_writer.js`. With `--ai-comments`, calls `src/lib/ollama_comments.js` to generate a one-sentence summary for `config.summaryCell`. With `--text-report`, produces `.txt` grade reports instead of spreadsheets — useful when a rubric template isn't available yet. If `config.graderCell` is set, writes "Computer" into that cell; on regrade, creates a versioned copy (`-V2`, `-V3`, …) rather than overwriting a spreadsheet that has been manually reviewed.
 
@@ -110,28 +116,106 @@ adapter's `preflight` check upfront, filters out already-graded students (unless
 - **src/lib/sandbox.js** — `runStudentArtifact()`, the native-code-execution isolation chokepoint. See the "Language adapters" section above.
 - **src/lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
 - **src/lib/ollama_comments.js** — HTTP client for a local Ollama server; generates one-sentence AI rubric summaries.
-- **src/lib/lab_config.js** — Pure, UI-agnostic functions for lab configuration. Exports spreadsheet helpers (`readRubricRows`, `detectRubricLayout`), assignment discovery (`getExistingAssignments`, `getExistingSteps`), config assembly (`buildConfig`, `writeLab`), mapping type schemas (`MAPPING_TYPES`, `MAPPING_TYPE_SCHEMA`), and `guessMappingType`. No readline/TUI/process.exit — safe to import from anywhere including tests.
+- **src/lib/lab_config.js** — Pure, UI-agnostic functions for lab configuration. Exports spreadsheet helpers (`readRubricRows`, `detectRubricLayout`), assignment discovery (`getExistingAssignments`, `getExistingSteps`), course discovery (`getExistingCourses`, `readCourseConfig`, `writeCourseConfig` — see "Courses" below), config assembly (`buildConfig`, `writeLab`), mapping type schemas (`MAPPING_TYPES`, `MAPPING_TYPE_SCHEMA`), and `guessMappingType`. No readline/TUI/process.exit — safe to import from anywhere including tests.
 - **src/lib/llm_client.js** — Unified LLM client supporting Ollama, OpenRouter, and Anthropic. Used by `configure-lab.js` to generate AI-assisted config drafts. Exports `LLMClient`, `loadLLMClient` (reads provider/key from `local-config.json`), `setupLLMInteractive`, and `selectModel`. Handles HTTP 429 rate-limit retries with fallback model.
 - **src/lib/tui.js** — Terminal UI primitives for `configure-lab.js` wizard (neo-blessed). Provides a scrollable log pane, text input bar, arrow-key option popup, full-screen review table, and spinner. Redirects `console.log`/`console.error` to the TUI pane while active.
 - **src/lib/config_prompts.js** — Driver-based rubric prompt functions shared between the TUI wizard and tests. Implements `promptRubricRows`, `promptRubricCriteria`, `copyRubric`, `promptFields`, and `buildMappingEntry`. Uses a driver interface (`ask`, `askBoolean`, `askInt`, `askOptions`, `print`, `exit`) so the same logic runs in both interactive and test contexts.
 - **src/lib/variation_detect.js** — `checkVersionVariation(extractedDir, variations)` and its helpers (`buildVariationCorpus`, `variationKeywords`, `VARIATION_KEYWORD_STOPWORDS`), extracted out of `analyze_code.js` — self-contained, no dependency on `analyze_code.js`'s per-student state. Keyword-matches each `config.variations` entry's `appName` against a corpus of repo text (top-level names, HTML `<title>`s, `package.json` name/description, README excerpts) to detect which lab variation a student implemented.
+- **src/lib/canvas_client.js** — Thin Canvas LMS REST API wrapper (native `fetch`, no dependency) used by `src/pipeline/extract_code_canvas.js` and `bin/grade.js`'s `--canvas` setup flow. Exports `getCourse`, `listAssignments` (filters out quizzes/graded discussions), `listSubmissions` (paginated, `include[]=user`), `downloadFile`, `CanvasError`, and `sanitize` (redacts the API token from any error message before it's logged).
+
+### Courses
+
+Every assignment lives under a **course** directory: `configs/{Course}/{AssignmentName}/…`. A
+course is any subdirectory of `configs/` that either has its own `course_config.json` or (for
+a not-yet-migrated install) contains at least one assignment with a config —
+`getExistingCourses()` (`src/lib/lab_config.js`) discovers them this way, tolerantly.
+
+`configs/{Course}/course_config.json` (all fields optional; missing ones default to the
+directory name):
+```json
+{
+  "courseName": "CS233JS",
+  "courseCode": "CS233JS",
+  "rubricPrefix": "CS233JS",
+  "canvasCourseId": 680
+}
+```
+- `courseName` — display name shown in menus/banners.
+- `courseCode` — shown in the interactive banner title (`{courseCode} AI Grader v1.0`).
+- `rubricPrefix` — used when suggesting/generating a new rubric filename (`{rubricPrefix}_{Lab}_Rubric.xlsm`).
+- `canvasCourseId` — the course's Canvas course ID, resolved once via `--canvas`'s interactive
+  setup and reused by every lab in the course (see the Canvas section below) — an individual
+  lab's config only stores its own `canvas.assignmentId`.
+
+**Course resolution in `bin/grade.js`:** the **plain interactive menu** (`node bin/grade.js`
+with no arguments at all) always shows a course picker first — even with only one course —
+plus an "Add new course" option; same for the term picker described below. A **shortcut**
+invocation that supplies a positional arg (`node bin/grade.js Lab03`,
+`node bin/grade.js TermProject ApiDoc`) skips both prompts and auto-resolves the single
+course/term silently, so existing single-course, single-term muscle-memory usage is
+unaffected. Once a second course exists, position 0 of the CLI args is always the course
+(`node bin/grade.js CS233JS Lab03`) for shortcut usage too. `bin/configure-lab.js` prompts
+for (or creates) a course first, the same way, before its assignment/step prompts — but has
+no term concept (lab configs are term-agnostic; see "Terms" below).
+
+**Student data layout** mirrors the config-side course tier: `<labRoot>/{Course}/{Assignment}/…`
+(Moodle downloads) and `<codeRoot>/{Course}/{Assignment}/{Artifacts,SubmissionsAndAssessment}/…`
+(graded output). For a pre-course-tier install, `bin/grade.js` falls back to the flat
+`<labRoot>/{Assignment}/` path if the nested one doesn't exist yet (Moodle downloads are
+external/Google-Drive-managed, so no forced reorganization), and offers a one-time interactive
+move of already-graded `<codeRoot>/{Assignment}/…` output into the nested location the first
+time a lab is graded post-upgrade (so `--regrade` doesn't treat everyone as new).
+
+### Terms
+
+A **term** (e.g. "Spring 2026", id `2026Spring`) is a named `{ label, labRoot, codeRoot }`
+triple, stored flat in `configs/local-config.json`'s `terms` map — orthogonal to course. It's
+what actually determines `labRoot`/`codeRoot` for a run; course is still layered underneath
+each term's roots exactly as described above (`<term.labRoot>/{Course}/{Assignment}/…`).
+Multiple courses in the same semester share one term.
+
+```json
+{
+  "terms": {
+    "2026Spring": {
+      "label": "Spring 2026",
+      "labRoot": "G:\\My Drive\\Courses\\CS233JS\\2026-Sp\\StudentLabWork",
+      "codeRoot": "D:\\Repos\\CS233JS-Repos\\CS233JS-StudentWork\\2026Spring"
+    }
+  }
+}
+```
+
+- **Migration:** `migrateLocalConfigTerms()` (`bin/grade.js`) runs once — if `local-config.json`
+  still has the old flat `labRoot`/`codeRoot` keys and no `terms` map yet, it synthesizes a
+  single `"2026Spring"` / `"Spring 2026"` term from them and rewrites the file (dropping the
+  flat keys; `local-config.json` is gitignored/machine-local, so no dual-shape support is
+  kept going forward). A brand-new install starts with an empty `terms` map.
+- **Selection:** same always-prompt-in-the-plain-menu / auto-select-on-shortcut rule as course
+  selection above. With zero terms, one must be created immediately (this absorbs what used
+  to be the unconditional first-run "enter your lab root / code storage root" prompts — those
+  prompts now only run as part of creating a term, via `createTerm()` in `bin/grade.js`).
+- `bin/configure-lab.js` doesn't prompt for a term — its two best-effort
+  `labRoot`/`codeRoot` reads (a step-hint message, an auto-detected-rubric search) just use
+  the first entry in `terms` via a small `firstTermRoots()` helper, since lab *configs* don't
+  vary by term.
 
 ### Config files
 
-Two layouts are supported — flat (single submission set) and multi-step (multiple submission sets, e.g., Proposal + DevEnv + ApiDoc + Beta + Production).
+Two layouts are supported — flat (single submission set) and multi-step (multiple submission sets, e.g., Proposal + DevEnv + ApiDoc + Beta + Production). Both live under a course directory (see "Courses" above); a single-course install can ignore the `{Course}/` segment mentally — `configs/{Course}/{AssignmentName}/…` behaves exactly like `configs/{AssignmentName}/…` did before.
 
 **Flat lab** — one config at the assignment level:
 ```
-configs/{AssignmentName}/
+configs/{Course}/{AssignmentName}/
   {assignmentname}_config.json          # e.g. lab06_config.json
   CS233JS_{AssignmentName}_Rubric.xlsm  # rubric template lives alongside config
 ```
 - `rubricName` in the config is the filename only (e.g. `"CS233JS_Lab06_Rubric.xlsm"`), resolved relative to the config's directory.
-- Run: `node bin/grade.js Lab06`
+- Run: `node bin/grade.js Lab06` (or `node bin/grade.js {Course} Lab06` once 2+ courses exist)
 
 **Multi-step lab** — one subdirectory per submission step, no top-level config:
 ```
-configs/{AssignmentName}/
+configs/{Course}/{AssignmentName}/
   {StepName}/                                     # e.g. DevEnvAndStaticSite/
     {stepname_lower}_config.json                  # e.g. devenvandstaticsite_config.json
     CS233JS_{StepName}_Rubric.xlsm                # rubric lives in the step subdir
@@ -142,15 +226,15 @@ configs/{AssignmentName}/
 - Detection rule: top-level `{assignmentname}_config.json` is **absent**, but one or more subdirectories each contain a `{subdir_lower}_config.json`.
 - `rubricName` in each step config is the filename only (e.g. `"CS233JS_DevEnvAndStaticSite_Rubric.xlsm"`), resolved relative to that step's subdirectory.
 - Run: `node bin/grade.js TermProject DevEnvAndStaticSite` (or just `node bin/grade.js TermProject` for an interactive step picker).
-- If the labRoot has a matching step subdirectory (e.g. `<labRoot>/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from `<labRoot>/TermProject/` directly — the labRoot step layout is optional.
+- If the labRoot has a matching step subdirectory (e.g. `<labRoot>/{Course}/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from `<labRoot>/{Course}/TermProject/` directly — the labRoot step layout is optional.
 - `configure-lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step to set up each step's config.
 
 **Converting a flat lab to multi-step:**
-1. `mkdir configs/{Lab}/{StepName}`
-2. `mv configs/{Lab}/{lab}_config.json configs/{Lab}/{StepName}/{stepname_lower}_config.json`
-3. `mv configs/{Lab}/*.xlsm configs/{Lab}/{StepName}/` (move rubric into step subdir)
+1. `mkdir configs/{Course}/{Lab}/{StepName}`
+2. `mv configs/{Course}/{Lab}/{lab}_config.json configs/{Course}/{Lab}/{StepName}/{stepname_lower}_config.json`
+3. `mv configs/{Course}/{Lab}/*.xlsm configs/{Course}/{Lab}/{StepName}/` (move rubric into step subdir)
 4. Update `rubricName` in the moved config to remove any path prefix — just the filename.
-5. Organize the Moodle labRoot downloads into `<labRoot>/{Lab}/{StepName}/` subdirectories.
+5. Organize the Moodle labRoot downloads into `<labRoot>/{Course}/{Lab}/{StepName}/` subdirectories.
 
 ### Directory structure
 
@@ -163,6 +247,7 @@ AI_Grading/   ← repo root (ESM; "type": "module")
   ├── src/
   │   ├── pipeline/
   │   │   ├── extract_code.js
+  │   │   ├── extract_code_canvas.js  # alternative acquisition source: imports submissions from Canvas
   │   │   ├── runtime_check.js     # check-strategy registry (browser/build/both/run_check)
   │   │   ├── read_code_review.js
   │   │   ├── analyze_code.js
@@ -170,6 +255,7 @@ AI_Grading/   ← repo root (ESM; "type": "module")
   │   │   ├── validate_html.js
   │   │   ├── validate_css.js
   │   │   ├── check_names.js
+  │   │   ├── check_web_content.js # required HTML elements / CSS selectors+properties / file counts (config.webContent)
   │   │   ├── generate_grades.js
   │   │   └── run_pipeline.js      # orchestrator: runs the phases above + generation + log (called by bin/grade.js)
   │   ├── adapters/                 # language adapters — see "Language adapters" above
@@ -192,73 +278,89 @@ AI_Grading/   ← repo root (ESM; "type": "module")
   │   │   ├── tui.js               # neo-blessed TUI for the configure-lab wizard
   │   │   ├── config_prompts.js    # driver-based rubric prompt logic (TUI + test shared)
   │   │   ├── variation_detect.js  # checkVersionVariation() + helpers, extracted out of analyze_code.js
+  │   │   ├── canvas_client.js     # thin Canvas LMS REST API wrapper (native fetch, no dependency)
   │   │   └── xlsx.js              # ESM wrapper around the xlsx package
   │   └── analyzers/               # (deprecated; now empty) former per-lab custom analyzers
   ├── configs/
-  │   ├── local-config.json        # labRoot + codeRoot + optional toolchains (machine-specific, gitignored, auto-created)
-  │   └── {AssignmentName}/
-  │       ├── {assignmentname}_config.json    # flat-lab: rubric config, feature/match rules, cell mappings
-  │       ├── CS233JS_{AssignmentName}_Rubric.xlsm  # rubric template (tracked in git)
-  │       └── {StepName}/                    # multi-step lab: one subdir per submission step
-  │           ├── {stepname}_config.json     # step-level config (e.g. apidoc_config.json)
-  │           └── CS233JS_{StepName}_Rubric.xlsm
+  │   ├── local-config.json        # terms{label,labRoot,codeRoot} + optional toolchains/llm/canvas (machine-specific, gitignored, auto-created)
+  │   └── {Course}/                # e.g. CS233JS — see "Courses" above
+  │       ├── course_config.json   # courseName/courseCode/rubricPrefix/canvasCourseId (optional; defaults to dir name)
+  │       └── {AssignmentName}/
+  │           ├── {assignmentname}_config.json    # flat-lab: rubric config, feature/match rules, cell mappings
+  │           ├── CS233JS_{AssignmentName}_Rubric.xlsm  # rubric template (tracked in git)
+  │           └── {StepName}/                    # multi-step lab: one subdir per submission step
+  │               ├── {stepname}_config.json     # step-level config (e.g. apidoc_config.json)
+  │               └── CS233JS_{StepName}_Rubric.xlsm
   └── ...
 
 <labRoot>/    (on Google Drive — raw Moodle downloads only, nothing created here)
-  └── {AssignmentName}/
-      ├── StudentName_12345_assignsubmission_file/
-      │   └── (zip files uploaded by student, if any)
-      └── StudentName_12345_assignsubmission_onlinetext/
-          └── onlinetext.html
+  └── {Course}/
+      └── {AssignmentName}/
+          ├── StudentName_12345_assignsubmission_file/
+          │   └── (zip files uploaded by student, if any)
+          └── StudentName_12345_assignsubmission_onlinetext/
+              └── onlinetext.html
 
   # Multi-step: Moodle downloads are in step subdirectories
-  └── {AssignmentName}/
-      └── {StepName}/
-          ├── StudentName_12345_assignsubmission_file/
-          └── StudentName_12345_assignsubmission_onlinetext/
+  └── {Course}/
+      └── {AssignmentName}/
+          └── {StepName}/
+              ├── StudentName_12345_assignsubmission_file/
+              └── StudentName_12345_assignsubmission_onlinetext/
+
+  # Pre-course-tier fallback: bin/grade.js reads from the flat <labRoot>/{AssignmentName}/
+  # path too if the nested one above doesn't exist yet — Moodle downloads are external, so
+  # no upfront reorganization is required to adopt the course tier.
 
 <codeRoot>/   (local, outside Google Drive)
-  └── {AssignmentName}/  ← flat lab: created automatically; keeps different assignments separate
-      ├── Artifacts/   ← grader-produced files (reports, log)
-      │   ├── analysis_report.json
-      │   ├── lint_report.json
-      │   ├── runtime_report.json
-      │   ├── html_validation_report.json
-      │   ├── css_validation_report.json
-      │   ├── name_check_report.json
-      │   └── grading_log.txt
-      └── SubmissionsAndAssessment/  ← student code + per-student grade spreadsheets
-          └── StudentName/
-              ├── repo/  (GitHub clone)  or  extracted_code/  (unzipped)
-              └── StudentName_Grade.xlsx
+  └── {Course}/
+      └── {AssignmentName}/  ← flat lab: created automatically; keeps different assignments separate
+          ├── Artifacts/   ← grader-produced files (reports, log)
+          │   ├── analysis_report.json
+          │   ├── lint_report.json
+          │   ├── runtime_report.json
+          │   ├── html_validation_report.json
+          │   ├── css_validation_report.json
+          │   ├── name_check_report.json
+          │   ├── web_content_report.json  (only for labs with config.webContent)
+          │   └── grading_log.txt
+          └── SubmissionsAndAssessment/  ← student code + per-student grade spreadsheets
+              └── StudentName/
+                  ├── repo/  (GitHub clone)  or  extracted_code/  (unzipped)
+                  └── StudentName_Grade.xlsx
 
   # Multi-step: each step gets its own Artifacts + SubmissionsAndAssessment tree
-  └── {AssignmentName}/
-      └── {StepName}/
-          ├── Artifacts/
-          └── SubmissionsAndAssessment/
-              └── StudentName/
-                  └── StudentName_Grade.xlsx
+  └── {Course}/
+      └── {AssignmentName}/
+          └── {StepName}/
+              ├── Artifacts/
+              └── SubmissionsAndAssessment/
+                  └── StudentName/
+                      └── StudentName_Grade.xlsx
 ```
 
 
-- ESLint ruleset: shipped at `eslint/student.eslint.config.mjs`, overridable per-lab via `configs/{Lab}/eslint.config.mjs` (or per-step); `lint_code.js` copies the resolved config into the lab folder for VS Code consistency. The grader's *own* source is linted via the repo's root ESLint config (`npm run lint`, the CI gate).
+- ESLint ruleset: shipped at `eslint/student.eslint.config.mjs`, overridable per-lab via `configs/{Course}/{Lab}/eslint.config.mjs` (or per-step); `lint_code.js` copies the resolved config into the lab folder for VS Code consistency. The grader's *own* source is linted via the repo's root ESLint config (`npm run lint`, the CI gate).
 - `--reclone` implies `--regrade`.
 - In **normal mode** (no flags), students whose grade spreadsheet already exists are skipped entirely — no runtime check, analysis, linting, or spreadsheet rewrite. Use `--regrade` to re-process them.
 - **`--regrade` without `--reclone`** automatically runs `git pull` on each student's cloned repo before re-grading, so updated submissions are picked up without a full re-clone.
 - When `labDir` contains no direct Moodle submissions but has subdirectories that do (e.g., Moodle exported Beta/Production as separate groups), `bin/grade.js` prompts you to pick which group to grade.
 - `configs/local-config.json` is tried first; `default-config.json` (shipped with the repo) is the fallback for new machines.
 - Each pipeline phase attaches data to the shared `students` array; `generate_grades` consumes the combined output.
+- **Canvas as a code-acquisition source (`--canvas`):** an alternative to the default Moodle-folder flow — imports one assignment's submissions directly via the Canvas API (`src/pipeline/extract_code_canvas.js`) instead of scanning `<labRoot>/<Course>/<LabName>/`. First use (`--canvas`, or whenever a lab's config has no `canvas.assignmentId` yet) prompts for a Canvas course ID — defaulting to the course's already-known `course_config.json`'s `canvasCourseId` if set — fetches and prints the course name for confirmation (re-prompts on "n" or a 404), then lists the course's assignments (auto-guessing a match against the lab/step name) for you to pick from. The confirmed Canvas course ID is saved onto the **course** (`configs/{Course}/course_config.json`'s `canvasCourseId`) since it doesn't change lab-to-lab; only `{ assignmentId }` is saved into the individual lab's own config file. The Canvas URL/API token resolve `CANVAS_URL`/`CANVAS_TOKEN` env vars first, then `configs/local-config.json`'s `canvas.{url,token}` block (prompted and saved on first use) — the same precedence `llm_client.js` uses for its API keys. Once downloaded, Canvas-sourced submissions live in the exact same `submissionsDir/<Student>/{repo,extracted_code}/` layout the Moodle path uses, so every other phase and `--reclone`/`--regrade` behave identically regardless of source.
 
-### Config schema (configs/{AssignmentName}/{assignmentname}_config.json)
+### Config schema (configs/{Course}/{AssignmentName}/{assignmentname}_config.json)
 
   - extractOnly: boolean (optional) — when `true`, only the extraction phase runs; no runtime check, analysis, lint, or grade generation. Useful for previewing what was submitted before configuring the full rubric.
+
+  - textReport: boolean (optional) — when `true`, this lab always produces per-student `.txt` grade reports (same effect as passing `--text-report` every run) and `rubricName` becomes optional. Used by courses with no rubric spreadsheets (all CIS195 labs).
 
   - language: string (optional, default `"javascript"`) — selects the language adapter (`src/adapters/`) used by analysis/lint/runtime-check: `javascript` | `typescript` | `python` | `cpp` | `csharp`. Existing labs need no change — the default preserves current behavior exactly.
 
   - rubricName: string — rubric filename in the lab directory
 
-  - runtimeCheck: "browser" | "build" | "both" | "run_check" | (any name registered via `registerCheckStrategy`)
+  - runtimeCheck: "none" | "browser" | "build" | "both" | "run_check" | (any name registered via `registerCheckStrategy`)
+    - `"none"` is a no-op for labs with nothing to run (static multi-page markup labs, e.g. all of CIS195) — runtimeCheck is a required key, so markup-only labs set this rather than paying for a browser pass.
     - `"browser"` serves the submission's source `index.html` directly. This only works for plain static sites; a Vite/bundled project has bare module imports (`import x from 'pkg'`) that the browser can't resolve unbuilt, so `"browser"` reports false load failures for them. For anything that needs a build step, use `"build"` (or `"both"` to also browser-check the built `dist/`).
     - `"both"` runs build first, then Puppeteer browser check against the built output. Use `build_check` / `browser_check` / `build_and_browser_check` mapping types to score them separately or together.
     - `"run_check"` builds (if the adapter has a build step) then executes the produced artifact directly — see `config.runCheck` below and the `run_check` mapping type. Intended for non-web languages (Python/C++/C#) whose runtime signal is "did the program run and produce the right output," not a browser check.
@@ -267,7 +369,9 @@ AI_Grading/   ← repo root (ESM; "type": "module")
 
   - execution: { mode, timeoutMs } (optional) — isolation tier for `run_check`'s artifact execution (see `src/lib/sandbox.js`). `mode`: `"direct"` (default; implemented — spawn + timeout + kill-tree + fresh throwaway cwd, NOT a security sandbox, trusted-classroom use only) | `"restricted-user"` | `"container"` (both documented, loud-failing stubs — never silently fall back to `"direct"`).
 
-  - urlPatterns: { [label]: hostnameSubstring } (optional) — overrides/extends the URL categories `extract_code.js` looks for in `onlinetext.html`. Default: `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }`. `github` is structurally special (decides clone-vs-zip); other keys are just labels read by `url_check`/`deploy_check` mappings' `urlType` field.
+  - urlPatterns: { [label]: hostnameSubstring } (optional) — overrides/extends the URL categories `extract_code.js` looks for in `onlinetext.html` (and, for a Canvas-sourced lab, in `extract_code_canvas.js`'s `online_text_entry`/`online_url` submissions). Default: `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }`. `github` is structurally special (decides clone-vs-zip); other keys are just labels read by `url_check`/`deploy_check` mappings' `urlType` field.
+
+  - canvas: { assignmentId } (optional) — set once, either by hand or by `bin/grade.js --canvas`'s interactive setup, to make this lab always acquire code from Canvas instead of a Moodle folder. The Canvas course ID itself lives one level up, on the course (`configs/{Course}/course_config.json`'s `canvasCourseId`) — not per-lab, since a course's Canvas ID doesn't change assignment to assignment. `bin/grade.js` resolves the Canvas URL/token from `CANVAS_URL`/`CANVAS_TOKEN` env vars first, then `configs/local-config.json`'s `canvas.{url,token}` block.
 
   - handlerModules: string[] (optional) — paths (relative to the lab's config dir) to JS modules that call `registerHandler()` as a side effect on import, so a lab can add mapping types without editing `generate_grades.js`. Loaded by `bin/grade.js` immediately after the config is parsed and **before** `validateConfig()` runs — a mapping type registered by one of these modules must already be recognized as valid when validation checks every mapping's `type`.
 
@@ -290,6 +394,13 @@ AI_Grading/   ← repo root (ESM; "type": "module")
 
   - parts[]: { id, gameNames[], folderPattern, featureCounts[] } — multi-part lab config (optional). gameNames is the list of expected game/project names for that part; folderPattern is a regex fallback for "Part1/Pt2"-style folder naming.
 
+  - webContent: (optional) — drives the `check_web_content.js` phase (skipped entirely when absent). All checks are offline.
+    - requiredElements[]: { id, selector, minCount, description, dirPattern } — jsdom `querySelectorAll(selector)` counts summed across all HTML files; passes when total ≥ minCount (default 1). `id` defaults to the selector string; optional `dirPattern` (regex on the file's relative path) restricts which files an entry is checked in. Invalid selectors fail the entry with an error, never crash.
+    - requiredCssSelectors[]: strings — each must appear as a rule selector in external/embedded CSS (comma lists split, whitespace-normalized; raw-substring fallback).
+    - requiredCssProperties[]: strings — bare property name (`grid-area`) or `prop: value` pair (`display: grid`, whitespace/case-insensitive); found in external CSS, embedded `<style>`, or inline `style=""` attributes.
+    - fileCounts[]: { id, pattern, min } — count of files whose basename matches the regex `pattern` (case-insensitive) must be ≥ min. Referenced by `file_count` mappings via `countId`.
+    - exclude[]: path substrings to skip (falls back to `validate.exclude`).
+
   - validate: (optional) — config for HTML and CSS validation phases
     - exclude[]: path substrings to skip (shared by both validators and name check)
     - htmlExtends[]: override the html-validate preset list (default: `['html-validate:recommended']`)
@@ -299,7 +410,9 @@ AI_Grading/   ← repo root (ESM; "type": "module")
     - extraAllowed: string — additional characters to allow in file/folder names beyond `[A-Za-z0-9._-]`
 
   - mappings[] — rubric cell assignments (types listed below)
-    - types: feature | part1_completed | part_completed | apps_in_repo | developer_comments | code_review | url_check | deploy_check | lint | build_check | browser_check | build_and_browser_check | run_check | test_check | html_validate | css_validate | name_check | manual | part_feature | repo_hygiene | github_repo | collaborator_check | gitignore_check | scripts_check | npm_package | package_usage | package_check | manifest_check | env_file_check | path_exists
+    - types: feature | part1_completed | part_completed | apps_in_repo | developer_comments | code_review | url_check | deploy_check | lint | build_check | browser_check | build_and_browser_check | run_check | test_check | html_validate | css_validate | name_check | manual | part_feature | repo_hygiene | github_repo | collaborator_check | gitignore_check | scripts_check | npm_package | package_usage | package_check | manifest_check | env_file_check | path_exists | element_check | css_selector_check | css_property_check | file_count
+    - `element_check` / `css_selector_check` / `css_property_check` mappings score `student.webContent` proportionally (passed/required, rounded); an optional `ids` / `selectors` / `properties` field (array or comma-separated string) scores a subset — e.g. one mapping per lab part. Comments list up to 5 missing items with `keepComment: true` so `stockComments.zero` never masks the diagnostic.
+    - `file_count` mappings are all-or-nothing per counter: full credit when the `webContent.fileCounts` entry named by `countId` meets its `min`, else 0 with a "Found N, expected M" comment. Requires `countId`.
     - `package_usage`/`manifest_check` are language-neutral aliases of `npm_package`/`package_check` (same handler functions) — the underlying logic reads adapter-populated `analysis.npmPackages`/`analysis.packageCheck` and isn't actually npm-specific; use whichever name reads better for the lab's language.
     - `run_check` mappings score the `"run_check"` runtime strategy's result (`student.runtimeCheck`): full credit if the program ran and matched `config.runCheck.expectPatterns`, else 0 with the failure detail (exit code, timeout, or which pattern was missing) preserved via `keepComment: true`.
     - `test_check` mappings score proportionally against `student.testCheck` (`{ total, passed, failures[] }`, from the adapter's `runTests` — pytest/dotnet test/CTest): `score = maxScore × passed/total`, full credit if all pass, comment lists up to 5 failing test names.

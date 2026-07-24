@@ -25,19 +25,24 @@ describe('PHASES', () => {
         }
     });
 
-    it('every built-in phase currently runs unconditionally (when() is always true)', () => {
-        // Documents today's behavior: no lab config yet toggles any phase off. A future
-        // per-language config key can flip one of these without changing the loop itself.
+    it('every phase except checkWebContent runs unconditionally (when() is always true)', () => {
         for (const phase of PHASES) {
+            if (phase.name === 'checkWebContent') continue;
             expect(phase.when({})).toBe(true);
             expect(phase.when({ language: 'python' })).toBe(true);
         }
     });
 
+    it('checkWebContent runs only when config.webContent is present', () => {
+        const phase = PHASES.find(p => p.name === 'checkWebContent');
+        expect(phase.when({})).toBe(false);
+        expect(phase.when({ webContent: { requiredElements: [] } })).toBe(true);
+    });
+
     it('includes the expected built-in phase names in order', () => {
         expect(PHASES.map(p => p.name)).toEqual([
             'runtimeCheck', 'readCodeReview', 'analyzeCode', 'lintCode',
-            'validateHtml', 'validateCss', 'checkNames',
+            'validateHtml', 'validateCss', 'checkNames', 'checkWebContent',
         ]);
     });
 });

@@ -1,6 +1,6 @@
-# CS233JS AI Grader
+# AI Grading Assistant
 
-An AI-assisted grading pipeline built for **CS233JS** (Lane Community College). It automates grading of student lab submissions downloaded from Moodle: extracting student code, running analysis/lint/build/runtime checks, and filling in rubric spreadsheets (`.xlsx`/`.xlsm`) with scores and comments.
+This is an AI-assisted grading pipeline built for **CS233JS** (Lane Community College), but designed to be extensible so that it can be used for grading any kind of programming assignment. It automates grading of student lab submissions downloaded from an LMS by: extracting student code, running analysis/lint/build/runtime checks, and filling in rubric spreadsheets (`.xlsx`/`.xlsm`) with scores and comments.
 
 It was originally built for JavaScript labs, but language-specific mechanics (linting, building, running, testing) sit behind a pluggable adapter layer, so it also grades **TypeScript, Python, C++, and C#** assignments — the language is a per-lab config setting, and JavaScript remains the default so existing labs need no changes.
 
@@ -15,6 +15,8 @@ The pipeline is designed for a workflow where some rubric items are auto-graded 
 ## Related project
 
 This repo is a from-scratch successor to [GradingAssistant](https://github.com/ProfBird/GradingAssistant), an earlier grading tool the author wrote mainly for checking **HTML and CSS** in web-authoring lab assignments (originally for a Web Authoring course, with JavaScript checking added later). CS233JS AI Grader generalizes that idea into a multi-language, adapter-based pipeline with spreadsheet rubric integration.
+
+GradingAssistant's HTML/CSS evaluation capabilities have now been fully integrated here: the `check_web_content` pipeline phase checks required HTML elements (real CSS-selector queries), required CSS selectors/properties (external, embedded, and inline styles), and file-count minimums — and the **CIS 195** Web Authoring course ships under `configs/CIS195/` with converted configs for all eight auto-gradable labs, producing per-student text grade reports. See [docs/CIS195_INTEGRATION.md](docs/CIS195_INTEGRATION.md) for the capability mapping and conversion notes.
 
 ## Contributing
 

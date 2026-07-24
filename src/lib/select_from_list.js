@@ -27,6 +27,9 @@
  *        resolving (e.g. the user cancelled out of a "create new X" flow)
  * @param {string} [opts.invalidMessage] - printed (via console.log) on an unrecognized
  *        answer, before re-prompting
+ * @param {number} [opts.defaultIndex] - 0-based index into `items` resolved when the
+ *        user enters an empty string; omitted (the default) means empty input re-prompts
+ *        instead, matching prior behavior
  * @returns {Promise<any>} the resolved value
  */
 async function selectFromList(ask, {
@@ -36,11 +39,18 @@ async function selectFromList(ask, {
     promptText = 'Select an option (number or name): ',
     extraOption = null,
     invalidMessage = '  Invalid selection, try again.',
+    defaultIndex = null,
 }) {
     let selected = null;
     while (!selected) {
         const input = await ask(promptText);
         const trimmed = input.trim();
+
+        if (trimmed === '' && defaultIndex !== null) {
+            selected = getValue(items[defaultIndex]);
+            continue;
+        }
+
         const num = parseInt(trimmed);
 
         if (extraOption && num === items.length + 1) {

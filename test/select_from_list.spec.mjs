@@ -76,4 +76,24 @@ describe('selectFromList', () => {
         const result = await selectFromList(ask, { items, matchNames });
         expect(result).toBe(items[0]);
     });
+
+    it('resolves defaultIndex on empty input', async () => {
+        const ask = scriptedAsk(['']);
+        const result = await selectFromList(ask, { items, matchNames, defaultIndex: 1 });
+        expect(result).toBe(items[1]);
+        expect(ask).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats whitespace-only input as empty for defaultIndex purposes', async () => {
+        const ask = scriptedAsk(['   ']);
+        const result = await selectFromList(ask, { items, matchNames, defaultIndex: 0 });
+        expect(result).toBe(items[0]);
+    });
+
+    it('re-prompts on empty input when defaultIndex is not set', async () => {
+        const ask = scriptedAsk(['', '1']);
+        const result = await selectFromList(ask, { items, matchNames });
+        expect(result).toBe(items[0]);
+        expect(ask).toHaveBeenCalledTimes(2);
+    });
 });

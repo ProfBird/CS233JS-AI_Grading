@@ -408,17 +408,11 @@ async function main() {
             console.log();
 
             completions = labs;
-            while (!labName) {
-                const input = await askRl('Select an assignment (number or name): ');
-                const num = parseInt(input);
-                if (!isNaN(num) && num >= 1 && num <= labs.length) {
-                    labName = labs[num - 1];
-                } else if (labs.find(l => l.toLowerCase() === input.trim().toLowerCase())) {
-                    labName = labs.find(l => l.toLowerCase() === input.trim().toLowerCase());
-                } else {
-                    console.log('  Invalid selection, try again.');
-                }
-            }
+            labName = await selectFromList(askRl, {
+                items: labs,
+                matchNames: l => [l],
+                promptText: 'Select an assignment (number or name): ',
+            });
             completions = [];
         }
 
@@ -440,17 +434,11 @@ async function main() {
                     existingSteps.forEach((s, i) => console.log(`  ${i + 1}) ${s}`));
                     console.log();
                     completions = existingSteps;
-                    while (!stepName) {
-                        const input = await askRl('Select a step (number or name): ');
-                        const num = parseInt(input);
-                        if (!isNaN(num) && num >= 1 && num <= existingSteps.length) {
-                            stepName = existingSteps[num - 1];
-                        } else if (existingSteps.find(s => s.toLowerCase() === input.trim().toLowerCase())) {
-                            stepName = existingSteps.find(s => s.toLowerCase() === input.trim().toLowerCase());
-                        } else {
-                            console.log('  Invalid selection, try again.');
-                        }
-                    }
+                    stepName = await selectFromList(askRl, {
+                        items: existingSteps,
+                        matchNames: s => [s],
+                        promptText: 'Select a step (number or name): ',
+                    });
                     completions = [];
                 }
                 console.log(`  Step: ${stepName}\n`);
@@ -568,15 +556,12 @@ async function main() {
                     console.log(`    ${i + 1}) ${a.name}  (id ${a.id})${flag}${guess}`);
                 });
                 const defaultChoice = guessIdx >= 0 ? guessIdx + 1 : null;
-                let chosenAssignment = null;
-                while (!chosenAssignment) {
-                    const prompt = defaultChoice ? `  Select an assignment # [${defaultChoice}]: ` : '  Select an assignment #: ';
-                    const input = await askRl(prompt);
-                    const trimmed = input.trim();
-                    const n = trimmed === '' ? defaultChoice : parseInt(trimmed);
-                    if (n && n >= 1 && n <= assignments.length) chosenAssignment = assignments[n - 1];
-                    else console.log('  Invalid selection, try again.');
-                }
+                const chosenAssignment = await selectFromList(askRl, {
+                    items: assignments,
+                    matchNames: a => [a.name],
+                    promptText: defaultChoice ? `  Select an assignment (number or name) [${defaultChoice}]: ` : '  Select an assignment (number or name): ',
+                    defaultIndex: guessIdx >= 0 ? guessIdx : null,
+                });
                 assignmentId = chosenAssignment.id;
                 console.log(`  Assignment: "${chosenAssignment.name}" (id ${assignmentId})\n`);
 
@@ -692,23 +677,13 @@ async function main() {
                 console.log(`\nNo submissions found directly in ${labName}/. Found these submission groups:`);
                 subdirs.forEach((d, i) => console.log(`  ${i + 1}) ${d}`));
                 console.log();
-                let chosen = false;
-                while (!chosen) {
-                    const input = await askRl(`Select which group to grade (number) [${subdirs.length}]: `);
-                    const trimmed = input.trim();
-                    if (trimmed === '') {
-                        labDir = path.join(labDir, subdirs[subdirs.length - 1]);
-                        chosen = true;
-                    } else {
-                        const num = parseInt(trimmed);
-                        if (!isNaN(num) && num >= 1 && num <= subdirs.length) {
-                            labDir = path.join(labDir, subdirs[num - 1]);
-                            chosen = true;
-                        } else {
-                            console.log('  Invalid selection, try again.');
-                        }
-                    }
-                }
+                const chosenGroup = await selectFromList(askRl, {
+                    items: subdirs,
+                    matchNames: d => [d],
+                    promptText: `Select which group to grade (number or name) [${subdirs.length}]: `,
+                    defaultIndex: subdirs.length - 1,
+                });
+                labDir = path.join(labDir, chosenGroup);
                 console.log(`  Using: ${labDir}\n`);
                 // If this is a multi-step lab and the chosen folder doesn't match the step
                 // name, the only reason we had to ask is the folder naming. Point the fix out.

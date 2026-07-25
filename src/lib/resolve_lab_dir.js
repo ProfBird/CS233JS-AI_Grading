@@ -17,7 +17,8 @@ import fs from 'fs';
  * @param {string} opts.labName
  * @param {boolean} opts.usingCanvas
  * @param {Array} opts.courses - list of discovered courses
- * @param {Function} opts.askRl - async prompt function
+ * @param {Object} opts.driver - prompt driver (src/lib/prompt_driver.js); uses
+ *        driver.askBoolean and driver.note
  * @returns {Promise<string>} resolved labDir
  */
 export async function resolveLegacyLabDir({
@@ -27,23 +28,23 @@ export async function resolveLegacyLabDir({
     labName,
     usingCanvas,
     courses,
-    askRl,
+    driver,
 }) {
     if (usingCanvas || fs.existsSync(labDir) || !fs.existsSync(legacyLabDir)) {
         return labDir;
     }
 
     if (courses.length === 1) {
-        console.log(`  Note: reading submissions from ${legacyLabDir} (not yet moved under <labRoot>/${courseName}/).`);
-        console.log(`  Consider moving it under <labRoot>/${courseName}/${labName}/ to match the course-scoped layout.\n`);
+        driver.note(`  Note: reading submissions from ${legacyLabDir} (not yet moved under <labRoot>/${courseName}/).`);
+        driver.note(`  Consider moving it under <labRoot>/${courseName}/${labName}/ to match the course-scoped layout.`);
         return legacyLabDir;
     }
 
-    console.log(`  Found a pre-course-tier submissions folder at ${legacyLabDir}.`);
-    const confirm = await askRl('This folder may belong to a different course — use it? (y/n): ');
-    if (confirm.trim().toLowerCase() === 'y') {
-        console.log(`  Note: reading submissions from ${legacyLabDir} (not yet moved under <labRoot>/${courseName}/).`);
-        console.log(`  Consider moving it under <labRoot>/${courseName}/${labName}/ to match the course-scoped layout.\n`);
+    driver.print(`  Found a pre-course-tier submissions folder at ${legacyLabDir}.`);
+    const confirm = await driver.askBoolean('This folder may belong to a different course — use it?', false);
+    if (confirm) {
+        driver.note(`  Note: reading submissions from ${legacyLabDir} (not yet moved under <labRoot>/${courseName}/).`);
+        driver.note(`  Consider moving it under <labRoot>/${courseName}/${labName}/ to match the course-scoped layout.`);
         return legacyLabDir;
     }
     return labDir;

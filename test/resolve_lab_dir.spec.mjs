@@ -3,14 +3,18 @@
  *
  * Tests the legacy labRoot fallback logic used by bin/grade.js.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { resolveLegacyLabDir } from '../src/lib/resolve_lab_dir.js';
 
-function makeAskRl(response) {
-    return () => Promise.resolve(response);
+function makeDriver(askBooleanResponse) {
+    return {
+        print() {},
+        note() {},
+        askBoolean: async () => askBooleanResponse,
+    };
 }
 
 function makeCourses(count) {
@@ -21,12 +25,10 @@ let root;
 
 beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'resolve_lab_dir_test_'));
-    vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
 afterEach(() => {
     rmSync(root, { recursive: true, force: true });
-    vi.restoreAllMocks();
 });
 
 describe('resolveLegacyLabDir', () => {
@@ -42,7 +44,7 @@ describe('resolveLegacyLabDir', () => {
             labName: 'Lab01',
             usingCanvas: false,
             courses: makeCourses(2),
-            askRl: makeAskRl(''),
+            driver: makeDriver(false),
         });
 
         expect(result).toBe(labDir);
@@ -61,7 +63,7 @@ describe('resolveLegacyLabDir', () => {
             labName: 'Lab01',
             usingCanvas: false,
             courses: makeCourses(1),
-            askRl: makeAskRl(''),
+            driver: makeDriver(false),
         });
 
         expect(result).toBe(legacyLabDir);
@@ -79,7 +81,7 @@ describe('resolveLegacyLabDir', () => {
             labName: 'Lab01',
             usingCanvas: false,
             courses: makeCourses(2),
-            askRl: makeAskRl('y'),
+            driver: makeDriver(true),
         });
 
         expect(result).toBe(legacyLabDir);
@@ -97,7 +99,7 @@ describe('resolveLegacyLabDir', () => {
             labName: 'Lab01',
             usingCanvas: false,
             courses: makeCourses(2),
-            askRl: makeAskRl('n'),
+            driver: makeDriver(false),
         });
 
         expect(result).toBe(labDir);
@@ -115,7 +117,7 @@ describe('resolveLegacyLabDir', () => {
             labName: 'Lab01',
             usingCanvas: true,
             courses: makeCourses(1),
-            askRl: makeAskRl(''),
+            driver: makeDriver(false),
         });
 
         expect(result).toBe(labDir);
@@ -132,7 +134,7 @@ describe('resolveLegacyLabDir', () => {
             labName: 'Lab01',
             usingCanvas: false,
             courses: makeCourses(1),
-            askRl: makeAskRl(''),
+            driver: makeDriver(false),
         });
 
         expect(result).toBe(labDir);

@@ -71,6 +71,12 @@ class TUI {
         this.screen.render();
     }
 
+    setTitle(text) {
+        this.screen.title = text;
+        this._header.setContent(` === ${text} ===`);
+        this.screen.render();
+    }
+
     // ── Text input ────────────────────────────────────────────────────────
     // Shows a prompt bar above an input line at the bottom of the screen.
     // Returns the trimmed string value; falls back to `def` on empty submit.

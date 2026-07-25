@@ -41,7 +41,7 @@ npx vitest                  # watch mode
 - **globals** — browser/node global definitions for ESLint flat config
 - **eslint** — v9+ flat config
 - **typescript**, **@typescript-eslint/parser**, **@typescript-eslint/eslint-plugin** — the `typescript` language adapter's lint/build tooling
-- **neo-blessed** — terminal UI framework used by `configure-lab.js` wizard
+- **neo-blessed** — terminal UI framework (`src/lib/tui.js`), shared by `configure-lab.js`'s wizard and `bin/grade.js`'s interactive menu (via `prompt_driver.js`, only when both stdin and stdout are a real TTY)
 - **vitest** (dev) — test runner
 
 Non-Node toolchains used by the `python`/`cpp`/`csharp` language adapters are **not**
@@ -86,8 +86,23 @@ trusted-classroom submissions, not deliberately malicious code.
 
 ### Pipeline (`bin/grade.js` → `src/pipeline/run_pipeline.js`)
 
-`bin/grade.js` owns CLI parsing, interactive prompts, and path resolution, then calls
-code acquisition directly and hands off to **`src/pipeline/run_pipeline.js`**'s
+`bin/grade.js` owns CLI parsing and path resolution; its interactive setup phase
+(course/term/submission-source/assignment/step/Canvas/rubric/mode resolution) is
+`src/lib/grade_setup.js`'s `resolveGradeSetup()`, prompting over a **driver**
+(`src/lib/prompt_driver.js`) — the same full-screen neo-blessed TUI `bin/configure-lab.js`
+uses (`src/lib/tui.js`) when both stdin and stdout are a real TTY, or a plain readline
+fallback otherwise (piped/redirected invocations, e.g. `node bin/grade.js Lab03 --regrade
+> out.txt`, never touch neo-blessed). The TUI is constructed lazily on the first prompt, so
+a fully non-interactive shortcut run (course/term/lab all unambiguous, e.g. `node
+bin/grade.js Lab03 --regrade`) never flashes the alt-screen open. `main()` closes the
+driver once setup resolves, then replays `driver.takeNotes()` (messages that must survive
+the TUI's alt-buffer closing — saved term/course, Canvas assignment picked, legacy-path
+fallback, rubric outcome, etc.) to real stdout before the grading banner, mirroring
+`configure-lab.js`'s buffered-summary pattern. `resolveGradeSetup` throws a `SetupError`
+(an array of message lines) on any unrecoverable problem instead of calling
+`process.exit` directly, so the driver can be torn down first; `main()`'s top-level catch
+prints `err.lines` to `process.stderr` and exits 1. It then calls code acquisition directly
+and hands off to **`src/pipeline/run_pipeline.js`**'s
 `runPipeline(students, config, dirs, options)` for everything else. The phase list is
 data (`PHASES`, each `{ name, run, when }`) rather than a hardcoded sequence of awaits —
 a future per-language config key can gate a phase (e.g. skip markup validation for a
@@ -113,12 +128,14 @@ adapter's `preflight` check upfront, filters out already-graded students (unless
 - **src/lib/file_walker.js** — Recursive directory traversal. Exports: `walk(dir, opts)` (core traversal with `visit`, `onFile`, `onDir`, `shouldSkip`, `shouldDescend`, `followSymlinks`, `maxDepth`); `getAllFilesByExt(dir, ext, exclusions)` (collect files by one extension or an array of extensions); `DEFAULT_SKIP_DIRS` (Set of dirs never scanned: `node_modules`, `dist`, `build`, `.git`, `__MACOSX`).
 - **src/lib/handler_registry.js** — The mapping-type handler registry (`registerHandler`, `getHandler`, `VALID_MAPPING_TYPES`), extracted from `generate_grades.js` into its own lightweight module. Wizard-facing metadata (labels/descriptions/field prompts) still lives separately in `lab_config.js`'s `MAPPING_TYPES`/`MAPPING_TYPE_SCHEMA` — deliberately not merged in yet (see `test/generate_grades.spec.mjs`'s "mapping-type lists stay in sync" test, which fails loudly if the two drift; full metadata consolidation is a documented future step for whenever the wizard's schema next needs to change anyway).
 - **src/lib/config_validation.js** — `validateConfig(config, labName)` and `loadHandlerModules(config, labConfigDir)`, extracted out of `bin/grade.js` so they're unit-testable without stubbing `process.exit` (`validateConfig` throws an `Error` on failure instead; `bin/grade.js` catches it and exits). Depends only on `VALID_MAPPING_TYPES` (`handler_registry.js`), `VALID_RUNTIME_MODES` (`runtime_check.js`), and `fs`/`path`/`url` — no CLI/readline machinery.
+- **src/lib/grade_setup.js** — `resolveGradeSetup(driver, { argv, configsDir, localConfigPath, defaultConfigPath })`, `bin/grade.js`'s interactive setup phase (course/term/submission-source/assignment/step/Canvas/rubric/mode resolution) extracted so it's unit-testable against a scratch `configs/`/labRoot/codeRoot tree and a fake driver, without spawning a real process. Also exports `parseGradeArgs(argv)` (CLI flag/positional parsing, separately testable) and the `SetupError` class (thrown instead of calling `process.exit` directly — see `prompt_driver.js` below). `driver` lifecycle (creation, teardown, notes replay) is owned by `bin/grade.js`'s `main()`, not this module.
+- **src/lib/prompt_driver.js** — `createDriver({ title, interactive })` selects a prompt backend: the neo-blessed `TUI` (`tui.js`) when `interactive` (default: both stdin and stdout are a real TTY), or `createReadlineDriver()` otherwise. Both implement the 6-method interface `config_prompts.js` already documents (`ask`/`askBoolean`/`askInt`/`askOptions`/`print`/`exit`) plus 4 extensions: `note`/`takeNotes` (buffer a message for replay after the driver closes), `banner` (course-code title/box), and `close`. Call sites must pass a bare, single-line prompt string plus a separate `def` — each backend decorates it itself (`[default]:`, a numbered list, etc.); embedding `[default]` or a trailing `:` in the prompt renders doubled decoration. The readline backend's `askOptions` delegates number-or-name resolution to `select_from_list.js` but resolves to the matched *option object* (never `getValue: o => o.value`), since that module's resolve loop treats a falsy value as "keep prompting" and would hang on an option whose `value` is `null`/`''`/`false`. The TUI backend is constructed lazily, on the first prompt call, so a zero-prompt shortcut run never opens the alt-screen.
 - **src/lib/sandbox.js** — `runStudentArtifact()`, the native-code-execution isolation chokepoint. See the "Language adapters" section above.
 - **src/lib/rubric_writer.js** — Low-level OOXML/ZIP surgery: column-width recovery, drawing/button preservation, reducing the workbook to the Grade sheet, restoring non-Grade sheets as `veryHidden` for VBA binding.
 - **src/lib/ollama_comments.js** — Generates one-sentence AI rubric summaries. A thin wrapper around `llm_client.js`'s `LLMClient` (Ollama provider, 8s per-student timeout, `quiet: true` since callers already report failures) — owns only the grading-specific prompt template; HTTP/retry/model-probe machinery is shared with `llm_client.js`.
 - **src/lib/lab_config.js** — Pure, UI-agnostic functions for lab configuration. Exports spreadsheet helpers (`readRubricRows`, `detectRubricLayout`), assignment discovery (`getExistingAssignments`, `getExistingSteps`), course discovery (`getExistingCourses`, `readCourseConfig`, `writeCourseConfig` — see "Courses" below), config assembly (`buildConfig`, `writeLab`), mapping type schemas (`MAPPING_TYPES`, `MAPPING_TYPE_SCHEMA`), and `guessMappingType`. No readline/TUI/process.exit — safe to import from anywhere including tests.
 - **src/lib/llm_client.js** — Unified LLM client supporting Ollama, OpenRouter, and Anthropic. Used by `configure-lab.js` to generate AI-assisted config drafts, and by `ollama_comments.js` for AI rubric summaries. Exports `LLMClient`, `loadLLMClient` (reads provider/key from `local-config.json`), `setupLLMInteractive`, `selectModel`, and `detectOllamaModel(baseUrl)` (probes `{host}/api/tags`, stripping a trailing `/v1` off the given chat `baseUrl` first — Ollama's tag-listing endpoint lives at the host root, not under `/v1`). Handles HTTP 429 rate-limit retries with fallback model. `DEFAULTS.ollama.baseUrl` is `http://localhost:11434/v1` — Ollama's OpenAI-compatible chat endpoint lives under `/v1`, unlike its native `/api/*` endpoints.
-- **src/lib/tui.js** — Terminal UI primitives for `configure-lab.js` wizard (neo-blessed). Provides a scrollable log pane, text input bar, arrow-key option popup, full-screen review table, and spinner. Redirects `console.log`/`console.error` to the TUI pane while active.
+- **src/lib/tui.js** — Terminal UI primitives (neo-blessed), used by both `configure-lab.js`'s wizard and, via `prompt_driver.js`, `bin/grade.js`'s interactive menu. Provides a scrollable log pane, text input bar, arrow-key option popup, full-screen review table, spinner, and `setTitle`/`setStatus` for the header/status strips. Redirects `console.log`/`console.error` to the TUI pane while active.
 - **src/lib/config_prompts.js** — Driver-based rubric prompt functions shared between the TUI wizard and tests. Implements `promptRubricRows`, `promptRubricCriteria`, `copyRubric`, `promptFields`, and `buildMappingEntry`. Uses a driver interface (`ask`, `askBoolean`, `askInt`, `askOptions`, `print`, `exit`) so the same logic runs in both interactive and test contexts.
 - **src/lib/variation_detect.js** — `checkVersionVariation(extractedDir, variations)` and its helpers (`buildVariationCorpus`, `variationKeywords`, `VARIATION_KEYWORD_STOPWORDS`), extracted out of `analyze_code.js` — self-contained, no dependency on `analyze_code.js`'s per-student state. Keyword-matches each `config.variations` entry's `appName` against a corpus of repo text (top-level names, HTML `<title>`s, `package.json` name/description, README excerpts) to detect which lab variation a student implemented.
 - **src/lib/canvas_client.js** — Thin Canvas LMS REST API wrapper (native `fetch`, no dependency) used by `src/pipeline/extract_code_canvas.js` and `bin/grade.js`'s `--canvas` setup flow. Exports `getCourse`, `listAssignments` (filters out quizzes/graded discussions), `listSubmissions` (paginated, `include[]=user`), `downloadFile`, `CanvasError`, and `sanitize` (redacts the API token from any error message before it's logged).
@@ -270,12 +287,15 @@ AI_Grading/   ← repo root (ESM; "type": "module")
   │   │   ├── file_walker.js
   │   │   ├── handler_registry.js  # mapping-type handler registry (registerHandler/getHandler/VALID_MAPPING_TYPES)
   │   │   ├── config_validation.js # validateConfig()/loadHandlerModules(), extracted out of bin/grade.js
+  │   │   ├── grade_setup.js       # bin/grade.js's interactive setup phase, extracted for testability
+  │   │   ├── prompt_driver.js     # createDriver(): TUI or readline backend for bin/grade.js's prompts
+  │   │   ├── select_from_list.js  # shared "number or name" picker loop (the readline driver's askOptions)
   │   │   ├── sandbox.js           # runStudentArtifact() — native-code execution isolation chokepoint
   │   │   ├── rubric_writer.js
   │   │   ├── ollama_comments.js
   │   │   ├── lab_config.js        # pure config helpers (spreadsheet parsing, mapping schemas)
   │   │   ├── llm_client.js        # unified LLM client (Ollama / OpenRouter / Anthropic)
-  │   │   ├── tui.js               # neo-blessed TUI for the configure-lab wizard
+  │   │   ├── tui.js               # neo-blessed TUI, shared by configure-lab.js and bin/grade.js
   │   │   ├── config_prompts.js    # driver-based rubric prompt logic (TUI + test shared)
   │   │   ├── variation_detect.js  # checkVersionVariation() + helpers, extracted out of analyze_code.js
   │   │   ├── canvas_client.js     # thin Canvas LMS REST API wrapper (native fetch, no dependency)

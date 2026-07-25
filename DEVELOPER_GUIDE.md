@@ -433,10 +433,38 @@ sequenceDiagram
 
 ### `bin/grade.js` — CLI Entry Point
 
-Handles CLI argument parsing, interactive menus, env configuration, and code
-acquisition, then hands off to `src/pipeline/run_pipeline.js` for phase orchestration
-(see "Pipeline Orchestration" above) — it is no longer the module that calls
-`runtimeCheck`/`analyzeCode`/etc. directly.
+Handles CLI argument parsing and code acquisition, then hands off to
+`src/pipeline/run_pipeline.js` for phase orchestration (see "Pipeline Orchestration"
+above) — it is no longer the module that calls `runtimeCheck`/`analyzeCode`/etc. directly.
+Its interactive setup phase (course/term/submission-source/assignment/step/Canvas/
+rubric/mode resolution) is `src/lib/grade_setup.js`'s `resolveGradeSetup(driver, opts)` —
+extracted so it's unit-testable (`test/grade_setup.spec.mjs`) against a scratch
+`configs/`/labRoot/codeRoot tree and a fake driver, without spawning a real process.
+`main()`'s own job is: create the driver (`createDriver()`, `src/lib/prompt_driver.js`),
+call `resolveGradeSetup`, close the driver in a `finally`, replay
+`driver.takeNotes()` to real stdout, then run the reclone/git-pull/extraction/pipeline
+steps below using the returned setup object.
+
+**Prompt backend:** `createDriver({ title, interactive })` picks the full-screen
+neo-blessed `TUI` (`src/lib/tui.js`, the same one `configure-lab.js` uses) when both
+stdin and stdout are a real TTY, or a readline fallback otherwise — so
+`node bin/grade.js Lab03 --regrade > out.txt` (piped stdout) never touches neo-blessed.
+The TUI is constructed lazily on the first prompt call, so a fully non-interactive
+shortcut run (course/term/lab all unambiguous — the common `--regrade` daily-use case)
+never flashes the alt-screen open; `print`/`note` calls before that point go straight to
+the real terminal. Every prompt call site passes a bare, single-line label plus a
+separate `def` — each backend decorates it itself (`[default]:`, a numbered list); a
+call site that embeds its own `[default]` would render doubled brackets on both
+backends, which is why `test/grade_setup.spec.mjs`'s mock driver runs in `strict` mode
+and fails loudly on that pattern.
+
+**Fatal errors:** `resolveGradeSetup` throws `SetupError` (an `Error` subclass carrying
+an array of message lines, since some diagnostics are multi-line) instead of calling
+`console.error` + `process.exit(1)` directly — this lets the driver finish tearing down
+(restoring the terminal / closing readline) before the error surfaces. `main()`'s
+top-level `catch` writes `err.lines` to `process.stderr` and exits 1 for a `SetupError`,
+or a generic message for anything else (this also fixed a pre-existing bug where an
+unhandled error used to exit 0).
 
 **Key behaviors:**
 - `isPlainMenu = positional.length === 0` (computed once, before course selection touches `positional`) — the single rule driving every "always prompt vs. auto-select silently" decision below. Running `node bin/grade.js` with no positional args at all is the "plain menu": course, then term, are always shown as pickers, even with only one option. A shortcut like `node bin/grade.js Lab03` (or any invocation with a positional arg) auto-resolves a single course/term silently, so existing muscle-memory usage is untouched.
@@ -448,7 +476,7 @@ acquisition, then hands off to `src/pipeline/run_pipeline.js` for phase orchestr
 - `--regrade` without `--reclone` runs `git pull` on each student's existing repo before re-grading
 - When `labDir` has no direct Moodle submissions but contains subdirs that do (e.g. separate Beta/Production groups), prompts the user to pick which group to grade
 - **Pre-course-tier fallbacks** (ease the one-time upgrade, no forced reorganization): if `<labRoot>/<courseName>/<labName>` doesn't exist but the old flat `<labRoot>/<labName>` does, that's used instead (Moodle downloads are Google-Drive-external, out of this tool's control). If `<codeRoot>/<courseName>/<labName>` doesn't exist yet but a flat `<codeRoot>/<labName>` with prior graded output does, the user is offered a one-time interactive move into the nested location — otherwise `--regrade` would treat every already-graded student as new and orphan any manual post-grading edits.
-- Calls `loadHandlerModules(config, labConfigDir)` (external mapping-type handler modules) **before** validating the config — a mapping type registered by one of those modules must already be recognized as valid when `validateConfig()` checks every mapping's `type` against `VALID_MAPPING_TYPES`. This ordering fixed a real bug where handler modules were previously loaded too late (inside `generate_grades.js`, after validation had already run). Both functions live in `../src/lib/config_validation.js`, not in `bin/grade.js` itself — extracted so they're unit-testable without stubbing `process.exit` (`validateConfig` throws instead; `bin/grade.js` wraps the call in `try/catch` and exits on failure).
+- Calls `loadHandlerModules(config, labConfigDir)` (external mapping-type handler modules) **before** validating the config — a mapping type registered by one of those modules must already be recognized as valid when `validateConfig()` checks every mapping's `type` against `VALID_MAPPING_TYPES`. This ordering fixed a real bug where handler modules were previously loaded too late (inside `generate_grades.js`, after validation had already run). Both functions live in `../src/lib/config_validation.js`, not in `bin/grade.js` itself — extracted so they're unit-testable without stubbing `process.exit` (`validateConfig` throws instead; `grade_setup.js` catches it and re-throws as a `SetupError`, letting `main()` control the exit).
 - Validates config on startup via `validateConfig()` — checks required keys, known mapping types (`VALID_MAPPING_TYPES`, sourced from `../lib/handler_registry.js`), runtime-check mode (`VALID_RUNTIME_MODES`, sourced from `runtime_check.js`'s check-strategy registry — new strategies don't require editing the validator), cell reference format, part structure, feature definitions
 - Calls `extractCode(labDir, submissionsDir, config)` directly — or, when `usingCanvas` (`--canvas` passed, or `config.canvas.assignmentId` already set), `importFromCanvas({ courseId, assignmentId, submissionsDir, canvasConfig, urlPatterns })` instead. `usingCanvas` also skips the Moodle-only `labDir`-existence/step-descend/`hasMoodleSubmissions` blocks entirely (see `extract_code_canvas.js` below); everything else — `--reclone`'s clearing loop, `--regrade`'s `git pull` loop, `runPipeline` — operates generically on `submissionsDir` and needs no source-specific branching. For `config.extractOnly` labs, writes the extraction-only log summary and returns without calling `run_pipeline.js` at all
 - Otherwise calls `runPipeline(students, config, dirs, options)`, which filters out already-graded students (unless `--regrade`), runs the phase list, generates grades, and writes `grading_log.txt` — see `run_pipeline.js` below
@@ -776,7 +804,8 @@ Wraps Ollama, OpenRouter, and Anthropic behind a single `chat(systemPrompt, user
 
 ### `lib/tui.js` — Terminal UI
 
-Provides the full-screen interface for `configure_lab.js` using `neo-blessed`.
+Provides the full-screen interface using `neo-blessed`, shared by `configure_lab.js`'s
+wizard and, via `prompt_driver.js`, `bin/grade.js`'s interactive menu.
 
 - Scrollable log pane (redirects `console.log`/`console.error` while active)
 - `ask(prompt, def)` — text input bar with default; returns trimmed string
@@ -784,6 +813,8 @@ Provides the full-screen interface for `configure_lab.js` using `neo-blessed`.
 - `askOptions(prompt, opts, defIdx)` — centered popup list with arrow-key navigation; shows per-item description in a bottom bar
 - `reviewTable(makeItems, editRow)` — full-screen navigable table for reviewing/editing draft mappings before accepting
 - `showSpinner(msg)` / `clearSpinner()` — floating overlay for async operations
+- `setStatus(text)` / `setTitle(text)` — update the bottom help bar / header strip + OS window title. `bin/grade.js` calls `setTitle` once the course is resolved (via `driver.banner()`), since the course code isn't known until partway through its prompt flow.
+- `new TUI(title)` does all setup in its constructor (no separate init) and opens the alt-screen buffer immediately — `prompt_driver.js`'s TUI backend defers construction until the first prompt call specifically to avoid this for a zero-prompt shortcut run. `destroy()` restores `console.log`/`console.error` before killing the screen; `exit(code)` is `destroy()` + `process.exit(code)`.
 
 ### `ollama_comments.js` — AI Summary Generator
 

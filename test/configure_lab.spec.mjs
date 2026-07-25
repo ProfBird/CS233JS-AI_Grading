@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { mockDriver } from './helpers/mock_driver.mjs';
 
 const {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
@@ -34,51 +35,8 @@ const TERM_RUBRIC = join(import.meta.dirname, '..', 'configs', 'CS233JS', 'TermP
     'DevEnvAndStaticSite', 'CS233JS_TermProjectDevEnv_Rubric.xlsm');
 const LAB04_RUBRIC = join(import.meta.dirname, '..', 'configs', 'CS233JS', 'Lab04', 'CS233JS_Lab04_Rubric.xlsm');
 
-// ── mock driver factory ──────────────────────────────────────────────────
-// Satisfies the driver interface expected by config_prompts.js:
-//   ask(prompt, def?)          → Promise<string>
-//   askBoolean(q, def?)        → Promise<boolean>
-//   askInt(prompt, def?)       → Promise<number>
-//   askOptions(prompt, opts, defIdx?) → Promise<value>
-//   print(line)                → void
-//   exit(code?)                → void
-
-function mockDriver(answers) {
-    const queue = [...answers];
-    const pop = () => queue.shift() ?? null;
-
-    return {
-        print() {},  // no-op
-        exit(code = 0) { throw new Error(`driver.exit(${code}) called`); },
-        ask(_prompt, def = '') {
-            const v = pop();
-            if (v === null) throw new Error('driver.ask: no more answers');
-            return Promise.resolve(v !== '' ? v : def);
-        },
-        askBoolean(_q, def = false) {
-            const v = pop();
-            if (v === null) throw new Error('driver.askBoolean: no more answers');
-            if (v === '') return Promise.resolve(def);
-            return Promise.resolve(/^y(es)?$/i.test(v));
-        },
-        askInt(_prompt, def = 0) {
-            const v = pop();
-            if (v === null) throw new Error('driver.askInt: no more answers');
-            const n = parseInt(v, 10);
-            return Promise.resolve(!isNaN(n) ? n : def);
-        },
-        askOptions(_prompt, opts, defIdx = 0) {
-            const v = pop();
-            if (v === null) throw new Error('driver.askOptions: no more answers');
-            if (v === '') return Promise.resolve(opts[defIdx]?.value ?? opts[0]?.value);
-            const n = parseInt(v, 10);
-            if (!isNaN(n) && n >= 1 && n <= opts.length) return Promise.resolve(opts[n - 1].value);
-            // direct value match
-            const match = opts.find(o => o.value === v);
-            return Promise.resolve(match ? match.value : (opts[defIdx]?.value ?? opts[0]?.value));
-        },
-    };
-}
+// mockDriver (satisfying config_prompts.js's ask/askBoolean/askInt/askOptions/print/exit
+// interface) now lives in test/helpers/mock_driver.mjs, shared with grade_setup.spec.mjs.
 
 // ── colLetter ───────────────────────────────────────────────────────────
 

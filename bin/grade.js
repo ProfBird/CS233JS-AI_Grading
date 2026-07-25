@@ -22,6 +22,7 @@ import extractCode, { CODE_DIR, REPO_DIR } from '../src/pipeline/extract_code.js
 import importFromCanvas from '../src/pipeline/extract_code_canvas.js';
 import { runPipeline } from '../src/pipeline/run_pipeline.js';
 import { resolveGradeSetup, SetupError } from '../src/lib/grade_setup.js';
+import { createDriver } from '../src/lib/prompt_driver.js';
 
 const LOG_FILE = 'grading_log.txt';
 
@@ -105,13 +106,22 @@ async function main() {
         process.exit(0);
     }
 
+    const driver = await createDriver({ title: 'AI Grader v1.0' });
+    let setup;
+    try {
+        setup = await resolveGradeSetup(driver, { argv: args });
+    } finally {
+        driver.close();
+    }
+    driver.takeNotes().forEach(l => process.stdout.write(l + '\n'));
+
     const {
         course, labName, stepName,
         config, labConfigDir, labDir,
         artifactsDir, submissionsDir,
         usingCanvas, courseId, assignmentId, canvasConfig,
         regrade, reclone, skipRubric, textReport, aiComments, aiModelFlag,
-    } = await resolveGradeSetup({ argv: args });
+    } = setup;
 
     const modeLabel = config.extractOnly
         ? (reclone ? 'RECLONE' : (regrade ? 'REEXTRACT' : 'EXTRACT'))

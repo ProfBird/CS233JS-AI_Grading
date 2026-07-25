@@ -30,6 +30,8 @@
  * @param {number} [opts.defaultIndex] - 0-based index into `items` resolved when the
  *        user enters an empty string; omitted (the default) means empty input re-prompts
  *        instead, matching prior behavior
+ * @param {(line: string) => void} [opts.printer] - used to print `invalidMessage`;
+ *        defaults to `console.log` (prior behavior)
  * @returns {Promise<any>} the resolved value
  */
 async function selectFromList(ask, {
@@ -40,6 +42,7 @@ async function selectFromList(ask, {
     extraOption = null,
     invalidMessage = '  Invalid selection, try again.',
     defaultIndex = null,
+    printer = console.log,
 }) {
     let selected = null;
     while (!selected) {
@@ -68,7 +71,7 @@ async function selectFromList(ask, {
         if (found) {
             selected = getValue(found);
         } else {
-            console.log(invalidMessage);
+            printer(invalidMessage);
         }
     }
     return selected;

@@ -275,9 +275,33 @@ describe('resolveGradeSetup — term creation', () => {
         writeLab('CS233JS', 'Lab03');
         writeLocalConfig({}); // no terms yet -> createTerm() runs once, non-looping
 
-        const driver = mockDriver(['Spring 2026', '2026Spring', ''], { strict: true }); // blank lab root
+        // The lab-root folder browser opens; choosing [Cancel] gives no path.
+        const driver = mockDriver(['Spring 2026', '2026Spring', '[Cancel]'], { strict: true });
         await expect(resolveGradeSetup(driver, opts({ argv: ['Lab03'] })))
             .rejects.toThrow(/A lab root path is required/);
+    });
+});
+
+describe('resolveGradeSetup — choosing paths with the folder browser', () => {
+    it('copies a rubric chosen from outside the lab config folder into it', async () => {
+        writeCourseConfig('CS233JS');
+        const labDir = writeLab('CS233JS', 'Lab03', { ...VALID_CONFIG, textReport: undefined, rubricName: 'Missing.xlsm' });
+        writeLocalConfig(oneTermConfig());
+        mkdirSync(join(labRootDir, 'CS233JS', 'Lab03'), { recursive: true });
+        markMoodleSubmissions(join(labRootDir, 'CS233JS', 'Lab03'));
+        const downloads = join(scratchRoot, 'Downloads');
+        mkdirSync(downloads);
+        writeFileSync(join(downloads, 'CS233JS_Lab03_Rubric.xlsm'), 'fake rubric bytes');
+
+        const driver = mockDriver([
+            'y',                                                  // provide a rubric?
+            '[Type a path...]', downloads, 'CS233JS_Lab03_Rubric.xlsm',   // browse: open Downloads, pick the file
+            '1',                                                  // mode
+        ], { strict: true });
+        const setup = await resolveGradeSetup(driver, opts({ argv: ['Lab03'] }));
+        expect(setup.config.rubricName).toBe('CS233JS_Lab03_Rubric.xlsm');
+        expect(readFileSync(join(labDir, 'CS233JS_Lab03_Rubric.xlsm'), 'utf8')).toBe('fake rubric bytes');
+        expect(JSON.parse(readFileSync(join(labDir, 'lab03_config.json'), 'utf8')).rubricName).toBe('CS233JS_Lab03_Rubric.xlsm');
     });
 });
 
@@ -429,7 +453,8 @@ describe('resolveGradeSetup — driver notes survive teardown', () => {
         markMoodleSubmissions(join(labRootDir, 'CS233JS', 'Lab03'));
 
         const driver = mockDriver([
-            'Spring 2026', '2026Spring', labRootDir, codeRootDir, // createTerm prompts
+            // createTerm: label, id, then each root through the folder browser's "Type a path"
+            'Spring 2026', '2026Spring', '[Type a path...]', labRootDir, '[Type a path...]', codeRootDir,
             '1', // mode menu
         ], { strict: true });
 

@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { getExistingSteps, getExistingCourses, readCourseConfig, writeCourseConfig, applyCourseDefaults } from './lab_config.js';
+import { askPath } from './path_browser.js';
 import { validateConfig, loadHandlerModules } from './config_validation.js';
 import { resolveLegacyLabDir } from './resolve_lab_dir.js';
 import * as canvasClient from './canvas_client.js';
@@ -246,14 +247,22 @@ export async function resolveGradeSetup(driver, {
         if (!id) { driver.print('  A term id is required.'); return null; }
         if (terms[id]) { driver.print(`  A term with id "${id}" already exists.`); return null; }
 
-        driver.print('Lab root - path to the folder containing the students submissions');
-        driver.print('  (e.g. /Volumes/GoogleDrive/StudentLabWork)');
-        const labRootInput = await driver.ask('Lab root path', '');
+        // New terms usually sit next to the previous term's folders — start browsing there.
+        const lastTerm = listTerms().slice(-1)[0];
+        driver.print('Lab root - the folder containing the students submissions');
+        driver.print('  (e.g. /Volumes/GoogleDrive/StudentLabWork). Browse to it, or choose "Type a path".');
+        const labRootInput = await askPath(driver, {
+            prompt: 'Lab root folder', kind: 'dir',
+            start: lastTerm ? path.dirname(lastTerm.labRoot) : undefined,
+        });
         if (!labRootInput.trim()) { throw new SetupError('ERROR: A lab root path is required.'); }
-        driver.print('Code storage root — path to a LOCAL folder (outside Google Drive) where student');
+        driver.print('Code storage root — a LOCAL folder (outside Google Drive) where student');
         driver.print('  code will be cloned or unzipped. A subfolder per lab is created automatically');
         driver.print('  (e.g. /Users/brian/GradingCode)');
-        const codeRootInput = await driver.ask('Code storage root path', '');
+        const codeRootInput = await askPath(driver, {
+            prompt: 'Code storage root folder', kind: 'dir',
+            start: lastTerm ? path.dirname(lastTerm.codeRoot) : undefined,
+        });
         if (!codeRootInput.trim()) { throw new SetupError('ERROR: A code storage root path is required.'); }
 
         terms = { ...terms, [id]: { label, labRoot: labRootInput.trim(), codeRoot: codeRootInput.trim() } };
@@ -647,9 +656,9 @@ export async function resolveGradeSetup(driver, {
             driver.print(`\nERROR: Cannot write to code storage directory:`);
             driver.print(`  ${path.join(codeRoot, labSubPath)}`);
             driver.print(`  ${e.message}`);
-            driver.print('Enter a writable path for storing cloned/extracted student code');
+            driver.print('Choose a writable folder for storing cloned/extracted student code');
             driver.print('  (e.g. /Users/brian/GradingCode)');
-            const newRoot = await driver.ask('Writable code storage path', '');
+            const newRoot = await askPath(driver, { prompt: 'Writable code storage folder', kind: 'dir', start: path.dirname(codeRoot) });
             if (!newRoot.trim()) {
                 throw new SetupError('ERROR: A code storage root path is required.');
             }
@@ -686,15 +695,31 @@ export async function resolveGradeSetup(driver, {
                 textReport = true;
                 break;
             }
-            driver.print(`  e.g. ${course.rubricPrefix}_${labName}_Rubric.xlsm`);
-            const newName = await driver.ask('Rubric filename', '');
-            if (!newName.trim()) {
-                driver.note('  No filename entered — will generate .txt grade reports.');
+            driver.print(`  e.g. ${course.rubricPrefix}_${labName}_Rubric.xlsm — browse to the spreadsheet, or type its name`);
+            const chosen = await askPath(driver, {
+                prompt: 'Rubric spreadsheet', kind: 'file', extensions: ['.xlsx', '.xlsm'],
+                start: labConfigDir, baseDir: labConfigDir,
+            });
+            if (!chosen.trim()) {
+                driver.note('  No rubric chosen — will generate .txt grade reports.');
                 skipRubric = true;
                 textReport = true;
                 break;
             }
-            config.rubricName = newName.trim();
+            // The rubric lives in the lab's config folder (rubricName is a bare filename) —
+            // copy one chosen from anywhere else into it.
+            let rubricFile = chosen;
+            if (path.dirname(path.resolve(chosen)) !== path.resolve(labConfigDir)) {
+                const dest = path.join(labConfigDir, path.basename(chosen));
+                const replace = !fs.existsSync(dest)
+                    || await driver.askBoolean(`Replace ${path.basename(dest)} in the lab's config folder with the chosen file?`, false);
+                if (replace) {
+                    fs.copyFileSync(chosen, dest);
+                    driver.note(`  Copied rubric to ${dest}`);
+                }
+                rubricFile = dest;
+            }
+            config.rubricName = path.basename(rubricFile);
             // Persist to config file on disk
             const cfgOnDisk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
             cfgOnDisk.rubricName = config.rubricName;

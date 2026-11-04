@@ -8,7 +8,7 @@
  * can tell which source was actually used.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import AdmZip from 'adm-zip';
@@ -89,6 +89,48 @@ describe('extractStudentCode — repo/zip precedence', () => {
         expect(execFileSync).not.toHaveBeenCalled();
         expect(student.extractedDir).toMatch(/extracted_code$/);
         expect(existsSync(join(student.extractedDir, 'FROM_ZIP.txt'))).toBe(true);
+    });
+});
+
+describe('extractStudentCode — loose uploaded files (no zip, no repo)', () => {
+    let root;
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), 'extract-loose-'));
+        vi.mocked(execFileSync).mockReset();
+    });
+    afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+    // A Moodle-style file-submission dir holding the given loose files, plus an empty onlinetext.
+    function looseStudent(name, files) {
+        const textDir = join(root, `${name}_text`);
+        mkdirSync(textDir, { recursive: true });
+        writeFileSync(join(textDir, 'onlinetext.html'), '<p>no link</p>');
+        const filesDir = join(root, `${name}_files`);
+        mkdirSync(filesDir, { recursive: true });
+        for (const f of files) writeFileSync(join(filesDir, f), `contents of ${f}`);
+        return { name, textDir, filesDir, zipFile: null };
+    }
+
+    it('copies loose source files into extracted_code, skipping Word docs and hidden files', async () => {
+        const student = looseStudent('Loose', ['shipping.py', 'recommender.py', 'rules.csv', 'CS212 Code Review.docx', '.DS_Store']);
+        const out = join(root, 'out');
+        mkdirSync(out);
+        await extractStudentCode(student, root, out);
+
+        expect(student.error).toBeUndefined();
+        expect(student.extractedDir).toMatch(/extracted_code$/);
+        expect(readdirSync(student.extractedDir).sort()).toEqual(['recommender.py', 'rules.csv', 'shipping.py']);
+        expect(execFileSync).not.toHaveBeenCalled();
+    });
+
+    it('still errors when the only upload is a Word document', async () => {
+        const student = looseStudent('DocOnly', ['Code Review.docx']);
+        const out = join(root, 'out');
+        mkdirSync(out);
+        await extractStudentCode(student, root, out);
+
+        expect(student.extractedDir).toBeUndefined();
+        expect(student.error).toMatch(/no zip file, github url, or uploaded source files/i);
     });
 });
 

@@ -108,7 +108,7 @@ async function importOneSubmission(submission, submissionsDir, urlPatterns) {
 
     // Skip acquireCode when a definitive outcome (already-extracted fast path, or a hard error
     // like "no attachments") was already determined above — acquireCode would otherwise
-    // overwrite student.error with its own generic "No ZIP file or GitHub URL found".
+    // overwrite student.error with its own generic "no code source found" error.
     if (!student.extractedDir && !student.error) {
         const codeDir = path.join(studentDir, urls.github ? REPO_DIR : CODE_DIR);
         acquireCode(student, codeDir, urls);

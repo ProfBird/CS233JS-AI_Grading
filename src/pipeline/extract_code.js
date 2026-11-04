@@ -168,6 +168,28 @@ function extractZip(student, codeDir) {
     }
 }
 
+// Files never treated as submitted source when copying loose uploads: archives (handled by
+// extractZip) and Word documents (the code review form, which read_code_review.js reads from
+// filesDir directly — copying it would also trip name_check on its usually space-laden name).
+const LOOSE_FILE_SKIP_RE = /\.(zip|docx?)$/i;
+
+// Copies a submission's loose uploaded files (e.g. bare .py/.csv files uploaded straight to
+// Canvas or Moodle without zipping) from student.filesDir into codeDir. Top-level regular files
+// only; hidden files, archives and Word documents are skipped. Returns the number copied, and
+// sets student.extractedDir when at least one file was copied.
+function copyLooseFiles(student, codeDir) {
+    const filesDir = student.filesDir;
+    if (!filesDir || !fs.existsSync(filesDir)) return 0;
+    let copied = 0;
+    for (const entry of fs.readdirSync(filesDir, { withFileTypes: true })) {
+        if (!entry.isFile() || entry.name.startsWith('.') || LOOSE_FILE_SKIP_RE.test(entry.name)) continue;
+        fs.copyFileSync(path.join(filesDir, entry.name), path.join(codeDir, entry.name));
+        copied++;
+    }
+    if (copied > 0) student.extractedDir = codeDir;
+    return copied;
+}
+
 // Given an already-resolved codeDir and urls map, does the actual clone/unzip into codeDir,
 // setting student.extractedDir/student.error. Idempotent — skips if codeDir already has real
 // content. Shared by extractStudentCode() (Moodle path resolution below) and any other
@@ -226,8 +248,15 @@ function acquireCode(student, codeDir, urls) {
         console.log(`  Extracting zip for ${student.name}...`);
         if (!extractZip(student, codeDir)) student.error = 'Failed to unzip ZIP file';
     } else {
-        console.log(`  No code source found for ${student.name}`);
-        student.error = 'No ZIP file or GitHub URL found';
+        // No zip and no repo: fall back to loose uploaded files (some courses, e.g. CS212,
+        // have students upload bare .py/.csv files rather than a zip).
+        const copied = copyLooseFiles(student, codeDir);
+        if (copied > 0) {
+            console.log(`  Using ${copied} loose uploaded file(s) for ${student.name}`);
+        } else {
+            console.log(`  No code source found for ${student.name}`);
+            student.error = 'No ZIP file, GitHub URL, or uploaded source files found';
+        }
     }
 }
 

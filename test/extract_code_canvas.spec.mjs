@@ -9,7 +9,7 @@
  * (zip extraction, GitHub clone, idempotent skip) work identically through this source.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import AdmZip from 'adm-zip';
@@ -86,6 +86,26 @@ describe('importOneSubmission', () => {
         // makeStudent() always sets extractedDir (to null when unavailable) rather than
         // omitting the key — matches the Moodle acquisition source's shape.
         expect(student.extractedDir).toBeNull();
+    });
+
+    it('uses loose (unzipped) attachments as the code, leaving the review .docx in canvas_files', async () => {
+        const submission = onlineUploadSubmission({
+            attachments: [
+                { filename: 'shipping_calculator.py', url: 'https://canvas.example/files/2/download' },
+                { filename: 'recommender.py', url: 'https://canvas.example/files/3/download' },
+                { display_name: 'CS212 Code Review.docx', url: 'https://canvas.example/files/4/download' },
+            ],
+        });
+        const student = await importOneSubmission(submission, join(root, 'out'), {});
+
+        expect(student.error).toBeUndefined();
+        expect(student.extractedDir).toMatch(/extracted_code$/);
+        expect(readdirSync(student.extractedDir).sort()).toEqual(['recommender.py', 'shipping_calculator.py']);
+        expect(existsSync(join(student.filesDir, 'CS212_Code_Review.docx'))).toBe(true);
+
+        // Idempotent like the zip path: a second import doesn't re-download.
+        await importOneSubmission(submission, join(root, 'out'), {});
+        expect(canvasClient.downloadFile).toHaveBeenCalledTimes(3);
     });
 
     it('clones a GitHub link found in an online_text_entry body', async () => {

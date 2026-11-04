@@ -18,7 +18,7 @@ node bin/grade.js TermProject ApiDoc      # grade one step of a multi-step lab
 node bin/grade.js Lab03 --canvas          # import submissions from Canvas instead of a Moodle folder
 node bin/grade.js CS233JS Lab03           # explicit course — only needed once 2+ courses exist under configs/
 
-node bin/rubric-to-md.js path/to/Rubric.xlsm  # dump Grade sheet as Markdown (or: cs233-rubric-to-md)
+node bin/rubric-to-md.js path/to/Rubric.xlsm [-o out.md]  # dump Grade sheet as Markdown (or: cs233-rubric-to-md); header row found by detectRubricLayout (Possible/Points/Pts/Max)
 node bin/configure-lab.js [AssignmentName]    # lab config wizard + copy rubric (or: cs233-configure-lab)
 ```
 
@@ -127,7 +127,7 @@ adapter's `preflight` check upfront, filters out already-graded students (unless
 3. **src/pipeline/runtime_check.js** — Dispatches to a named check **strategy** registered via `registerCheckStrategy(name, fn, opts)` (mirrors the mapping-handler registry). Built-in strategies: `"browser"` — Puppeteer captures console errors and failed loads (generic, not language-specific). `"build"` — delegates to the resolved adapter's `install`/`build`. `"both"` — build first, then browser-checks the built `dist/`; stores `buildSuccess`/`browserSuccess` sub-results separately. `"run_check"` — installs dependencies (adapter `install`, e.g. a cached uv environment), builds (if needed), then executes the produced artifact via the sandbox chokepoint above, matching stdout against `config.runCheck.expectPatterns`; with `runCheck` as a list, does this once per run and adds `runs[id]`. Each student is checked with their group's settings (`configForStudent`); when a group overrides run settings and the student's group is unknown, the student isn't run (`groupUnknown: true`). `VALID_RUNTIME_MODES` (exported, used by `bin/grade.js`'s config validation) is populated automatically as strategies register — a new strategy doesn't require editing the validator. Also runs a `scripts_check` sub-phase (adapter-delegated; verifies named scripts are defined/pass) when `scripts_check` mappings are present, and a `test_check` sub-phase (adapter's `runTests`) when `test_check` mappings are present. Attaches to `student.runtimeCheck`, `student.scriptsCheck`, `student.testCheck`.
 4. **src/pipeline/analyze_code.js** — Regex-based feature detection per-lab config, driven by the resolved adapter's `sourceExtensions`/`stripComments`/`checkManifest`/`extractUsedPackages` (default JS). For multi-part labs, matches subdirs to game names from config. Checks repo hygiene *before* runtime modifications. Attaches to `student.analysis`. A configured `customAnalyzer` is invoked via `applyCustomAnalyzer()`, whose return object is merged into `analysis` (a throwing analyzer is logged and skipped). A custom analyzer can attach `analysis.reportSections` (see below) to add lab-specific output to text reports without touching generic code.
 5. **src/pipeline/lint_code.js** — Delegates to the resolved adapter's `lint()`/`lintConfigCandidates()`. For JS: runs ESLint (flat config) against each student's source files; ruleset resolution is a per-step or per-lab `configs/{Course}/{Lab}/eslint.config.mjs` override if present, else a course-wide `configs/{Course}/eslint.config.mjs` (Python: `ruff.toml` at each level), else the shipped `eslint/student.eslint.config.mjs`; the resolved config is also copied into the lab folder for editor consistency. `lintConfigCandidates(configsDir, labName, stepName, courseName)` takes `courseName` as an optional 4th arg — `configsDir` itself stays the repo-root-level `configs/` dir (so the shipped-default fallback, derived via `configsDir/..`, stays course-agnostic) while `courseName` only affects where the override candidates are looked for. Attaches to `student.lint` with `{ sourceFiles, errors, warnings, errorMessages, warningMessages, messages, ruleCounts }`.
-5b. **src/pipeline/validate_html.js** — Validates `.html`/`.htm` files with `html-validate` (pure JS, offline). Attaches `student.htmlValidation` with `{ htmlFiles, errors, warnings, messages, ruleCounts }`. Respects `config.validate.exclude`. Ruleset overrideable via `config.validate.htmlExtends` / `config.validate.htmlRules`; `no-trailing-whitespace` is off by default.
+5b. **src/pipeline/validate_html.js** — Validates `.html`/`.htm` files with `html-validate` (pure JS, offline). Like 5c and 5e, loaded by `run_pipeline.js` with `import()` only when the phase runs; 5b/5c run for web-language labs (javascript/typescript) or labs with an `html_validate`/`css_validate` mapping, so a Python/C++/C# lab never loads the web libraries. Attaches `student.htmlValidation` with `{ htmlFiles, errors, warnings, messages, ruleCounts }`. Respects `config.validate.exclude`. Ruleset overrideable via `config.validate.htmlExtends` / `config.validate.htmlRules`; `no-trailing-whitespace` is off by default.
 5c. **src/pipeline/validate_css.js** — Validates `.css` files with `csstree-validator` (pure JS, offline). Attaches `student.cssValidation` with `{ cssFiles, errors, warnings, messages, ruleCounts }`. Reports validity errors only (no warning tier). Respects `config.validate.exclude`.
 5d. **src/pipeline/check_names.js** — Checks every file and folder name in the submission for Linux/web portability. A name is invalid if it contains any character outside `[A-Za-z0-9._-]` (spaces, parens, accented chars, etc.). Attaches `student.nameCheck` with `{ entriesChecked, errors, messages, badNames }`. Extra allowed characters configurable via `config.nameCheck.extraAllowed`.
 5e. **src/pipeline/check_web_content.js** — Runs only when `config.webContent` is present (the first phase to use a real `when` gate in `run_pipeline.js`'s `PHASES`). Checks required HTML elements via jsdom CSS-selector queries summed across all `.html`/`.htm` files, required CSS selectors/properties via css-tree scans of external `.css` files + embedded `<style>` + inline `style=""` attributes (a required property may be a bare name or a normalized `prop: value` pair), and minimum file counts by filename regex. Attaches `student.webContent`; scored by the `element_check` / `css_selector_check` / `css_property_check` / `file_count` mapping types. Built for CIS195's HTML/CSS labs (ported from the old GradingAssistant app) but fully generic.
@@ -164,11 +164,11 @@ a not-yet-migrated install) contains at least one assignment with a config —
 directory name):
 ```json
 {
-  "courseName": "CS233JS",
-  "courseCode": "CS233JS",
-  "rubricPrefix": "CS233JS",
-  "canvasCourseId": 680,
-  "defaults": { "language": "python" }
+  "courseName": "CS212",
+  "courseCode": "CS212",
+  "rubricPrefix": "CS212",
+  "canvasCourseId": 12345,
+  "defaults": { "language": "python", "execution": { "cwd": "copy" } }
 }
 ```
 - `courseName` — display name shown in menus/banners.

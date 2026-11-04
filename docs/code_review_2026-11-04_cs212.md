@@ -233,7 +233,9 @@ Short term: add `colab: "colab.research.google.com"` to `urlPatterns` and use `u
 `path_exists` (`\.ipynb$`). Treat real notebook analysis, extracting code cells to a temp `.py`,
 as a separate feature if Lab05 is worth automating.
 
-### 3.5 Web-only dependencies are loaded for every course — LOW
+### 3.5 Web-only dependencies are loaded for every course — LOW — ✅ FIXED 2026-11-04
+
+> **Fixed:** `run_pipeline.js` imports the HTML-validation, CSS-validation and web-content phases only when they run. HTML/CSS validation now runs for web-language labs (JavaScript/TypeScript) or labs with an `html_validate`/`css_validate` row. A Python lab never loads html-validate, csstree-validator or jsdom, and a test enforces that by failing if any of them is loaded.
 
 `run_pipeline.js:31` statically imports `check_web_content.js`, which imports `jsdom`. On this Mac
 `jsdom` is declared in `package.json` but **not installed** in `node_modules`, so 3 test files fail
@@ -242,7 +244,9 @@ immediate problem, probably a two-machine sync leftover. Structurally, phases ga
 `when` should `await import()` their module lazily so a Python-only course never loads
 jsdom, Puppeteer or html-validate.
 
-### 3.6 `rubric-to-md.js` drops CS 212 rubrics — LOW (verified)
+### 3.6 `rubric-to-md.js` drops CS 212 rubrics — LOW (verified) — ✅ FIXED 2026-11-04
+
+> **Fixed:** rendering moved to `src/lib/rubric_markdown.js`, built on `detectRubricLayout`. The bug also hit CS233JS: Lab01, Lab02 and the TermProject Final rubric say "Points" and came out as just a title, and sub-rows labeled in column B (Lab06, TermProject) and comments one column right of the header were dropped. The `-o`/`--output` flag is now handled, and any other `-…` argument is an error instead of a file name. The committed `CS233JS_Lab05_Rubric.md` and `CS233JS_Lab06_Rubric.md` weren't regenerated; Lab06's differs from its spreadsheet, so it may be hand-edited.
 
 `bin/rubric-to-md.js:44` looks for a header cell that is exactly `Possible`. CS 212 rubrics say
 `Points`, so the tool writes only the title line. `lab_config.js` already has
@@ -272,12 +276,15 @@ blockers, not before.
 
 ## 5. Housekeeping noticed along the way
 
+- ✅ **Done 2026-11-04:** the leftover folders below were deleted. They held only empty directories and `.DS_Store` files. The `Lab06/Volumes/…/26Sp/Lab06/ArtifactsAndRubrics` nesting was created on June 2 by pre-June-8 code, back when artifacts lived in `ArtifactsAndRubrics`. Today's rubric copy uses `path.basename()` before joining under `configs/`, so it can't recur.
 - `configs/Lab05`, `configs/Lab06/Volumes/DataCard/Repos/CS233JS-Repos/…` (empty dirs),
   `configs/Lab08` and `configs/TermProject` are pre-course-tier leftovers. `getExistingCourses()`
   correctly ignores them, but delete them. The `Lab06/Volumes/...` nesting suggests an absolute path was
   once joined as a relative one somewhere; it's worth a grep if it reappears.
-- `configs/CIS195/course_config.json` has `canvasCourseId: 680`, the same number the CLAUDE.md
-  example uses for CS233JS. It may be a copy-paste error; check it against Canvas.
+- ✅ **Checked 2026-11-04:** `configs/CIS195/course_config.json` has `canvasCourseId: 680`, the same number the CLAUDE.md
+  example used for CS233JS. It's correct: CIS195 Lab03 has Canvas assignment 22147 saved by the same `--canvas`
+  setup, which shows the course name for confirmation and lists only that course's assignments. The CLAUDE.md and
+  DEVELOPER_GUIDE examples now use a placeholder ID instead.
 - CS 212 `CS212_Lab01_Rubric.xlsm`: the *Rubric* sheet's title still reads "Lab 5: HTML5
   Canvas--Meme Creator", and the *Grade* sheet has a stale "New feature options" block (meme text,
   font, color) below the canned comments. `CS212_Lab06` has both an `.xlsm` and an `.xlsx` rubric.
@@ -293,7 +300,7 @@ blockers, not before.
 5. ✅ Python uv workflow: `pyproject.toml`, `uv sync` in a copied directory, `runCheck.entry`,
    `supportFiles`, script-mode tests (1.5, section 2).
 6. ✅ Per-variation overrides and multi-entry `runCheck` (3.2, 3.3).
-7. Lazy phase imports, `rubric-to-md` header reuse, housekeeping (3.5, 3.6, 5).
+7. ✅ Lazy phase imports, `rubric-to-md` header reuse, housekeeping (3.5, 3.6, 5).
 8. Optional: `llm_check` mapping type; notebook extraction.
 
 Steps 1–3 are independent bug fixes that also make CS233JS and CIS195 more robust. Steps 4–6 are

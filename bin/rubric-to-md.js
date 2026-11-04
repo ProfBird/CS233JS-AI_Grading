@@ -1,98 +1,55 @@
 #!/usr/bin/env node
-// Usage: node rubric_to_md.js <path/to/Rubric.xlsm> [output.md]
-// Writes a .md version of the Grade sheet table alongside the spreadsheet if no output path given.
+// Usage: node bin/rubric-to-md.js <path/to/Rubric.xlsm> [output.md | -o output.md]
+// Writes a Markdown version of the rubric's Grade sheet. Without an output path, the .md is
+// written next to the spreadsheet (same name, .md extension).
 
 import XLSX from '../src/lib/xlsx.js';
 import fs from 'fs';
 import path from 'path';
+import { renderGradeSheet } from '../src/lib/rubric_markdown.js';
 
-const inputPath = process.argv[2];
-if (!inputPath) {
-  console.error('Usage: node rubric_to_md.js <path/to/Rubric.xlsm> [output.md]');
-  process.exit(1);
+const USAGE = 'Usage: node bin/rubric-to-md.js <path/to/Rubric.xlsm> [output.md | -o output.md]';
+
+// Positional input, then an output path given either positionally or after -o/--output.
+// Any other "-…" argument is an error — never treated as a file name to write.
+function parseArgs(argv) {
+    const positional = [];
+    let output = null;
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '-h' || a === '--help') return { help: true };
+        if (a === '-o' || a === '--output') {
+            output = argv[++i];
+            if (!output) return { error: `${a} needs an output file path` };
+        } else if (a.startsWith('-')) {
+            return { error: `Unknown option: ${a}` };
+        } else {
+            positional.push(a);
+        }
+    }
+    if (positional.length === 0) return { error: 'No rubric spreadsheet given' };
+    if (positional.length > 2 || (positional.length === 2 && output)) return { error: 'Too many arguments' };
+    return { input: positional[0], output: output || positional[1] || null };
 }
 
-const absInput = path.resolve(inputPath);
-const outputPath = process.argv[3]
-  ? path.resolve(process.argv[3])
-  : absInput.replace(/\.[^.]+$/, '.md');
+const args = parseArgs(process.argv.slice(2));
+if (args.help) { console.log(USAGE); process.exit(0); }
+if (args.error) { console.error(`${args.error}\n${USAGE}`); process.exit(1); }
+
+const absInput = path.resolve(args.input);
+const outputPath = args.output ? path.resolve(args.output) : absInput.replace(/\.[^.]+$/, '.md');
 
 const wb = XLSX.readFile(absInput);
-
-function sheetRows(ws) {
-  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-}
-
-function isBlank(row) {
-  return row.every(c => c === '' || c === null || c === undefined);
-}
-
-function cell(row, i) {
-  return (row[i] ?? '').toString().trim();
-}
-
-function renderGrade(ws) {
-  const rows = sheetRows(ws);
-  const lines = [];
-
-  const title = cell(rows[0], 0);
-  if (title) lines.push(`# ${title}`, '');
-
-  // Find the header row (contains "Possible")
-  let headerRow = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].some(c => /^possible$/i.test((c ?? '').toString().trim()))) {
-      headerRow = i;
-      break;
-    }
-  }
-
-  // Find where the canned comments section starts so we can stop before it
-  let tableEnd = rows.length;
-  for (let i = 0; i < rows.length; i++) {
-    if (/^comments$/i.test(cell(rows[i], 0))) {
-      tableEnd = i;
-      break;
-    }
-  }
-
-  if (headerRow < 0) return lines.join('\n');
-
-  lines.push('| Requirement | Possible | Actual | Comments |');
-  lines.push('|---|---:|---:|---|');
-
-  for (let i = headerRow + 1; i < tableEnd; i++) {
-    const row = rows[i];
-    if (isBlank(row)) continue;
-
-    const label = cell(row, 0);
-    if (!label) continue;
-
-    const possible = cell(row, 1);
-    const actual = cell(row, 2);
-    const comment = cell(row, 4);
-
-    const lower = label.toLowerCase();
-    const isTotalLine = lower.startsWith('total') || lower.startsWith('sub-total');
-    const isSectionHeader = possible === '' && actual === '' && comment === '';
-
-    if (isSectionHeader) {
-      lines.push(`| **${label}** | | | |`);
-    } else if (isTotalLine) {
-      lines.push(`| **${label.replace(/:$/, '')}** | **${possible}** | **${actual}** | |`);
-    } else {
-      lines.push(`| ${label} | ${possible} | ${actual} | ${comment} |`);
-    }
-  }
-
-  return lines.join('\n');
-}
-
 const ws = wb.Sheets['Grade'];
 if (!ws) {
-  console.error('No "Grade" sheet found in', absInput);
-  process.exit(1);
+    console.error('No "Grade" sheet found in', absInput);
+    process.exit(1);
 }
 
-fs.writeFileSync(outputPath, renderGrade(ws) + '\n');
+const { markdown, foundTable } = renderGradeSheet(XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }));
+if (!foundTable) {
+    console.error(`No header row (Possible / Points / Pts / Max) found in the Grade sheet of ${absInput}`);
+    process.exit(1);
+}
+fs.writeFileSync(outputPath, markdown + '\n');
 console.log(`Written: ${outputPath}`);

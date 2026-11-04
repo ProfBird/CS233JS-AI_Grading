@@ -459,6 +459,16 @@ Grading modes:
 2. **Regrade** — re-run all grading phases but keep existing cloned/extracted code; automatically runs `git pull` on each student's repo to pick up any updates
 3. **Reclone** — delete all extracted code, re-clone/unzip from scratch, then re-grade
 
+### Viewing a rubric as Markdown
+
+```bash
+node bin/rubric-to-md.js configs/CS233JS/Lab03/CS233JS_Lab03_Rubric.xlsm           # writes CS233JS_Lab03_Rubric.md next to it
+node bin/rubric-to-md.js configs/CS233JS/Lab03/CS233JS_Lab03_Rubric.xlsm -o rubric.md
+```
+
+Writes the rubric's Grade sheet as a Markdown table — handy for checking a rubric's rows
+while writing a lab config. Works with rubrics headed "Possible" or "Points".
+
 ### Tests
 
 ```bash
@@ -509,8 +519,8 @@ language's tooling the lab is configured for (JavaScript by default) — see
 3. **Runtime Check** — depending on the lab config: builds (`npm run build` / `tsc` / a Python syntax check / compiling / `dotnet build`), opens the app in headless Chrome, does both, or (`run_check`) installs the program's dependencies (for a Python uv project, a cached environment built with `uv sync`), builds it if needed, then actually runs it and checks its output — in an empty temporary folder, or with `execution.cwd: "copy"` in a temporary copy of the student's project folder plus any `runCheck.supportFiles`. Also verifies that specified npm scripts (dev/build/preview) run without errors when the config includes a `scripts_check` mapping, and runs the lab's tests (pytest, dotnet test, or the student's own PASS/FAIL test script) when it includes a `test_check` mapping.
 4. **Analysis** — scans the lab's source files for required features using regex patterns
 5. **Linting** — runs the language's linter/analyzer (ESLint for JS/TS, `ruff` for Python, compiler warnings for C++/C#) to flag code quality issues
-6. **HTML Validation** — checks `.html`/`.htm` files for validity using `html-validate` (offline)
-7. **CSS Validation** — checks `.css` files for syntax errors using `csstree-validator` (offline)
+6. **HTML Validation** — checks `.html`/`.htm` files for validity using `html-validate` (offline). Skipped for Python/C++/C# labs unless the rubric has an `html_validate` row.
+7. **CSS Validation** — checks `.css` files for syntax errors using `csstree-validator` (offline). Skipped for Python/C++/C# labs unless the rubric has a `css_validate` row.
 8. **File/Folder Name Check** — flags names with spaces or special characters that would break Linux deploys
 9. **Grade Generation** — fills in the rubric spreadsheet with scores and comments
 

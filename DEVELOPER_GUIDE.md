@@ -741,7 +741,7 @@ sequence diagram.
 | Export | Purpose |
 |---|---|
 | `runPipeline(students, config, dirs, options)` | Runs `preflight` → `filterAlreadyGraded` → each phase in `PHASES` (skipping any whose `when(config)` is false) → `generateGrades` → the log summary. Returns `{ successful, errors }`. |
-| `PHASES` | `[{ name, run(students, config, dirs), when(config) }]` — currently: `readCodeReview`, `resolveGroups`, `runtimeCheck`, `analyzeCode`, `lintCode`, `validateHtml`, `validateCss`, `checkNames`, `checkWebContent`. All run unconditionally except `checkWebContent`, whose `when` is `config => !!config.webContent`. |
+| `PHASES` | `[{ name, run(students, config, dirs), when(config) }]` — currently: `readCodeReview`, `resolveGroups`, `runtimeCheck`, `analyzeCode`, `lintCode`, `validateHtml`, `validateCss`, `checkNames`, `checkWebContent`. `validateHtml` / `validateCss` run for web-language labs (`language` javascript — the default — or typescript) or any lab with an `html_validate` / `css_validate` mapping; `checkWebContent` only when `config.webContent` is set; the rest always. Those three phases are `import()`ed when they run, so a non-web lab never loads html-validate, csstree-validator or jsdom (enforced by `test/web_phase_loading.spec.mjs`). |
 | `filterAlreadyGraded(students, config, options)` | Pure function — filters out students whose grade output file already exists, unless `options.regrade`. |
 | `runPreflight(config)` | Calls the resolved adapter's `preflight(config)` once, upfront, logging a `console.warn` with the adapter's hint if the toolchain isn't available — informational only, not a hard gate (some mapping types don't need the toolchain at all). |
 
@@ -901,11 +901,11 @@ Thin wrapper around `llm_client.js`'s `LLMClient` (Ollama provider) — generate
 - Retries up to 3 times with exponential backoff (1s, 2s, 4s) to handle cold-start delays (via `LLMClient.chat`)
 - Returns `null` if all retries fail — caller (`generate_grades.js`) falls back to placeholder text and prints its own per-student failure line, so this client is constructed with `quiet: true` to avoid a duplicate log line
 
-### `rubric_to_md.js` — Standalone Utility
+### `rubric-to-md.js` — Standalone Utility
 
-Dumps a rubric spreadsheet's Grade sheet as Markdown. Not part of the grading pipeline.
+Dumps a rubric spreadsheet's Grade sheet as Markdown. Not part of the grading pipeline. A thin CLI over `src/lib/rubric_markdown.js`'s `renderGradeSheet(rows)`, which finds the header row and columns with `lab_config.js`'s `detectRubricLayout` (the detection the grader and the wizard use): "Possible", "Points", "Pts" or "Max" headers, sub-rows labeled in column B under a column-A section, and a per-row comment one column right of the "Comments" header.
 
-Usage: `node bin/rubric_to_md.js path/to/Rubric.xlsm [output.md]`
+Usage: `node bin/rubric-to-md.js path/to/Rubric.xlsm [output.md | -o output.md]` — without an output path, writes the `.md` next to the spreadsheet. Any other `-…` argument is an error (never treated as a file name). Exits non-zero when no header row is found.
 
 ### `configure_lab.js` — Assignment Configuration Wizard
 
@@ -996,10 +996,10 @@ term. Idempotent: a second call against an already-migrated file is a no-op.
 
 ```json
 {
-  "courseName": "CS233JS",
-  "courseCode": "CS233JS",
-  "rubricPrefix": "CS233JS",
-  "canvasCourseId": 680,
+  "courseName": "CS212",
+  "courseCode": "CS212",
+  "rubricPrefix": "CS212",
+  "canvasCourseId": 12345,
   "defaults": { "language": "python", "execution": { "cwd": "copy" } }
 }
 ```

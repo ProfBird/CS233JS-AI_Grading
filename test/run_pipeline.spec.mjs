@@ -25,11 +25,23 @@ describe('PHASES', () => {
         }
     });
 
-    it('every phase except checkWebContent runs unconditionally (when() is always true)', () => {
+    it('every phase except the web-only ones runs unconditionally (when() is always true)', () => {
+        const webOnly = new Set(['validateHtml', 'validateCss', 'checkWebContent']);
         for (const phase of PHASES) {
-            if (phase.name === 'checkWebContent') continue;
+            if (webOnly.has(phase.name)) continue;
             expect(phase.when({})).toBe(true);
             expect(phase.when({ language: 'python' })).toBe(true);
+        }
+    });
+
+    it('HTML/CSS validation runs for web languages, or any lab with an html_validate/css_validate row', () => {
+        for (const name of ['validateHtml', 'validateCss']) {
+            const phase = PHASES.find(p => p.name === name);
+            const row = name === 'validateHtml' ? 'html_validate' : 'css_validate';
+            expect(phase.when({})).toBe(true);                                   // JavaScript is the default
+            expect(phase.when({ language: 'typescript' })).toBe(true);
+            expect(phase.when({ language: 'python' })).toBe(false);
+            expect(phase.when({ language: 'python', mappings: [{ type: row }] })).toBe(true);
         }
     });
 

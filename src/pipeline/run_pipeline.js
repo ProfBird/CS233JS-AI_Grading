@@ -25,10 +25,7 @@ import runtimeCheck from './runtime_check.js';
 import readCodeReview from './read_code_review.js';
 import analyzeCode from './analyze_code.js';
 import lintCode from './lint_code.js';
-import validateHtml from './validate_html.js';
-import validateCss from './validate_css.js';
 import checkNames from './check_names.js';
-import checkWebContent from './check_web_content.js';
 import generateGrades from './generate_grades.js';
 import { resolveAdapter } from '../adapters/index.js';
 import { resolveGroups } from '../lib/student_group.js';
@@ -41,6 +38,13 @@ const LOG_FILE = 'grading_log.txt';
 // Order matters at the top: the code review form (read first) gives each student's lab group,
 // resolveGroups settles it (form, else detected from code), and the runtime check and
 // analysis then use that group's settings (config.variations[group].overrides).
+// HTML/CSS validation runs for web-language labs (JavaScript — the default — and TypeScript)
+// and for any lab that scores an html_validate / css_validate rubric row; other languages
+// (Python, C++, C#) skip it. Only those mapping types read its results.
+const WEB_LANGUAGES = new Set(['javascript', 'typescript']);
+const isWebLab = config => WEB_LANGUAGES.has(config.language || 'javascript');
+const usesMapping = (config, type) => (config.mappings || []).some(m => m.type === type);
+
 const PHASES = [
     {
         name: 'readCodeReview',
@@ -67,15 +71,17 @@ const PHASES = [
         run: (students, config, dirs) => lintCode(students, config, dirs.artifactsDir, dirs.labName, dirs.stepName, dirs.courseName),
         when: () => true,
     },
+    // The web-only phases below are imported on demand, so a lab that doesn't need them (e.g.
+    // a Python course) never loads html-validate, csstree-validator or jsdom.
     {
         name: 'validateHtml',
-        run: (students, config, dirs) => validateHtml(students, config, dirs.artifactsDir),
-        when: () => true,
+        run: async (students, config, dirs) => (await import('./validate_html.js')).default(students, config, dirs.artifactsDir),
+        when: config => isWebLab(config) || usesMapping(config, 'html_validate'),
     },
     {
         name: 'validateCss',
-        run: (students, config, dirs) => validateCss(students, config, dirs.artifactsDir),
-        when: () => true,
+        run: async (students, config, dirs) => (await import('./validate_css.js')).default(students, config, dirs.artifactsDir),
+        when: config => isWebLab(config) || usesMapping(config, 'css_validate'),
     },
     {
         name: 'checkNames',
@@ -84,7 +90,7 @@ const PHASES = [
     },
     {
         name: 'checkWebContent',
-        run: (students, config, dirs) => checkWebContent(students, config, dirs.artifactsDir),
+        run: async (students, config, dirs) => (await import('./check_web_content.js')).default(students, config, dirs.artifactsDir),
         when: (config) => !!config.webContent,
     },
 ];

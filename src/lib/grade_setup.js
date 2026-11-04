@@ -15,7 +15,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { getExistingSteps, getExistingCourses, writeCourseConfig } from './lab_config.js';
+import { getExistingSteps, getExistingCourses, readCourseConfig, writeCourseConfig, applyCourseDefaults } from './lab_config.js';
 import { validateConfig, loadHandlerModules } from './config_validation.js';
 import { resolveLegacyLabDir } from './resolve_lab_dir.js';
 import * as canvasClient from './canvas_client.js';
@@ -323,6 +323,15 @@ export async function resolveGradeSetup(driver, {
         .sort();
 
     if (!labName) {
+        // A course created but not yet given any assignment configs (e.g. via "Add new
+        // course" just now) has nothing to pick — say what to do instead of showing an
+        // empty picker.
+        if (labs.length === 0) {
+            throw new SetupError([
+                `ERROR: Course "${course.courseName}" has no assignments configured yet.`,
+                `  Add one with: node bin/configure-lab.js`,
+            ]);
+        }
         driver.banner(`${course.courseCode} AI Grader v1.0`);
         driver.print('  (Run with --help to see all command-line options)');
 
@@ -363,6 +372,14 @@ export async function resolveGradeSetup(driver, {
         config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     } catch (e) {
         throw new SetupError(`ERROR: Could not parse config file ${configPath}: ${e.message}`);
+    }
+    // Course-wide settings (course_config.json's "defaults") fill in whatever the lab
+    // config doesn't set. In memory only — anything written back to the lab config below
+    // re-reads the file from disk, so course defaults are never copied into a lab's file.
+    try {
+        config = applyCourseDefaults(config, readCourseConfig(course.path));
+    } catch (e) {
+        throw new SetupError(`ERROR: ${e.message} (${path.join(course.path, 'course_config.json')})`);
     }
     // toolchains (compiler/SDK paths not on the default PATH) are machine-specific, so
     // they live in local-config.json; a lab config may override individual entries.

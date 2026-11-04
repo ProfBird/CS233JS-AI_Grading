@@ -299,10 +299,55 @@ function readCourseConfig(coursePath) {
     }
 }
 
+// Keys that only make sense per assignment, so a course's `defaults` block may not set them:
+// mappings (rubric cells), rubricName, canvas (assignmentId), handlerModules (paths resolve
+// relative to the lab's own config dir).
+const COURSE_DEFAULTS_FORBIDDEN_KEYS = ['mappings', 'rubricName', 'canvas', 'handlerModules'];
+
+const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// Recursive merge where `over` wins: plain objects merge key by key; arrays and scalars
+// from `over` replace the base value outright (an array in a lab config is a complete list,
+// e.g. lint.exclude, not an addition to the course's list). Returns a new object.
+function mergeConfig(base, over) {
+    const out = { ...base };
+    for (const [k, v] of Object.entries(over)) {
+        out[k] = isPlainObject(v) && isPlainObject(base[k]) ? mergeConfig(base[k], v) : v;
+    }
+    return out;
+}
+
+/**
+ * Applies a course's shared settings (course_config.json's `defaults` block) underneath a lab
+ * or step config: every setting the lab config doesn't specify comes from the course, and the
+ * lab config wins wherever both set something (nested objects such as `execution` or
+ * `codeReview` merge key by key). Lets a course say e.g. `"language": "python"` once instead
+ * of in every lab config. Throws if `defaults` sets a per-assignment key
+ * (COURSE_DEFAULTS_FORBIDDEN_KEYS) or isn't an object.
+ * @param {object} labConfig - the lab/step config as read from disk
+ * @param {object} courseConfig - the parsed course_config.json ({} when absent)
+ * @returns {object} a new, merged config (inputs are not modified)
+ */
+function applyCourseDefaults(labConfig, courseConfig = {}) {
+    const defaults = courseConfig && courseConfig.defaults;
+    if (defaults === undefined || defaults === null) return labConfig;
+    if (!isPlainObject(defaults)) {
+        throw new Error('course_config.json "defaults" must be an object');
+    }
+    const forbidden = COURSE_DEFAULTS_FORBIDDEN_KEYS.filter(k => k in defaults);
+    if (forbidden.length > 0) {
+        throw new Error(`course_config.json "defaults" can't set per-assignment key(s): ${forbidden.join(', ')}`);
+    }
+    return mergeConfig(defaults, labConfig);
+}
+
+// Writes course_config.json. Fields not in `obj` but already in the file (e.g. a `defaults`
+// block, or anything added by hand) are kept — callers update a few known fields at a time.
 function writeCourseConfig(coursePath, obj) {
     fs.mkdirSync(coursePath, { recursive: true });
     const configPath = path.join(coursePath, 'course_config.json');
-    fs.writeFileSync(configPath, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+    const existing = readCourseConfig(coursePath);
+    fs.writeFileSync(configPath, JSON.stringify({ ...existing, ...obj }, null, 2) + '\n', 'utf8');
     console.log(`  Written: ${configPath}`);
 }
 
@@ -631,6 +676,7 @@ export {
     readRubricRows, readRubricCriteria,
     findSpreadsheets, getExistingAssignments, getExistingSteps, keywordsToFolderPattern,
     getExistingCourses, readCourseConfig, writeCourseConfig,
+    applyCourseDefaults, COURSE_DEFAULTS_FORBIDDEN_KEYS,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA,
     guessMappingType,
     assembleConfig, mergeFeatureDefs, writeLab,

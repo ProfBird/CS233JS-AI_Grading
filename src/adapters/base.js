@@ -53,8 +53,10 @@
  * @property {((configsDir: string, labName: string, stepName: string|null, courseName?: string|null, repoRootOverride?: string|null) => string[]) | null} lintConfigCandidates
  *           - configsDir is normally the repo-root-level configs/ dir (shipped-default fallback is
  *             derived from it via configsDir/..); courseName, when given, is inserted as a path
- *             segment ONLY for the per-lab/per-step override candidates (configs/{course}/{lab}/...),
- *             not for the shipped default, which stays course-agnostic. repoRootOverride lets a
+ *             segment ONLY for the per-lab/per-step override candidates (configs/{course}/{lab}/...)
+ *             and adds a course-wide candidate (configs/{course}/<lint config file>) after them,
+ *             not for the shipped default, which stays course-agnostic. Priority order:
+ *             step > lab > course > shipped default. repoRootOverride lets a
  *             caller point configsDir at a scratch directory (tests) while still resolving the
  *             shipped default against the real repo root.
  * @property {(dir: string, config?: Object) => Project[]} detectProject

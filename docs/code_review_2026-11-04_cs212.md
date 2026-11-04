@@ -170,11 +170,15 @@ lint candidate. Both adapters' `lintConfigCandidates` (`python.js:166`, `javascr
 only per-step, per-lab, then repo default. Add `configs/{Course}/ruff.toml` (and
 `configs/{Course}/eslint.config.mjs`) between the per-lab and repo-default candidates.
 
+> **✅ Lint item FIXED 2026-11-04:** `configs/{Course}/ruff.toml` / `eslint.config.mjs` are now looked up between the per-lab file and the shipped default (step > lab > course > shipped). `configs/CS212/ruff.toml` adds ruff `N` (pep8-naming) and `I` (import order); `D` (docstrings) was left out as too noisy for the checklist's "comments or docstrings explaining complex code". Not yet run against real ruff: ruff isn't installed on the development Mac.
+
 ---
 
 ## 3. Structural gaps that matter for CS 212 (and any third course)
 
-### 3.1 No course-level config defaults — MEDIUM
+### 3.1 No course-level config defaults — MEDIUM — ✅ FIXED 2026-11-04
+
+> **Fixed:** `course_config.json` accepts a `defaults` block, merged under every lab/step config in memory before validation (lab wins; nested objects merge; arrays replace; per-assignment keys like `mappings` are rejected). `writeCourseConfig` now keeps fields it isn't updating, because the Canvas setup used to rewrite the file with only four fields, which would have deleted `defaults`. `configs/CS212/` exists with `"defaults": { "language": "python" }` and the course ruff ruleset. Choosing a course with no assignments yet now gives a clear error instead of an empty picker.
 
 `course_config.json` holds only names, prefix and Canvas ID. Only `toolchains` is merged into a lab
 config (`grade_setup.js:369`). Every CS 212 lab config would have to repeat `language: "python"`,
@@ -263,10 +267,10 @@ blockers, not before.
 
 ## Suggested order of work
 
-1. Loose-file Canvas extraction (1.1). Without it, nothing else matters for Lab01/02.
-2. Review-form parsing: "Release" header and spacer rows (1.2, 1.3). Small, with high scoring impact.
-3. `developer_comments` comment-only, per-file check (1.4).
-4. Course-level `defaults` + course-level lint config (3.1, section 2's lint item).
+1. ✅ Loose-file Canvas extraction (1.1). Without it, nothing else matters for Lab01/02.
+2. ✅ Review-form parsing: "Release" header and spacer rows (1.2, 1.3). Small, with high scoring impact.
+3. ✅ `developer_comments` comment-only, per-file check (1.4).
+4. ✅ Course-level `defaults` + course-level lint config (3.1, section 2's lint item).
 5. Python uv workflow: `pyproject.toml`, `uv sync` in a copied directory, `runCheck.entry`,
    `supportFiles`, script-mode tests (1.5, section 2).
 6. Per-variation overrides and multi-entry `runCheck` (3.2, 3.3).

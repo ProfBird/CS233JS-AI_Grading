@@ -226,3 +226,61 @@ export default [{ files: ['**/*.js'], rules: { 'no-undef': 'error' } }];
         expect(withCourse.lint.errors).toBe(0);
     });
 });
+
+describe('lint config candidates — course-wide ruleset', () => {
+    // Pure path-order checks (no ESLint/ruff run needed).
+    it('javascript: step > lab > course > shipped default', async () => {
+        const { default: js } = await import('../src/adapters/javascript.js');
+        const c = js.lintConfigCandidates('/r/configs', 'Beta', 'TermProject', 'CS233JS', '/r');
+        expect(c).toEqual([
+            join('/r/configs', 'CS233JS', 'TermProject', 'Beta', 'eslint.config.mjs'),
+            join('/r/configs', 'CS233JS', 'Beta', 'eslint.config.mjs'),
+            join('/r/configs', 'CS233JS', 'eslint.config.mjs'),
+            join('/r', 'eslint', 'student.eslint.config.mjs'),
+        ]);
+    });
+
+    it('javascript: no course-wide candidate without a course', async () => {
+        const { default: js } = await import('../src/adapters/javascript.js');
+        expect(js.lintConfigCandidates('/r/configs', 'Lab03', null, null, '/r')).not.toContain(join('/r/configs', 'eslint.config.mjs'));
+    });
+
+    it('typescript: course-wide eslint.config.mjs before the TS shipped default', async () => {
+        const { default: ts } = await import('../src/adapters/typescript.js');
+        const c = ts.lintConfigCandidates('/r/configs', 'Lab03', null, 'CS233TS', '/r');
+        expect(c.slice(-2)).toEqual([
+            join('/r/configs', 'CS233TS', 'eslint.config.mjs'),
+            join('/r', 'eslint', 'student.typescript.eslint.config.mjs'),
+        ]);
+    });
+
+    it('python: lab ruff.toml > course ruff.toml > shipped default', async () => {
+        const { default: py } = await import('../src/adapters/python.js');
+        expect(py.lintConfigCandidates('/r/configs', 'Lab02', null, 'CS212', '/r')).toEqual([
+            join('/r/configs', 'CS212', 'Lab02', 'ruff.toml'),
+            join('/r/configs', 'CS212', 'ruff.toml'),
+            join('/r', 'python', 'student.ruff.toml'),
+        ]);
+    });
+
+    it('lintCode picks up a course-wide eslint.config.mjs when the lab has none', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'lintcourse-'));
+        try {
+            const configsDir = join(root, 'configs');
+            mkdirSync(join(configsDir, 'C1', 'Lab9'), { recursive: true });
+            writeFileSync(join(configsDir, 'C1', 'eslint.config.mjs'),
+                "export default [{ files: ['**/*.js'], rules: { 'no-undef': 'off', semi: 'off' } }];\n");
+            const labDir = join(root, 'C1', 'Lab9', 'Artifacts');
+            mkdirSync(labDir, { recursive: true });
+            const extractedDir = join(root, 'extracted');
+            mkdirSync(extractedDir, { recursive: true });
+            writeFileSync(join(extractedDir, 'app.js'), 'console.log(notDefined)\n');
+
+            const student = { name: 'CourseWide', extractedDir };
+            await lintCode([student], {}, labDir, 'Lab9', null, 'C1', configsDir);
+            expect(student.lint.errors).toBe(0);   // shipped default would report 2
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+});

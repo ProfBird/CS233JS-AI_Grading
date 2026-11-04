@@ -36,8 +36,8 @@ export default async function(students, config, labDir, labName, stepName, cours
     const labRoot = path.dirname(labDir);
 
     // Grader uses a config from inside this repo so that node_modules (globals, etc.) resolve correctly.
-    // Priority: per-lab override in configs/{Course}/{Parent}/{Step}/ or configs/{Course}/{Lab}/ >
-    // the shipped default.
+    // Priority: per-step/per-lab override in configs/{Course}/{Parent}/{Step}/ or
+    // configs/{Course}/{Lab}/ > course-wide configs/{Course}/ > the shipped default.
     const repoRoot = path.join(import.meta.dirname, '..', '..');
     // configsDirOverride is test-only: it lets lint_code.spec.mjs point config-file
     // resolution at a scratch directory instead of writing/cleaning up scratch subfolders

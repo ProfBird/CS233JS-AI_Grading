@@ -15,7 +15,7 @@
  * argv: ['Lab03'] (not ['CS233JS', 'Lab03']) is the realistic single-course invocation.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mockDriver } from './helpers/mock_driver.mjs';
@@ -134,6 +134,51 @@ describe('resolveGradeSetup — non-interactive shortcut path', () => {
         expect(setup.regrade).toBe(true);
         expect(setup.labName).toBe('Lab03');
         expect(setup.course.name).toBe('CS233JS');
+    });
+});
+
+describe('resolveGradeSetup — course defaults', () => {
+    it('merges course_config.json "defaults" under the lab config, in memory only', async () => {
+        writeCourseConfig('CS212', {
+            courseName: 'CS212', courseCode: 'CS212', rubricPrefix: 'CS212',
+            defaults: { language: 'python', textReport: true, runtimeCheck: 'none', execution: { mode: 'direct', timeoutMs: 20000 } },
+        });
+        // The lab config sets neither language nor textReport nor runtimeCheck — all from the course.
+        const labConfig = { mappings: [{ type: 'manual', maxScore: 5 }], execution: { timeoutMs: 60000 } };
+        const labDir = writeLab('CS212', 'Lab02', labConfig);
+        writeLocalConfig(oneTermConfig());
+        mkdirSync(join(labRootDir, 'CS212', 'Lab02'), { recursive: true });
+        markMoodleSubmissions(join(labRootDir, 'CS212', 'Lab02'));
+
+        const driver = mockDriver([], { strict: true });
+        const setup = await resolveGradeSetup(driver, opts({ argv: ['Lab02', '--regrade'] }));
+
+        expect(setup.config.language).toBe('python');
+        expect(setup.config.runtimeCheck).toBe('none');
+        expect(setup.config.execution).toEqual({ mode: 'direct', timeoutMs: 60000 });
+        expect(setup.textReport).toBe(true);
+        // The lab's file on disk is unchanged.
+        expect(JSON.parse(readFileSync(join(labDir, 'lab02_config.json'), 'utf8'))).toEqual(labConfig);
+    });
+
+    it('a course with no assignments yet gets a clear error, not an empty picker', async () => {
+        writeCourseConfig('CS212');
+        writeLocalConfig(oneTermConfig());
+
+        // Plain menu: course picker -> CS212; term picker -> the one term; source -> configured.
+        const driver = mockDriver(['CS212', '', ''], { strict: true });
+        await expect(resolveGradeSetup(driver, opts({ argv: [] })))
+            .rejects.toThrow(/has no assignments configured yet/);
+    });
+
+    it('throws SetupError when defaults set a per-assignment key', async () => {
+        writeCourseConfig('CS212', { courseName: 'CS212', defaults: { mappings: [] } });
+        writeLab('CS212', 'Lab02');
+        writeLocalConfig(oneTermConfig());
+
+        const driver = mockDriver([], { strict: true });
+        await expect(resolveGradeSetup(driver, opts({ argv: ['Lab02'] })))
+            .rejects.toThrow(/can't set per-assignment key\(s\): mappings/);
     });
 });
 

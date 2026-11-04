@@ -172,6 +172,8 @@ function lintConfigCandidates(configsDir, labName, parentName, courseName = null
     const candidates = [];
     if (parentName) candidates.push(path.join(labConfigsDir, parentName, labName, 'ruff.toml'));
     candidates.push(path.join(labConfigsDir, labName, 'ruff.toml'));
+    // Course-wide ruleset (configs/{Course}/ruff.toml), e.g. CS212's naming/import-order rules.
+    if (courseName) candidates.push(path.join(labConfigsDir, 'ruff.toml'));
     candidates.push(path.join(repoRoot, 'python', 'student.ruff.toml'));
     return candidates;
 }

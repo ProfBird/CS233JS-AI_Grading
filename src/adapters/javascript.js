@@ -252,6 +252,9 @@ function lintConfigCandidates(configsDir, labName, parentName, courseName = null
     const candidates = [];
     if (parentName) candidates.push(path.join(labConfigsDir, parentName, labName, 'eslint.config.mjs'));
     candidates.push(path.join(labConfigsDir, labName, 'eslint.config.mjs'));
+    // Course-wide ruleset (configs/{Course}/eslint.config.mjs) — only with a course, so a
+    // course-less call never picks up a stray configs/eslint.config.mjs.
+    if (courseName) candidates.push(path.join(labConfigsDir, 'eslint.config.mjs'));
     candidates.push(path.join(repoRoot, 'eslint', 'student.eslint.config.mjs'));
     return candidates;
 }

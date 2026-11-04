@@ -1,0 +1,279 @@
+# Multi-Course Readiness Review: Can the Grader Take On CS 212? — 2026-11-04
+
+**Reviewer:** Claude Opus 5.5 (AI), at the maintainer's request
+**Question:** Is the codebase structured to accommodate grading lab submissions from other
+courses, in particular CS 212 (AI Programming 1, Python)?
+**Builds on:** `docs/code_review_2026-07-24.md`. Findings from that review (the implicit
+`student` contract, duplicated helpers, fail-open paths) are not repeated here.
+
+**Method:** Every CS 212 lab write-up in `CS212-CourseMaterials/docs/Labs` was read for what
+students submit and how it runs (Lab01–Lab08 plus TermProject). The rubric `.xlsm` files and all
+ten code-review `.docx` forms were run through the grader's own parsers. Then the grader's
+course/term/config plumbing, the Python adapter, `sandbox.js`, `runtime_check.js`,
+`extract_code_canvas.js`, `read_code_review.js`, `analyze_code.js` and `generate_grades.js` were
+read against those needs. Claims marked **verified** were reproduced by running the grader's code.
+
+---
+
+## Verdict
+
+**The architecture is ready. The Python-specific details are not.**
+
+The course and term tiers, the language-adapter layer, the phase registry, the mapping-handler
+registry and Canvas acquisition generalize as intended. CIS195 has already proven that a second
+course drops in cleanly. Nothing in the layering needs redesigning for CS 212, and there are
+almost no hard-coded CS233JS values left in `src/`. The leftovers are cosmetic:
+`citstudent`/`'Computer'` defaults and the `cs233-*` bin names.
+
+The gaps are concentrated in four places that were built around CS233JS's specific way of
+working (zipped or GitHub-hosted JS projects, `npm`, and "Prod." review forms):
+
+1. **Acquisition:** loose-file Canvas uploads produce no code.
+2. **Python execution model:** `requirements.txt`/`pip`/system interpreter/empty working directory,
+   vs. CS 212's `pyproject.toml`/`uv`/project venv/`Data/` relative paths.
+3. **Code-review form parsing:** CS 212's forms use different headers and have spacer rows.
+4. **Per-group (A/B/C) configuration:** CS 212's groups solve *different problems*, not
+   differently named versions of the same app.
+
+Three findings in sections 1 and 3 below would **silently zero or misgrade students** on the first CS 212
+run, so fix them before the first CS 212 lab goes through.
+
+---
+
+## 1. Blockers: would mis-score students on the first run
+
+### 1.1 Loose-file Canvas uploads are never extracted — HIGH (verified by reading) — ✅ FIXED 2026-11-04
+
+> **Fixed:** `acquireCode` now copies a submission's loose uploaded files (hidden files, archives and Word docs skipped) into `extracted_code/` when there's no zip and no repo. This covers both Canvas and Moodle. Not yet handled: a zip plus extra loose files; only the zip is used then.
+
+`extract_code_canvas.js:37-47` `downloadAttachments` downloads every attachment but records only
+`.zip` files. `importOneSubmission` then calls `acquireCode`, which has no zip and no GitHub
+URL, so it reaches its final branch (`extract_code.js:228-231`) and sets
+`student.error = 'No ZIP file or GitHub URL found'`. `extractedDir` stays `null`, so every
+downstream phase skips the student.
+
+CS 212 Lab01 ("This will be a total of 3 files": two `.py` plus the review `.docx`), Lab02
+RuleBasedSystems (`.py` files plus a `.csv`) and Lab02 ConstraintSolvers (`.py` files plus an
+`unsolvable_data` folder) all ask for bare uploads. Every one of those students would score 0.
+
+**Fix direction:** when there's no zip and no repo but non-review attachments exist, copy the
+non-`.docx` attachments into `extracted_code/` and treat that as the code directory. Leave the
+review `.docx` in `canvas_files/`, where `read_code_review.js` already looks. Also handle a
+student who zips only part of the work and uploads the rest loose. The idempotence check
+(`extract_code_canvas.js:77-81`) already keys off `extracted_code/` being non-empty, so this fits
+the existing layout.
+
+### 1.2 Code-review forms headed "Release" never count as production-completed — HIGH (verified) — ✅ FIXED 2026-11-04
+
+> **Fixed:** the production column now matches `/prod|release|final/i`. All 10 CS212 forms parse with `productionCompleted: true` when filled in.
+
+`read_code_review.js:186-191` finds the production column with `h.includes('prod')`. Five of
+CS 212's ten forms head that column **"Release"** (Lab02-RuleBased, Lab05, Lab06, Lab07, Lab08).
+The positional fallback only fires when *both* headers are missing, and "Beta" is found, so
+`prodCol` stays `-1`.
+
+Verified with a synthetic filled table: header `Prod.` gives `productionCompleted: true`, while
+header `Release` gives `false`. Every `code_review` mapping on those labs awards **half credit**
+even when the student filled the column in.
+
+**Fix direction:** match `/prod|release|final/i`, and/or make the header regex configurable via
+`config.codeReview.prodHeader` so a course can declare its own wording.
+
+### 1.3 Spacer rows in CS 212 forms misalign `manual` mappings — HIGH (verified) — ✅ FIXED (opt-in) 2026-11-04
+
+> **Fixed via opt-in:** each review item now carries its criterion `label`, and a `manual` mapping can set `reviewRow: "<criterion text>"` to score from that row regardless of position. Positional `_reviewIndex` is unchanged, because the CS233JS forms have the same spacer rows. Silently re-indexing would have changed which review answers auto-score existing CS233JS rubric rows. Existing CS233JS `manual` mappings still hit spacer rows positionally, so adding `reviewRow` to them, or confirming they're meant as pure placeholders, is a follow-up.
+
+`parseTableScores` pushes **every** table row as an item, and `generate_grades.js:1022-1027`
+maps the *n*-th `manual` mapping to `items[n]`. CS 212 forms have blank continuation rows under
+questions that ask the reviewer to list errors or missing items. Running the parser on the real forms:
+
+| Form | Labeled criteria | Parsed items |
+|---|---:|---:|
+| Lab06 | 9 | 24 |
+| Lab02 ConstraintSolvers | 18 | 29 |
+
+The CS233JS forms have no spacer rows, which is why this has never surfaced.
+
+**Fix direction:** skip rows whose first (criteria) cell is empty. Better still, let a
+`manual` mapping name its review row by a label substring (`reviewRow: "interactive"`) instead
+of relying on position. Position-based alignment is fragile even for CS233JS whenever a form is edited.
+
+### 1.4 `developer_comments` passes almost every Python submission — HIGH (inflates scores) — ✅ FIXED 2026-11-04
+
+> **Fixed:** the check now reads comment text only, using a new `extractComments` on every adapter built from the same grammar as `stripComments`; Python docstrings count. Names match as whole words, and per-file results are recorded in `analysis.developerComments`. A mapping may set `scope: "each"` to require a header in every non-empty source file. The default stays `"any"`, so CS233JS keeps its current policy. Two fixes along the way: a submitted `.venv`/`venv`/`__pycache__` is excluded from analysis, and source files with "dist" in their name (e.g. `distance.py`) are no longer dropped. The AI-disclosure token is not checked yet.
+
+`analyze_code.js:436-440` sets `hasDeveloperComments` if **any** source file matches
+`\b(name|author|date)\s*[:=]` or contains the student's first or last name as a substring. In
+Python, `name = input("Name: ")` or a dict key `"date":` satisfies the first pattern. Short first
+names also match common words as substrings (for example, "Al" in "algorithm"). The regex also
+runs on raw content, not comment-stripped content. The CS 212 rubric line is "Developer's name, date
+in **each** file", and the CS 212 review form adds "any AI used (and how)".
+
+**Fix direction:** run the check against the *comments only* (the inverse of what the adapter's
+`stripComments` removes), require it per file, and match whole words. Making the required tokens
+configurable (`config.developerComments.require: ["name", "date", "ai"]`) would also cover CS 212's AI-disclosure line.
+
+### 1.5 `run_check` can't run a CS 212 program as students are told to run it — HIGH
+
+Three compounding problems:
+
+- **Working directory.** `sandbox.js:71` always runs in a fresh, empty `mkdtemp` directory. CS 212
+  programs open `Data/instructors.csv` and similar files relative to the project folder, and the
+  instructions explicitly say to run from there. Every Lab02-ConstraintSolvers run fails on file
+  not found.
+- **Interpreter/dependencies.** `python.js:193` builds `[python3, main.py]` against the system
+  interpreter. CS 212 labs need `z3-solver`, `scikit-learn`, `tensorflow` or `google-genai`, installed by
+  `uv sync` into the project's `.venv`.
+- **Entry point.** `/main\.py$/i` (`python.js:187`) matches `domain.py` (verified), and with no
+  `main.py` it falls back to `pyFiles[0]`, which is whatever the directory walk returns first.
+
+**Fix direction:**
+- Add an opt-in `execution.cwd: "copy"` mode in `sandbox.js` that copies the project into the
+  throwaway directory instead of starting it empty. That keeps the "never touches the submission tree"
+  guarantee and lets relative paths work.
+- Add a `runCheck.entry` config key, a glob or filename.
+- Let the Python adapter build `["uv", "run", entry]` when a `pyproject.toml` exists.
+- Since students often omit the `Data/` folder ("you don't need to upload the data"), add
+  `runCheck.supportFiles`: a config-relative directory of instructor-supplied data copied in
+  before the run.
+
+---
+
+## 2. Python adapter: built for a different Python workflow
+
+The adapter in `src/adapters/python.js` is coherent, but it assumes `requirements.txt` + `pip` +
+pytest. CS 212 standardized on **uv + `pyproject.toml`** from Lab02 onward.
+
+| Area | Adapter assumes | CS 212 actually uses | Effect |
+|---|---|---|---|
+| Manifest (`checkManifest`) | `requirements.txt` | `pyproject.toml` `[project].dependencies` | "requirements.txt not found" for everyone |
+| Package names (`extractUsedPackages`) | import name == distribution name | `scikit-learn`→`sklearn`, `z3-solver`→`z3`, `google-genai`→`google.genai` | Declared packages flagged "never imported" |
+| Install | `python -m pip install -r` into the **grader's** interpreter | `uv sync` into a per-project `.venv` | Pollutes the grader's Python. Homebrew/system Python refuses because of PEP 668. 60 s timeout is far too short for TensorFlow |
+| Tests (`runTests`) | `pytest -v` | Lab02 explicitly allows a plain `assert` + PASS/FAIL driver loop | Driver-style tests aren't counted, and pytest without the venv fails on imports |
+| Timeouts | 10 s run / 30 s tests | Lab04 runs about 20 s; Lab05 trains for minutes; Lab03/04 download datasets on first run | Spurious timeouts |
+
+**Fix direction (all inside the adapter, no pipeline changes):**
+- `detectProject`: tag a project `python-uv` when `pyproject.toml` exists.
+- `install`: run `uv sync` in the copied project directory. Cache the result by a hash of
+  `pyproject.toml` plus `uv.lock` so a class of 25 identical dependency sets resolves once.
+- `checkManifest`: parse `pyproject.toml`. Node has no TOML parser built in, so a small dependency or a
+  minimal `[project]` table reader is needed.
+- Ship a small distribution-to-import alias map, extendable from config.
+- `runTests`: support a `testCheck.mode: "script"` that runs a named test module and scores by
+  exit code and/or a configurable `PASS:`/`FAIL:` line count, alongside the existing pytest mode.
+- `preflight`: also check for `uv` when the lab uses it.
+
+**Lint:** `python/student.ruff.toml` selects `E, W, F, C90`. The CS 212 style checklist
+explicitly grades snake_case/PascalCase/ALL_CAPS naming (ruff `N`) and import ordering (ruff `I`),
+and arguably docstrings (`D`). Don't change the shipped default. Instead, add a **course-level**
+lint candidate. Both adapters' `lintConfigCandidates` (`python.js:166`, `javascript.js:242`) look
+only per-step, per-lab, then repo default. Add `configs/{Course}/ruff.toml` (and
+`configs/{Course}/eslint.config.mjs`) between the per-lab and repo-default candidates.
+
+---
+
+## 3. Structural gaps that matter for CS 212 (and any third course)
+
+### 3.1 No course-level config defaults — MEDIUM
+
+`course_config.json` holds only names, prefix and Canvas ID. Only `toolchains` is merged into a lab
+config (`grade_setup.js:369`). Every CS 212 lab config would have to repeat `language: "python"`,
+the runtime and execution settings, `codeReview` cells, and the lint, timeout and URL patterns. Add a
+`defaults` block to `course_config.json`, deep-merged under each lab config before
+`validateConfig`. It's a ~15-line change in `grade_setup.js`, and CS233JS and CIS195 would
+benefit too.
+
+### 3.2 Group variations only drive app-name detection — MEDIUM
+
+`config.variations` maps a group letter to an `appName` used by `variation_detect.js`. The
+detector's corpus is built from HTML titles, `package.json` and README files, and gets almost
+nothing from a Python project. In CS 212, groups A, B and C solve **different problems**: Lab02 schedules
+sections, flights or deliveries, and Lab01 has three different programs to translate. The group letter
+is already read reliably from the review form. What's missing is per-variation overrides of
+`runCheck` (stdin, expected output, supporting data), `analysis.features`, and possibly
+mappings. A `variations.B.overrides: { … }` block applied after group detection would cover it.
+Add `pyproject.toml`'s `name` to the variation corpus as a cheap secondary signal.
+
+### 3.3 One entry point per submission — MEDIUM
+
+`run_check` executes a single program. Lab01 has two independent programs plus tests, Lab04's flow
+is `fetch_data.py` then the main program, and Lab02 has a program plus a test module. `parts[]`
+matches *subdirectories*, not files, so it doesn't help with loose `.py` files. Allow
+`runCheck` to be an array of `{ id, entry, stdin, expectPatterns }` with a `run_check`
+mapping selecting one by `id`, the same pattern `file_count` uses with `countId`.
+
+### 3.4 Notebooks and Colab links are invisible — scope note
+
+Lab05 submits a `.ipynb` file or a Colab URL. `sourceExtensions` is `['.py']`, so analysis and lint
+see nothing. A Colab link is a Google Drive resource that can't be fetched without auth.
+Short term: add `colab: "colab.research.google.com"` to `urlPatterns` and use `url_check` +
+`path_exists` (`\.ipynb$`). Treat real notebook analysis, extracting code cells to a temp `.py`,
+as a separate feature if Lab05 is worth automating.
+
+### 3.5 Web-only dependencies are loaded for every course — LOW
+
+`run_pipeline.js:31` statically imports `check_web_content.js`, which imports `jsdom`. On this Mac
+`jsdom` is declared in `package.json` but **not installed** in `node_modules`, so 3 test files fail
+to load (696 pass) and `bin/grade.js` can't run for any course. Running `npm install` fixes the
+immediate problem, probably a two-machine sync leftover. Structurally, phases gated by
+`when` should `await import()` their module lazily so a Python-only course never loads
+jsdom, Puppeteer or html-validate.
+
+### 3.6 `rubric-to-md.js` drops CS 212 rubrics — LOW (verified)
+
+`bin/rubric-to-md.js:44` looks for a header cell that is exactly `Possible`. CS 212 rubrics say
+`Points`, so the tool writes only the title line. `lab_config.js` already has
+`POSSIBLE_HEADER_RE` / `detectRubricLayout`, so reuse them. (While testing this, note that
+`rubric-to-md` writes its `.md` next to the input by default. Running it on the CS 212
+course-materials repo created untracked files there, which were removed.)
+
+---
+
+## 4. What's out of scope for automation (say so explicitly in the configs)
+
+- **Lab08** submits only screenshots. Use `path_exists` for image files at most, and grade manually.
+- **Lab07** "AI prompt effectiveness", "secure API-key management" and "effectiveness of the AI
+  feature" are judgment calls. Key handling can be partly automated, for example a `feature` that
+  flags a hard-coded `AIza…`/`sk-…` literal plus `env_file_check`. The rest is `manual`.
+- **Running Lab07 apps** calls a paid external API and needs a key, so don't `run_check` them.
+- **Term project** has no rubric content yet beyond the title.
+
+Much of CS 212's rubric is qualitative ("rule design", "moderately complex", "explanations in
+comments"). The grader's regex/feature model can't score that. The repo already has an LLM client
+(`llm_client.js`). A future `llm_check` mapping type that scores one rubric row against a prompt,
+and **always** sets `keepComment` with a "NEEDS REVIEW" flag the way `deploy_check` does, would
+fit the existing handler registry without new architecture. It's worth considering after the
+blockers, not before.
+
+---
+
+## 5. Housekeeping noticed along the way
+
+- `configs/Lab05`, `configs/Lab06/Volumes/DataCard/Repos/CS233JS-Repos/…` (empty dirs),
+  `configs/Lab08` and `configs/TermProject` are pre-course-tier leftovers. `getExistingCourses()`
+  correctly ignores them, but delete them. The `Lab06/Volumes/...` nesting suggests an absolute path was
+  once joined as a relative one somewhere; it's worth a grep if it reappears.
+- `configs/CIS195/course_config.json` has `canvasCourseId: 680`, the same number the CLAUDE.md
+  example uses for CS233JS. It may be a copy-paste error; check it against Canvas.
+- CS 212 `CS212_Lab01_Rubric.xlsm`: the *Rubric* sheet's title still reads "Lab 5: HTML5
+  Canvas--Meme Creator", and the *Grade* sheet has a stale "New feature options" block (meme text,
+  font, color) below the canned comments. `CS212_Lab06` has both an `.xlsm` and an `.xlsx` rubric.
+
+---
+
+## Suggested order of work
+
+1. Loose-file Canvas extraction (1.1). Without it, nothing else matters for Lab01/02.
+2. Review-form parsing: "Release" header and spacer rows (1.2, 1.3). Small, with high scoring impact.
+3. `developer_comments` comment-only, per-file check (1.4).
+4. Course-level `defaults` + course-level lint config (3.1, section 2's lint item).
+5. Python uv workflow: `pyproject.toml`, `uv sync` in a copied directory, `runCheck.entry`,
+   `supportFiles`, script-mode tests (1.5, section 2).
+6. Per-variation overrides and multi-entry `runCheck` (3.2, 3.3).
+7. Lazy phase imports, `rubric-to-md` header reuse, housekeeping (3.5, 3.6, 5).
+8. Optional: `llm_check` mapping type; notebook extraction.
+
+Steps 1–3 are independent bug fixes that also make CS233JS and CIS195 more robust. Steps 4–6 are
+the CS 212 enablement work and should come with a pilot config for one lab, such as
+Lab02-ConstraintSolvers, which exercises data files, z3, groups and tests, plus a
+scratch-tree integration test like the existing `multi_step_integration.spec.mjs`.

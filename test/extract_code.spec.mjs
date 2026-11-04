@@ -8,7 +8,7 @@
  * can tell which source was actually used.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import AdmZip from 'adm-zip';
@@ -131,6 +131,42 @@ describe('extractStudentCode — loose uploaded files (no zip, no repo)', () => 
 
         expect(student.extractedDir).toBeUndefined();
         expect(student.error).toMatch(/no zip file, github url, or uploaded source files/i);
+    });
+
+    // A zip (containing unsolvable_data/ and a main.py) next to loose uploads.
+    function withZip(student, entries) {
+        const zipFile = join(student.filesDir, 'data.zip');
+        const z = new AdmZip();
+        for (const [name, text] of Object.entries(entries)) z.addFile(name, Buffer.from(text));
+        z.writeZip(zipFile);
+        student.zipFile = zipFile;
+        return student;
+    }
+
+    it('merges loose files uploaded alongside a zip; the zip wins a name collision', async () => {
+        const student = withZip(
+            looseStudent('Both', ['scheduler.py', 'main.py', 'Code Review.docx']),
+            { 'unsolvable_data/sections.csv': 'a,b', 'main.py': 'FROM ZIP' },
+        );
+        const out = join(root, 'out');
+        mkdirSync(out);
+        await extractStudentCode(student, root, out);
+
+        expect(student.error).toBeUndefined();
+        expect(readdirSync(student.extractedDir).sort()).toEqual(['main.py', 'scheduler.py', 'unsolvable_data']);
+        expect(readFileSync(join(student.extractedDir, 'main.py'), 'utf8')).toBe('FROM ZIP');
+    });
+
+    it('uses the loose files when the zip is corrupt', async () => {
+        const student = looseStudent('BadZip', ['main.py']);
+        student.zipFile = join(student.filesDir, 'broken.zip');
+        writeFileSync(student.zipFile, 'not a zip');
+        const out = join(root, 'out');
+        mkdirSync(out);
+        await extractStudentCode(student, root, out);
+
+        expect(student.error).toBeUndefined();
+        expect(readdirSync(student.extractedDir)).toEqual(['main.py']);
     });
 });
 

@@ -174,20 +174,34 @@ function extractZip(student, codeDir) {
 const LOOSE_FILE_SKIP_RE = /\.(zip|docx?)$/i;
 
 // Copies a submission's loose uploaded files (e.g. bare .py/.csv files uploaded straight to
-// Canvas or Moodle without zipping) from student.filesDir into codeDir. Top-level regular files
-// only; hidden files, archives and Word documents are skipped. Returns the number copied, and
-// sets student.extractedDir when at least one file was copied.
+// Canvas or Moodle without zipping, or uploaded next to a zip) from student.filesDir into
+// codeDir. Top-level regular files only; hidden files, archives and Word documents are
+// skipped. A file already present in codeDir (e.g. extracted from the zip) is kept, not
+// overwritten — the zip wins a name collision. Returns { copied, skipped[] }, and sets
+// student.extractedDir when at least one file was copied.
 function copyLooseFiles(student, codeDir) {
+    const result = { copied: 0, skipped: [] };
     const filesDir = student.filesDir;
-    if (!filesDir || !fs.existsSync(filesDir)) return 0;
-    let copied = 0;
+    if (!filesDir || !fs.existsSync(filesDir)) return result;
     for (const entry of fs.readdirSync(filesDir, { withFileTypes: true })) {
         if (!entry.isFile() || entry.name.startsWith('.') || LOOSE_FILE_SKIP_RE.test(entry.name)) continue;
-        fs.copyFileSync(path.join(filesDir, entry.name), path.join(codeDir, entry.name));
-        copied++;
+        const dest = path.join(codeDir, entry.name);
+        if (fs.existsSync(dest)) { result.skipped.push(entry.name); continue; }
+        fs.copyFileSync(path.join(filesDir, entry.name), dest);
+        result.copied++;
     }
-    if (copied > 0) student.extractedDir = codeDir;
-    return copied;
+    if (result.copied > 0) student.extractedDir = codeDir;
+    return result;
+}
+
+// After a zip is extracted, merge in any loose files uploaded alongside it (e.g. a CS212
+// student who zipped a data folder but uploaded the .py files individually).
+function mergeLooseFilesAfterZip(student, codeDir) {
+    const { copied, skipped } = copyLooseFiles(student, codeDir);
+    if (copied > 0) console.log(`  Also using ${copied} loose file(s) uploaded alongside the zip for ${student.name}`);
+    if (skipped.length > 0) {
+        console.log(`  NOTE: ${student.name}: loose file(s) ${skipped.join(', ')} have the same name as a file in the zip — kept the zip's copy`);
+    }
 }
 
 // Given an already-resolved codeDir and urls map, does the actual clone/unzip into codeDir,
@@ -239,18 +253,24 @@ function acquireCode(student, codeDir, urls) {
         // fall back to extracting the zip rather than losing the submission.
         if (!student.extractedDir && student.zipFile) {
             console.log(`  Repository unavailable — falling back to the submitted zip for ${student.name}.`);
-            extractZip(student, codeDir);
+            if (extractZip(student, codeDir)) mergeLooseFilesAfterZip(student, codeDir);
         }
         if (!student.extractedDir) {
             student.error = normalizedUrl ? 'Failed to clone GitHub repository' : 'Invalid GitHub URL format';
         }
     } else if (student.zipFile) {
         console.log(`  Extracting zip for ${student.name}...`);
-        if (!extractZip(student, codeDir)) student.error = 'Failed to unzip ZIP file';
+        if (extractZip(student, codeDir)) {
+            mergeLooseFilesAfterZip(student, codeDir);
+        } else if (copyLooseFiles(student, codeDir).copied > 0) {
+            console.log(`  Zip could not be extracted — using the loose uploaded files for ${student.name}`);
+        } else {
+            student.error = 'Failed to unzip ZIP file';
+        }
     } else {
         // No zip and no repo: fall back to loose uploaded files (some courses, e.g. CS212,
         // have students upload bare .py/.csv files rather than a zip).
-        const copied = copyLooseFiles(student, codeDir);
+        const { copied } = copyLooseFiles(student, codeDir);
         if (copied > 0) {
             console.log(`  Using ${copied} loose uploaded file(s) for ${student.name}`);
         } else {

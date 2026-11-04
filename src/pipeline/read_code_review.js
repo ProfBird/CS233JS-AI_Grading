@@ -168,42 +168,22 @@ function anyOtherProdTableFilled(html, primaryHtml) {
     return false;
 }
 
-/**
- * Parse the HTML scores table to extract per-item beta and production scores.
- * Returns null if no suitable table is found.
- *
- * `items` come from the single primary (densest) score table, preserving the positional
- * alignment that generate_grades' `manual` mappings rely on (item[_reviewIndex]).
- * `productionCompleted`, however, is OR'd across ALL prod-headed score tables, so a
- * prod-filled second table is not missed when the primary table's prod column is empty.
- */
-function parseTableScores(html) {
-    const tableHtml = findScoresTable(html);
-    if (!tableHtml) return null;
-
-    const rows = extractRows(tableHtml);
-    if (rows.length < 2) return null;
-
-    // Identify beta and production columns from header
-    const header = rows[0];
+// Beta/production column indexes from a table's header row (-1 when absent).
+function scoreColumns(header) {
     let betaCol = -1;
     let prodCol = -1;
-
     for (let i = 0; i < header.length; i++) {
         const h = header[i].toLowerCase();
         if (h.includes('beta')) betaCol = i;
         else if (PROD_HEADER_RE.test(h)) prodCol = i;
     }
+    return { betaCol, prodCol };
+}
 
-    // If headers aren't identifiable, assume last two columns are beta, prod
-    if (betaCol === -1 && prodCol === -1 && header.length >= 2) {
-        betaCol = header.length - 2;
-        prodCol = header.length - 1;
-    }
-
+// One item per data row (spacer rows included, with label ''), and whether any prod cell is filled.
+function itemsFromRows(rows, betaCol, prodCol) {
     const items = [];
     let anyProdFilled = false;
-
     for (let r = 1; r < rows.length; r++) {
         const row = rows[r];
         const betaScore = betaCol >= 0 && betaCol < row.length
@@ -216,8 +196,8 @@ function parseTableScores(html) {
         if (prodCell.filled) anyProdFilled = true;
 
         items.push({
-            // Criterion text (first cell; empty for a form's spacer/"list errors" rows) — lets
-            // a manual mapping select its row by label (map.reviewRow) instead of position.
+            // Criterion text (first cell; empty for a form's spacer/"list errors" rows) — what
+            // a manual mapping's reviewRow matches against.
             label: row[0] || '',
             betaScore,
             prodScore: prodCell.score,
@@ -225,10 +205,50 @@ function parseTableScores(html) {
             prodAffirmative: prodCell.affirmative
         });
     }
+    return { items, anyProdFilled };
+}
+
+/**
+ * Parse the review form's score tables to extract per-criterion beta and production scores.
+ * Returns null if no suitable table is found.
+ *
+ * `items` come from EVERY table whose header names a Beta or Prod/Release column, in document
+ * order — many forms split their criteria across several tables (e.g. "General", "Part 1",
+ * "Part 2"), and manual mappings look criteria up by label (reviewRow), so all of them must be
+ * visible. A form whose tables have no recognizable headers falls back to the single densest
+ * table, reading its last two columns as beta/prod.
+ *
+ * `productionCompleted` is true when the primary (densest) table's prod column has anything
+ * filled in, OR any other prod-headed table does.
+ */
+function parseTableScores(html) {
+    const tableHtml = findScoresTable(html);
+    if (!tableHtml) return null;
+
+    const rows = extractRows(tableHtml);
+    if (rows.length < 2) return null;
+
+    let { betaCol, prodCol } = scoreColumns(rows[0]);
+    // If headers aren't identifiable, assume last two columns are beta, prod
+    if (betaCol === -1 && prodCol === -1 && rows[0].length >= 2) {
+        betaCol = rows[0].length - 2;
+        prodCol = rows[0].length - 1;
+    }
+    const primary = itemsFromRows(rows, betaCol, prodCol);
+
+    // Criteria from every header-identified score table, in document order.
+    const items = [];
+    for (const table of html.match(/<table[^>]*>[\s\S]*?<\/table>/gi) || []) {
+        const tRows = extractRows(table);
+        if (tRows.length < 2) continue;
+        const cols = scoreColumns(tRows[0]);
+        if (cols.betaCol === -1 && cols.prodCol === -1) continue;
+        items.push(...itemsFromRows(tRows, cols.betaCol, cols.prodCol).items);
+    }
 
     return {
-        items,
-        productionCompleted: anyProdFilled || anyOtherProdTableFilled(html, tableHtml)
+        items: items.length > 0 ? items : primary.items,
+        productionCompleted: primary.anyProdFilled || anyOtherProdTableFilled(html, tableHtml)
     };
 }
 

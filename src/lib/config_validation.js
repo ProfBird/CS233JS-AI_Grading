@@ -78,6 +78,30 @@ function validateConfig(config, labName) {
             if (map.type === 'developer_comments' && map.scope !== undefined && !['any', 'each'].includes(map.scope)) {
                 errors.push(`${prefix}.scope: "${map.scope}" must be "any" or "each"`);
             }
+            if (map.type === 'manual' && map.reviewRow !== undefined) {
+                const rows = Array.isArray(map.reviewRow) ? map.reviewRow : [map.reviewRow];
+                if (rows.length === 0 || rows.some(r => typeof r !== 'string' || !r.trim())) {
+                    errors.push(`${prefix}.reviewRow: must be a non-empty string or array of strings`);
+                }
+            }
+            if (map.type === 'manual' && map.reviewRowOccurrence !== undefined
+                && !(Number.isInteger(map.reviewRowOccurrence) && map.reviewRowOccurrence >= 1)) {
+                errors.push(`${prefix}.reviewRowOccurrence: must be a positive integer`);
+            }
+            if (map.type === 'developer_comments' && map.requireAiDisclosure !== undefined
+                && typeof map.requireAiDisclosure !== 'boolean') {
+                errors.push(`${prefix}.requireAiDisclosure: must be true or false`);
+            }
+            if (map.type === 'developer_comments' && map.ignoreCommentsBy !== undefined
+                && !(Array.isArray(map.ignoreCommentsBy) && map.ignoreCommentsBy.every(v => typeof v === 'string' && v.trim()))) {
+                errors.push(`${prefix}.ignoreCommentsBy: must be an array of non-empty strings`);
+            }
+            if (map.type === 'developer_comments' && map.require !== undefined) {
+                const valid = ['name', 'date', 'ai'];
+                if (!Array.isArray(map.require) || map.require.some(k => !valid.includes(k))) {
+                    errors.push(`${prefix}.require: must be an array of ${valid.map(v => `"${v}"`).join(', ')}`);
+                }
+            }
             if (map.commentCell && !isValidCellRef(map.commentCell)) {
                 errors.push(`${prefix}.commentCell: "${map.commentCell}" is not a valid cell reference`);
             }

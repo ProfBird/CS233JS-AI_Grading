@@ -394,6 +394,12 @@ const MAPPING_TYPE_SCHEMA = {
             { key: 'failMsg',    prompt: '  Fail message [Missing]: ',            default: 'Missing' },
         ],
     },
+    developer_comments: {
+        fields: [
+            { key: 'maxScore', prompt: '  Max score [0]: ', type: 'int', default: 0 },
+            { key: 'requireAiDisclosure', prompt: '  Require an AI-use disclosure in file comments', type: 'boolean', default: false },
+        ],
+    },
     manual: {
         fields: [
             { key: 'maxScore', prompt: '  Max score [0]: ',  type: 'int', default: 0 },

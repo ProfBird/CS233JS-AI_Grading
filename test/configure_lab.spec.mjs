@@ -807,10 +807,16 @@ describe('buildMappingEntry', () => {
         expect(result.maxScore).toBe(1);
     });
 
-    it('builds generic entry for developer_comments', async () => {
-        const rl = mockDriver(['1']);
+    it('builds a developer_comments entry with the AI-disclosure toggle off by default', async () => {
+        const rl = mockDriver(['1', ''], { strict: true });
         const result = await buildMappingEntry(rl, 'developer_comments', rubricRow);
-        expect(result.type).toBe('developer_comments');
+        expect(result).toMatchObject({ type: 'developer_comments', maxScore: 1, requireAiDisclosure: false });
+    });
+
+    it('developer_comments: answering yes turns the AI-disclosure toggle on', async () => {
+        const rl = mockDriver(['1', 'y'], { strict: true });
+        const result = await buildMappingEntry(rl, 'developer_comments', rubricRow);
+        expect(result.requireAiDisclosure).toBe(true);
     });
 
     it('builds generic entry for part_completed', async () => {

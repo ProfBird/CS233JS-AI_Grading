@@ -76,7 +76,7 @@
       "commentCell": "E9",
       "linkCell": "F9",
       "linkUrlType": "citstudent",
-      "type": "manual",
+      "type": "manual", "reviewRow": "game work correctly",
       "maxScore": 3,
       "msg": "NEEDS MANUAL CHECK (Game still works)"
     },
@@ -97,7 +97,7 @@
       "commentCell": "E15",
       "linkCell": "F15",
       "linkUrlType": "citstudent",
-      "type": "manual",
+      "type": "manual", "reviewRow": "game work correctly", "reviewRowOccurrence": 2,
       "maxScore": 8,
       "msg": "NEEDS MANUAL CHECK (Game works correctly)"
     },
@@ -129,7 +129,7 @@
     {
       "cell": "C24",
       "commentCell": "E24",
-      "type": "developer_comments",
+      "type": "developer_comments", "requireAiDisclosure": true, "ignoreCommentsBy": ["Brian Bird"],
       "maxScore": 1
     },
     {

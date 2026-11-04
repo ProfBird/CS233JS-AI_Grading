@@ -55,7 +55,7 @@
     {
       "cell": "D7",
       "commentCell": "F7",
-      "type": "manual",
+      "type": "manual", "reviewRow": "app work correctly",
       "maxScore": 5,
       "msg": "NEEDS MANUAL CHECK: Verify all previous features still work",
       "stockComments": {
@@ -67,7 +67,7 @@
     {
       "cell": "D8",
       "commentCell": "F8",
-      "type": "manual",
+      "type": "manual", "reviewRow": "dedicated to handling external network requests",
       "maxScore": 4,
       "msg": "Check for a dedicated module for making API requests",
       "stockComments": {
@@ -79,7 +79,7 @@
     {
       "cell": "D9",
       "commentCell": "F9",
-      "type": "manual",
+      "type": "manual", "reviewRow": "JSON response parsed",
       "maxScore": 10,
       "msg": "Verify correct data obtained from web API",
       "stockComments": {
@@ -91,7 +91,7 @@
     {
       "cell": "D10",
       "commentCell": "F10",
-      "type": "manual",
+      "type": "manual", "reviewRow": "template render the fetched fields",
       "maxScore": 5,
       "msg": "Check API data displayed correctly on page",
       "stockComments": {
@@ -126,7 +126,7 @@
     {
       "cell": "D13",
       "commentCell": "F13",
-      "type": "developer_comments",
+      "type": "developer_comments", "requireAiDisclosure": false,
       "maxScore": 1,
       "stockComments": {
         "full": "Yes",

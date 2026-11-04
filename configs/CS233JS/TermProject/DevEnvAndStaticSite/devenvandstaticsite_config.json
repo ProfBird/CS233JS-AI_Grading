@@ -45,7 +45,7 @@
     {
       "cell": "D10",
       "commentCell": "F10",
-      "type": "developer_comments",
+      "type": "developer_comments", "requireAiDisclosure": false,
       "maxScore": 1,
       "stockComments": {
         "full": "Yes",

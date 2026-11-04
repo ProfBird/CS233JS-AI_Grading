@@ -169,14 +169,14 @@
     {
       "cell": "C15",
       "commentCell": "E15",
-      "type": "manual",
+      "type": "manual", "reviewRow": "app work correctly",
       "maxScore": 2,
       "msg": "NEEDS MANUAL CHECK (app's original features still work)"
     },
     {
       "cell": "C16",
       "commentCell": "E16",
-      "type": "developer_comments",
+      "type": "developer_comments", "requireAiDisclosure": false,
       "maxScore": 1
     },
     {

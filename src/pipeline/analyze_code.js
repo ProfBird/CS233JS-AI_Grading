@@ -302,37 +302,88 @@ function checkRepoHygiene(extractedDir, hygiene) {
     return { passed: found.length === 0, foundDirs: found };
 }
 
-// "author: …", "Name = …", "@date …" — header-comment keywords. Only ever tested against
-// comment text, never raw code (raw code would match `name = input()` in Python).
-const DEV_COMMENT_KEYWORD_RE = /@(author|name|date)\b|\b(author|name|date)\s*[:=]/i;
+// Developer-header detection. Every pattern is only ever tested against COMMENT text, never
+// raw code (raw code would match `name = input()` in Python).
+//
+// name: an author/name keyword ("Author:", "@author", "Name =", "Written by") or the student's
+//       own first/last name (built per student in checkDeveloperComments).
+const NAME_KEYWORD_RE = /@(?:author|name)\b|\b(author|name|developer|programmer)\s*[:=]|\b(written|created|coded|developed|modified)\s+by\b/i;
+// date: a date keyword or an actual date — 1/5/2026, 2026-01-05, "Jan 5", "January 2026",
+//       or a term like "Fall 2025".
+const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
+const DATE_RE = new RegExp([
+    '@date\\b', '\\bdate\\s*[:=]',
+    '\\b\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}\\b',
+    '\\b\\d{4}-\\d{1,2}-\\d{1,2}\\b',
+    `\\b${MONTH}\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`,
+    `\\b${MONTH},?\\s+\\d{4}\\b`,
+    '\\b(?:fall|winter|spring|summer)\\s+(?:term\\s+)?\\d{4}\\b',
+].join('|'), 'i');
+// ai: an AI-use disclosure ("AI used: Copilot for …", "No AI was used", "Written with ChatGPT").
+//     Distinctive product names match in any case; short/ambiguous ones ("AI", "Cursor",
+//     "Bard", "Grok", "Llama") only as written, so "cursor"/"said" don't count.
+const AI_DISCLOSURE_RES = [
+    /\b(?:chat\s?gpt|gpt[-\s]?\d|copilot|claude|gemini|codex|deepseek|perplexity|windsurf|llms?|artificial intelligence|generative ai)\b/i,
+    /(?<![A-Za-z])(?:AI|A\.I\.)(?![A-Za-z])|\b(?:Cursor|Bard|Grok|Llama)\b/,
+];
+// The AI disclosure must be in the file's header (its first lines), not anywhere: in an AI
+// course, comments deeper in the code legitimately talk about Gemini, LLMs, etc.
+const HEADER_LINES = 40;
+
 
 /**
  * Checks each source file's COMMENTS (adapter.extractComments; docstrings count for Python)
- * for a developer header: a name/author/date keyword or the student's first or last name as
- * a whole word. Empty files (e.g. a blank __init__.py) are not counted.
- * @returns {{ filesChecked: number, filesWith: number, missing: string[] }} — missing holds
- *   posix paths relative to baseDir.
+ * for developer-header elements: `name` (author keyword or the student's first/last name as a
+ * whole word), `date` (date keyword or an actual date), and `ai` (an AI-use disclosure within
+ * the first HEADER_LINES lines). Empty files (e.g. a blank __init__.py) are not counted.
+ *
+ * filesWith/missing use the default rule — a file "has a developer header" when it has a name
+ * or a date — which is what analysis.hasDeveloperComments and a plain developer_comments
+ * mapping use. A mapping with `require` re-evaluates `files` itself.
+ *
+ * opts.ignoreCommentsBy: comment lines containing any of these strings (case-insensitive) are
+ * ignored for all three checks — e.g. the instructor's own header on starter files ("By Brian
+ * Bird, winter term 2026, using GitHub Copilot"), which students often keep and which would
+ * otherwise count as the student's own name/date/AI disclosure. A line that ALSO names the
+ * student is kept: it's the student's own attribution ("Andy Still, Jan 2026, based on code
+ * by Brian Bird").
+ *
+ * @returns {{ filesChecked: number, filesWith: number, missing: string[],
+ *             files: {path: string, name: boolean, date: boolean, ai: boolean}[] }} — paths are
+ *   posix, relative to baseDir.
  */
-function checkDeveloperComments(files, studentName, adapter = jsAdapter, baseDir = '') {
+function checkDeveloperComments(files, studentName, adapter = jsAdapter, baseDir = '', opts = {}) {
     // Whole-word, Unicode-aware name matching; 1-letter parts (initials) are ignored since
     // they'd match nearly anything.
     const nameParts = (studentName || '').split(/\s+/).filter(p => p.length > 1);
     const candidates = [nameParts[0], nameParts.length > 1 ? nameParts[nameParts.length - 1] : null].filter(Boolean);
     const nameRes = candidates.map(n => new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(n)}(?![\\p{L}\\p{N}_])`, 'iu'));
-    const extract = adapter.extractComments || (s => s);
+    const extractRaw = adapter.extractComments || (s => s);
+    const ignore = (opts.ignoreCommentsBy || []).map(s => String(s).toLowerCase()).filter(Boolean);
+    const extract = ignore.length === 0
+        ? extractRaw
+        : code => extractRaw(code).split(/\r?\n/)
+            .filter(line => !ignore.some(s => line.toLowerCase().includes(s)) || nameRes.some(re => re.test(line)))
+            .join('\n');
 
-    const result = { filesChecked: 0, filesWith: 0, missing: [] };
+    const result = { filesChecked: 0, filesWith: 0, missing: [], files: [] };
     for (const file of files) {
         let content;
         try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
         if (!content.trim()) continue;
         result.filesChecked++;
         const comments = extract(content);
-        if (DEV_COMMENT_KEYWORD_RE.test(comments) || nameRes.some(re => re.test(comments))) {
-            result.filesWith++;
-        } else {
-            result.missing.push(toPosix(baseDir ? path.relative(baseDir, file) : file));
-        }
+        const headerComments = extract(content.split(/\r?\n/).slice(0, HEADER_LINES).join('\n'));
+        const relPath = toPosix(baseDir ? path.relative(baseDir, file) : file);
+        const entry = {
+            path: relPath,
+            name: NAME_KEYWORD_RE.test(comments) || nameRes.some(re => re.test(comments)),
+            date: DATE_RE.test(comments),
+            ai: AI_DISCLOSURE_RES.some(re => re.test(headerComments)),
+        };
+        result.files.push(entry);
+        if (entry.name || entry.date) result.filesWith++;
+        else result.missing.push(relPath);
     }
     return result;
 }
@@ -467,7 +518,12 @@ export default async function(students, config, labDir, configDir = null) {
             return adapter.sourceExtensions.some(ext => lf.endsWith(ext));
         });
 
-        analysis.developerComments = checkDeveloperComments(jsFiles, student.name, adapter, student.extractedDir);
+        // ignoreCommentsBy lives on the developer_comments mapping(s); analysis runs before
+        // grading, so collect it here.
+        const ignoreCommentsBy = (config.mappings || [])
+            .filter(m => m.type === 'developer_comments' && Array.isArray(m.ignoreCommentsBy))
+            .flatMap(m => m.ignoreCommentsBy);
+        analysis.developerComments = checkDeveloperComments(jsFiles, student.name, adapter, student.extractedDir, { ignoreCommentsBy });
         analysis.hasDeveloperComments = analysis.developerComments.filesWith > 0;
 
         // Whole-repo feature counts — used by feature-type mappings in generate_grades

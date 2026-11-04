@@ -103,6 +103,33 @@ describe('validateConfig', () => {
         expect(() => validateConfig(config, 'Lab03')).toThrow(/codeReview\.studentNameCell/);
     });
 
+    it('accepts developer_comments scope/require and rejects bad values', () => {
+        const withDev = extra => ({
+            ...validBaseConfig(),
+            mappings: [{ type: 'developer_comments', cell: 'B3', maxScore: 1, ...extra }],
+        });
+        expect(() => validateConfig(withDev({ scope: 'each', require: ['name', 'date', 'ai'] }), 'Lab01')).not.toThrow();
+        expect(() => validateConfig(withDev({ scope: 'every' }), 'Lab01')).toThrow(/scope/);
+        expect(() => validateConfig(withDev({ require: ['name', 'email'] }), 'Lab01')).toThrow(/require/);
+        expect(() => validateConfig(withDev({ require: 'name' }), 'Lab01')).toThrow(/require/);
+        expect(() => validateConfig(withDev({ requireAiDisclosure: true }), 'Lab01')).not.toThrow();
+        expect(() => validateConfig(withDev({ requireAiDisclosure: 'yes' }), 'Lab01')).toThrow(/requireAiDisclosure/);
+        expect(() => validateConfig(withDev({ ignoreCommentsBy: ['Brian Bird'] }), 'Lab01')).not.toThrow();
+        expect(() => validateConfig(withDev({ ignoreCommentsBy: 'Brian Bird' }), 'Lab01')).toThrow(/ignoreCommentsBy/);
+    });
+
+    it('accepts manual reviewRow (string or list) / reviewRowOccurrence and rejects bad values', () => {
+        const withManual = extra => ({
+            ...validBaseConfig(),
+            mappings: [{ type: 'manual', cell: 'B3', maxScore: 1, ...extra }],
+        });
+        expect(() => validateConfig(withManual({ reviewRow: 'game work' }), 'Lab01')).not.toThrow();
+        expect(() => validateConfig(withManual({ reviewRow: ['private', 'collaborators'], reviewRowOccurrence: 2 }), 'Lab01')).not.toThrow();
+        expect(() => validateConfig(withManual({ reviewRow: [] }), 'Lab01')).toThrow(/reviewRow/);
+        expect(() => validateConfig(withManual({ reviewRow: 3 }), 'Lab01')).toThrow(/reviewRow/);
+        expect(() => validateConfig(withManual({ reviewRow: 'x', reviewRowOccurrence: 0 }), 'Lab01')).toThrow(/reviewRowOccurrence/);
+    });
+
     it('accumulates multiple errors into a single thrown message', () => {
         const config = validBaseConfig();
         delete config.rubricName;

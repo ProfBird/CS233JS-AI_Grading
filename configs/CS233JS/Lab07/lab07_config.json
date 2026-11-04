@@ -32,7 +32,7 @@
     {
       "cell": "D10",
       "commentCell": "F10",
-      "type": "manual",
+      "type": "manual", "reviewRow": "Vite proxy configured correctly",
       "maxScore": 5,
       "msg": "Check that vite.config.js contains a server.proxy entry that rewrites the path and injects the API key server-side.",
       "stockComments": {
@@ -44,7 +44,7 @@
     {
       "cell": "D11",
       "commentCell": "F11",
-      "type": "manual",
+      "type": "manual", "reviewRow": "load and run without errors",
       "maxScore": 3,
       "msg": "Run app locally and verify no CORS errors in browser console when making API calls through the Vite proxy.",
       "stockComments": {
@@ -66,7 +66,7 @@
       }
     },
     {
-      "type": "manual",
+      "type": "manual", "reviewRow": "Cloudflare function read the API key",
       "cell": "D14",
       "maxScore": 4,
       "msg": "Check that the Cloudflare function uses env.<KEY_NAME> and does not hardcode the API key.",
@@ -80,7 +80,7 @@
     {
       "cell": "D16",
       "commentCell": "F16",
-      "type": "manual",
+      "type": "manual", "reviewRow": "run correctly on Cloudflare",
       "maxScore": 4,
       "msg": "Verify all features from previous lab still work correctly in the deployed app.",
       "stockComments": {
@@ -115,7 +115,7 @@
     {
       "cell": "D19",
       "commentCell": "F19",
-      "type": "developer_comments",
+      "type": "developer_comments", "requireAiDisclosure": false,
       "maxScore": 1,
       "stockComments": {
         "full": "Yes",
@@ -138,7 +138,7 @@
     {
       "cell": "D22",
       "commentCell": "F22",
-      "type": "manual",
+      "type": "manual", "reviewRow": "files and folders organized well",
       "maxScore": 2,
       "msg": "Check folder structure (functions/, src/js/, etc.) and file naming conventions.",
       "stockComments": {
@@ -150,7 +150,7 @@
     {
       "cell": "D23",
       "commentCell": "F23",
-      "type": "manual",
+      "type": "manual", "reviewRow": "run correctly on Cloudflare",
       "maxScore": 5,
       "msg": "Deploy to Cloudflare and verify the app loads, API calls succeed, no CORS errors, and API key is not visible in browser network tab.",
       "stockComments": {

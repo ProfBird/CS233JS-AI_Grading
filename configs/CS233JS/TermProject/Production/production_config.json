@@ -9,7 +9,7 @@
     {
       "cell": "D6",
       "commentCell": "F6",
-      "type": "manual",
+      "type": "manual", "reviewRow": "features of the web app function correctly",
       "maxScore": 20,
       "msg": "NEEDS MANUAL CHECK: All features are working correctly.",
       "stockComments": {
@@ -21,7 +21,7 @@
     {
       "cell": "D8",
       "commentCell": "F8",
-      "type": "manual",
+      "type": "manual", "reviewRow": "web API called using the fetch API",
       "maxScore": 5,
       "msg": "NEEDS MANUAL CHECK: Fetch API used with .then or await.",
       "stockComments": {
@@ -132,7 +132,7 @@
     {
       "cell": "D20",
       "commentCell": "F20",
-      "type": "manual",
+      "type": "manual", "reviewRow": "layout and styling done in an appealing",
       "maxScore": 3,
       "msg": "NEEDS MANUAL CHECK: Web page has good visual design.",
       "stockComments": {
@@ -168,7 +168,7 @@
     {
       "cell": "D24",
       "commentCell": "F24",
-      "type": "manual",
+      "type": "manual", "reviewRow": "i/o code",
       "maxScore": 6,
       "msg": "NEEDS MANUAL CHECK: Good architectural design with separation of business logic from UI.",
       "stockComments": {
@@ -192,7 +192,7 @@
     {
       "cell": "D26",
       "commentCell": "F26",
-      "type": "developer_comments",
+      "type": "developer_comments", "requireAiDisclosure": false,
       "maxScore": 4,
       "stockComments": {
         "full": "Yes",

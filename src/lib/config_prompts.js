@@ -139,6 +139,10 @@ async function promptFields(driver, fields, currentValues = {}) {
             const def = cur ?? f.default ?? 0;
             const label = f.prompt.replace(/\s*\[.*?\]/, '').replace(/:\s*$/, '').trim();
             result[f.key] = await driver.askInt(label, def);
+        } else if (f.type === 'boolean') {
+            const def = cur ?? f.default ?? false;
+            const label = f.prompt.replace(/\s*\[.*?\]/, '').replace(/[:?]?\s*$/, '?').trim();
+            result[f.key] = await driver.askBoolean(label, def);
         } else if (f.type === 'options') {
             const defIdx = cur !== undefined
                 ? Math.max(0, f.options.findIndex(o => o.value === cur))

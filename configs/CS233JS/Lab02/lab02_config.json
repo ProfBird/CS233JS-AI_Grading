@@ -30,10 +30,10 @@
     { "cell": "C15", "commentCell": "E15", "type": "feature", "featureId": "defaultParams", "maxScore": 2, "successMsg": "Yes", "failMsg": "Missing" },
     { "cell": "C16", "commentCell": "E16", "type": "feature", "featureId": "destructuring", "maxScore": 2, "successMsg": "Yes", "failMsg": "Missing" },
     { "cell": "C17", "commentCell": "E17", "type": "feature", "featureId": "templateStrings", "maxScore": 2, "successMsg": "Yes", "failMsg": "Missing" },
-    { "cell": "C18", "commentCell": "E18", "type": "developer_comments", "maxScore": 1 },
+    { "cell": "C18", "commentCell": "E18", "type": "developer_comments", "requireAiDisclosure": true, "ignoreCommentsBy": ["Brian Bird"], "maxScore": 1 },
     { "cell": "C19", "commentCell": "E19", "type": "code_review", "maxScore": 1 },
     { "cell": "C20", "commentCell": "E20", "type": "build_check", "maxScore": 2 },
-    { "cell": "C21", "commentCell": "E21", "type": "manual", "msg": "NEEDS MANUAL CHECK" },
+    { "cell": "C21", "commentCell": "E21", "type": "manual", "reviewRow": "game work correctly", "maxScore": 6, "msg": "NEEDS MANUAL CHECK" },
     { "cell": "C22", "commentCell": "E22", "type": "url_check", "maxScore": 4, "urlType": "citstudent" },
     { "cell": "C23", "commentCell": "E23", "type": "lint", "maxScore": 2 }
   ]

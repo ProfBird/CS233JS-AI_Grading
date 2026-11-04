@@ -44,7 +44,7 @@ run, so fix them before the first CS 212 lab goes through.
 
 ### 1.1 Loose-file Canvas uploads are never extracted — HIGH (verified by reading) — ✅ FIXED 2026-11-04
 
-> **Fixed:** `acquireCode` now copies a submission's loose uploaded files (hidden files, archives and Word docs skipped) into `extracted_code/` when there's no zip and no repo. This covers both Canvas and Moodle. Not yet handled: a zip plus extra loose files; only the zip is used then.
+> **Fixed:** `acquireCode` now copies a submission's loose uploaded files (hidden files, archives and Word docs skipped) into `extracted_code/` when there's no zip and no repo, and merges loose files uploaded alongside a zip into its extracted contents (the zip wins a name collision). This covers both Canvas and Moodle.
 
 `extract_code_canvas.js:37-47` `downloadAttachments` downloads every attachment but records only
 `.zip` files. `importOneSubmission` then calls `acquireCode`, which has no zip and no GitHub
@@ -79,9 +79,9 @@ even when the student filled the column in.
 **Fix direction:** match `/prod|release|final/i`, and/or make the header regex configurable via
 `config.codeReview.prodHeader` so a course can declare its own wording.
 
-### 1.3 Spacer rows in CS 212 forms misalign `manual` mappings — HIGH (verified) — ✅ FIXED (opt-in) 2026-11-04
+### 1.3 Spacer rows in CS 212 forms misalign `manual` mappings — HIGH (verified) — ✅ FIXED 2026-11-04
 
-> **Fixed via opt-in:** each review item now carries its criterion `label`, and a `manual` mapping can set `reviewRow: "<criterion text>"` to score from that row regardless of position. Positional `_reviewIndex` is unchanged, because the CS233JS forms have the same spacer rows. Silently re-indexing would have changed which review answers auto-score existing CS233JS rubric rows. Existing CS233JS `manual` mappings still hit spacer rows positionally, so adding `reviewRow` to them, or confirming they're meant as pure placeholders, is a follow-up.
+> **Fixed:** review items now come from every Beta/Prod-headed table (multi-table forms such as CS233JS Lab03/Lab04 were invisible beyond the densest table) and carry their criterion `label`. A `manual` mapping selects its row with `reviewRow` (substring, or an array for a rubric row spanning several questions, plus `reviewRowOccurrence` for repeated questions). Positional matching was removed: without `reviewRow` a `manual` mapping is a pure placeholder. Every CS233JS `manual` mapping was reviewed against its course-materials review form. 22 now carry a verified `reviewRow`; 6 have no matching review question and stay placeholders (Lab04 TODOs, TermProject error handling, styling, UI friendliness, folder structure, and DevEnv layout). Lab02's mapping also lacked a `maxScore`, which would have scored a review "Yes" as `undefined`; it's now 6, matching the rubric.
 
 `parseTableScores` pushes **every** table row as an item, and `generate_grades.js:1022-1027`
 maps the *n*-th `manual` mapping to `items[n]`. CS 212 forms have blank continuation rows under
@@ -100,7 +100,7 @@ of relying on position. Position-based alignment is fragile even for CS233JS whe
 
 ### 1.4 `developer_comments` passes almost every Python submission — HIGH (inflates scores) — ✅ FIXED 2026-11-04
 
-> **Fixed:** the check now reads comment text only, using a new `extractComments` on every adapter built from the same grammar as `stripComments`; Python docstrings count. Names match as whole words, and per-file results are recorded in `analysis.developerComments`. A mapping may set `scope: "each"` to require a header in every non-empty source file. The default stays `"any"`, so CS233JS keeps its current policy. Two fixes along the way: a submitted `.venv`/`venv`/`__pycache__` is excluded from analysis, and source files with "dist" in their name (e.g. `distance.py`) are no longer dropped. The AI-disclosure token is not checked yet.
+> **Fixed:** the check now reads comment text only, using a new `extractComments` on every adapter built from the same grammar as `stripComments`; Python docstrings count. Per file it records name, date and AI-use disclosure (AI disclosure only in the file's first 40 lines). A mapping can `require` any of `name`/`date`/`ai` and set `scope: "each"`; the default stays name-or-date in any file. A boolean `requireAiDisclosure` turns the AI requirement on or off per assignment (on for CS233JS Lab01–04, whose forms ask for it), and `ignoreCommentsBy` keeps the instructor's starter-file header from counting as the student's. Two fixes along the way: a submitted `.venv`/`venv`/`__pycache__` is excluded from analysis, and source files with "dist" in their name (e.g. `distance.py`) are no longer dropped.
 
 `analyze_code.js:436-440` sets `hasDeveloperComments` if **any** source file matches
 `\b(name|author|date)\s*[:=]` or contains the student's first or last name as a substring. In

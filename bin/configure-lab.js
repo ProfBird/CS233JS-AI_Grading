@@ -58,6 +58,7 @@ function buildTypeRef() {
             .filter(f => f.key !== 'maxScore')
             .map(f => {
                 if (f.type === 'options') return `${f.key} (${f.options.map(o => o.value).join('|')})`;
+                if (f.type === 'boolean') return `${f.key} (true|false)`;
                 return f.required ? `${f.key} (required)` : f.key;
             });
         const extras = extraFields.length ? `  extra: ${extraFields.join(', ')}` : '';
@@ -213,7 +214,10 @@ function mergeLLMResponse(llmDraft, scoringRows, knownFeatureIds = new Set()) {
         if (schema.fixed) Object.assign(entry, schema.fixed);
         for (const f of schema.fields) {
             if (f.key === 'maxScore') continue;
-            if (src[f.key] !== undefined) entry[f.key] = src[f.key];
+            if (src[f.key] !== undefined) {
+                // An LLM draft may return "true"/"false" as strings; config validation wants booleans.
+                entry[f.key] = f.type === 'boolean' ? (src[f.key] === true || src[f.key] === 'true') : src[f.key];
+            }
             else if (f.type === 'options') entry[f.key] = f.options[0].value;
             else if (f.default !== undefined) entry[f.key] = f.default;
         }

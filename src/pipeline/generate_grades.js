@@ -108,26 +108,71 @@ registerHandler('apps_in_repo', (map, student) => {
     return { score: 0, comment: 'GitHub URL provided but repo could not be cloned' };
 });
 
-// Default scope "any": full credit when at least one source file has a developer header
-// comment. scope "each" requires every (non-empty) source file to have one — for rubrics that
-// say "name and date in each file" — and lists the files missing it.
+// Header elements a developer_comments mapping can require (see analyze_code.js's
+// checkDeveloperComments for how each is detected), with their labels for comments.
+const DEV_HEADER_LABELS = { name: 'name', date: 'date', ai: 'AI use' };
+
+// The per-file checks a developer_comments mapping applies: the `require` elements (or, by
+// default, "a name OR a date"), plus an AI-use disclosure when requireAiDisclosure is true.
+function devHeaderChecks(map) {
+    const require = Array.isArray(map.require) && map.require.length > 0 ? map.require : null;
+    const checks = require
+        ? require.map(k => ({ key: k, label: DEV_HEADER_LABELS[k] || k, test: f => !!f[k] }))
+        : [{ key: 'name/date', label: 'name/date', test: f => f.name || f.date }];
+    if (map.requireAiDisclosure === true && !checks.some(c => c.key === 'ai')) {
+        checks.push({ key: 'ai', label: DEV_HEADER_LABELS.ai, test: f => !!f.ai });
+    }
+    return checks;
+}
+
+// developer_comments — scores analysis.developerComments.
+//   require:             optional array of header elements ("name", "date", "ai") a file's
+//                        comments must ALL contain. Absent = the default rule: a name OR a date.
+//   requireAiDisclosure: true adds an AI-use disclosure ("ai") to whatever else is required —
+//                        the on/off switch for review forms that ask for "a description of any
+//                        AI used (and how)". false/absent = not required.
+//   scope:               "any" (default) — at least one source file passes; "each" — every
+//                        non-empty source file must pass (for rubrics that say "in each file"),
+//                        and the comment lists the files that don't, with what each is missing.
 registerHandler('developer_comments', (map, student) => {
     const a = student.analysis || {};
+    const checks = devHeaderChecks(map);
+
+    // Default rule, default scope, no AI requirement: the long-standing behavior.
+    if (checks.length === 1 && checks[0].key === 'name/date' && map.scope !== 'each') {
+        return a.hasDeveloperComments
+            ? { score: map.maxScore, comment: 'Yes' }
+            : { score: 0, comment: 'Missing name/date comments' };
+    }
+
+    const what = checks.map(c => c.label).join('/');
+    const dc = a.developerComments;
+    if (!dc || !dc.files || dc.filesChecked === 0) return { score: 0, comment: `Missing ${what} comments` };
+
+    const gapsOf = f => checks.filter(c => !c.test(f)).map(c => c.label);
+    const failing = dc.files.map(f => ({ path: f.path, gaps: gapsOf(f) })).filter(x => x.gaps.length > 0);
+
     if (map.scope === 'each') {
-        const dc = a.developerComments;
-        if (!dc || dc.filesChecked === 0) return { score: 0, comment: 'Missing name/date comments' };
-        if (dc.missing.length === 0) return { score: map.maxScore, comment: 'Yes' };
-        const shown = dc.missing.slice(0, 5).join(', ') + (dc.missing.length > 5 ? `, +${dc.missing.length - 5} more` : '');
+        if (failing.length === 0) return { score: map.maxScore, comment: 'Yes' };
+        const shown = failing.slice(0, 5).map(x => `${x.path} (${x.gaps.join(', ')})`).join('; ')
+            + (failing.length > 5 ? `; +${failing.length - 5} more` : '');
         return {
             score: 0,
-            comment: `Missing name/date comments in ${dc.missing.length} of ${dc.filesChecked} files: ${shown}`,
+            comment: `Missing ${what} comments in ${failing.length} of ${dc.filesChecked} files: ${shown}`,
             keepComment: true,
         };
     }
-    if (a.hasDeveloperComments) {
-        return { score: map.maxScore, comment: 'Yes' };
-    }
-    return { score: 0, comment: 'Missing name/date comments' };
+
+    // scope "any": one file must pass every check.
+    if (failing.length < dc.files.length) return { score: map.maxScore, comment: 'Yes' };
+    const absent = checks.filter(c => !dc.files.some(c.test)).map(c => c.label);
+    return {
+        score: 0,
+        comment: absent.length > 0
+            ? `No ${absent.join('/')} found in any file's header comments`
+            : `No single file's header comments include all of: ${what}`,
+        keepComment: true,
+    };
 });
 
 registerHandler('code_review', (map, student) => {
@@ -429,56 +474,64 @@ registerHandler('run_check', (map, student) => {
     return { score: 0, comment: errors.length ? errors.join('; ') : 'Program check failed', keepComment: true };
 });
 
-// Selects the code-review row a manual mapping reads. map.reviewRow (a case-insensitive
-// substring of the criterion text) is preferred: positional _reviewIndex counts every table
-// row, including the blank "list errors" spacer rows most review forms have, so it rarely
-// lines up with the intended criterion. Returns { item } or { missing: true } when a
-// configured reviewRow matches nothing.
-function findReviewItem(map, cr) {
-    if (!(cr && cr.found && cr.items)) return {};
-    if (map.reviewRow) {
-        const needle = String(map.reviewRow).toLowerCase();
-        const item = cr.items.find(it => it.label && it.label.toLowerCase().includes(needle));
-        return item ? { item } : { missing: true };
+// Finds the code-review rows a manual mapping reads, by label. map.reviewRow is a
+// case-insensitive substring of the criterion text, or an array of them (a rubric row that
+// covers several review questions). map.reviewRowOccurrence (1-based, default 1) picks a
+// later match when a form repeats a question — e.g. "Does the game work correctly?" in both
+// its Part 1 and Part 2 tables. Returns { items } or { missing: [unmatched texts] }.
+function findReviewItems(map, cr) {
+    const needles = Array.isArray(map.reviewRow) ? map.reviewRow : [map.reviewRow];
+    const occurrence = Math.max(1, map.reviewRowOccurrence || 1);
+    const items = [];
+    const missing = [];
+    for (const needle of needles) {
+        const lower = String(needle).toLowerCase();
+        const matches = cr.items.filter(it => it.label && it.label.toLowerCase().includes(lower));
+        if (matches.length >= occurrence) items.push(matches[occurrence - 1]);
+        else missing.push(needle);
     }
-    if (map._reviewIndex !== undefined && map._reviewIndex < cr.items.length) {
-        return { item: cr.items[map._reviewIndex] };
-    }
-    return {};
+    return missing.length > 0 ? { missing } : { items };
 }
 
+// What one review row says, or null when it can't be auto-scored (nothing usable filled in).
+function reviewVerdict(item, maxScore) {
+    // Production score as a fraction (e.g. "4/5")
+    if (item.prodScore !== null) {
+        return { score: Math.min(item.prodScore, maxScore || Infinity), tag: `Production score: ${item.prodScore}` };
+    }
+    // Production cell filled with an interpretable Y/N/Yes/No. A cell filled with something
+    // ambiguous (e.g. "-", "NA", a note) has affirmative === null — don't auto-score it 0;
+    // fall through to the beta score / manual-review path.
+    if (item.prodFilled && item.prodAffirmative !== null) {
+        return { score: item.prodAffirmative ? (maxScore ?? 0) : 0, tag: item.prodAffirmative ? 'Production: Yes' : 'Production: No' };
+    }
+    if (item.betaScore !== null) {
+        return { score: Math.min(item.betaScore, maxScore || Infinity), tag: `Beta score: ${item.betaScore}` };
+    }
+    return null;
+}
+
+// manual — a rubric row a human grades. Without reviewRow it's a pure placeholder (maxScore +
+// msg, for the grader to confirm). With reviewRow, it's pre-scored from the student's code
+// review form: the production column, falling back to a beta fraction. For several rows,
+// every one must be answerable; the score is the lowest (any "No" → 0).
 registerHandler('manual', (map, student) => {
-    const { item, missing } = findReviewItem(map, student.codeReview);
+    const msg = map.msg || 'NEEDS MANUAL CHECK';
+    const placeholder = { score: map.maxScore ?? 0, comment: msg };
+    const cr = student.codeReview;
+    if (!map.reviewRow || !(cr && cr.found && cr.items)) return placeholder;
+
+    const { items, missing } = findReviewItems(map, cr);
     if (missing) {
-        return {
-            score: map.maxScore ?? 0,
-            comment: `${map.msg || 'NEEDS MANUAL CHECK'} [review row "${map.reviewRow}" not found on code review form]`,
-        };
+        const what = missing.map(m => `"${m}"`).join(', ');
+        return { score: map.maxScore ?? 0, comment: `${msg} [review row ${what} not found on code review form]` };
     }
-    if (item) {
-        // Production score as a fraction (e.g. "4/5")
-        if (item.prodScore !== null) {
-            const score = Math.min(item.prodScore, map.maxScore || Infinity);
-            const comment = (map.msg || 'NEEDS MANUAL CHECK') + ` [Production score: ${item.prodScore}]`;
-            return { score, comment };
-        }
-        // Production cell filled with an interpretable Y/N/Yes/No. A cell filled with
-        // something ambiguous (e.g. "-", "NA", a note) has affirmative === null — don't
-        // auto-score it 0; fall through to the beta score / manual-review path below.
-        if (item.prodFilled && item.prodAffirmative !== null) {
-            const score = item.prodAffirmative ? map.maxScore : 0;
-            const label = item.prodAffirmative ? 'Production: Yes' : 'Production: No';
-            const comment = (map.msg || 'NEEDS MANUAL CHECK') + ` [${label}]`;
-            return { score, comment };
-        }
-        // Fall back to beta score
-        if (item.betaScore !== null) {
-            const score = Math.min(item.betaScore, map.maxScore || Infinity);
-            const comment = (map.msg || 'NEEDS MANUAL CHECK') + ` [Beta score: ${item.betaScore}]`;
-            return { score, comment };
-        }
-    }
-    return { score: map.maxScore ?? 0, comment: map.msg || 'NEEDS MANUAL CHECK' };
+    const verdicts = items.map(it => reviewVerdict(it, map.maxScore));
+    if (verdicts.some(v => v === null)) return placeholder;
+    return {
+        score: Math.min(...verdicts.map(v => v.score)),
+        comment: `${msg} [${verdicts.map(v => v.tag).join('; ')}]`,
+    };
 });
 
 // npm_package: checks that a package/module is imported in source. The underlying logic
@@ -1052,14 +1105,6 @@ export default async function(students, config, labDir, opts = {}) {
             aiModel = opts.aiModel || detected;
             const source = opts.aiModel ? 'specified' : 'auto-detected';
             console.log(`  AI comments: using model "${aiModel}" (${source}).`);
-        }
-    }
-
-    // Pre-compute review score indices for manual mappings
-    let reviewIdx = 0;
-    for (const map of config.mappings) {
-        if (map.type === 'manual') {
-            map._reviewIndex = reviewIdx++;
         }
     }
 

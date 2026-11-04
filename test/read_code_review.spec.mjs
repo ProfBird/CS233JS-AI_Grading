@@ -93,9 +93,11 @@ describe('parseTableScores — productionCompleted across multiple score tables'
         );
         const result = parseTableScores(primary + second);
         expect(result.productionCompleted).toBe(true);
-        // items stay sourced from the PRIMARY table only — preserves _reviewIndex alignment.
-        expect(result.items).toHaveLength(5);
-        expect(result.items.every(i => !i.prodFilled)).toBe(true);
+        // items come from EVERY Beta/Prod-headed table, in document order, so reviewRow can
+        // find criteria in any of them.
+        expect(result.items.map(i => i.label)).toEqual(['q1', 'q2', 'q3', 'q4', 'q5', 's1', 's2']);
+        expect(result.items.slice(0, 5).every(i => !i.prodFilled)).toBe(true);
+        expect(result.items.slice(5).every(i => i.prodFilled)).toBe(true);
     });
 
     it('does not treat a metadata table date (6/5/2026) as a filled prod column', () => {

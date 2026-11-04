@@ -73,7 +73,7 @@
     {
       "cell": "C9",
       "commentCell": "E9",
-      "type": "manual",
+      "type": "manual", "reviewRow": "app work correctly",
       "maxScore": 8,
       "msg": "NEEDS MANUAL CHECK (app functions correctly)"
     },
@@ -115,7 +115,7 @@
     {
       "cell": "C15",
       "commentCell": "E15",
-      "type": "developer_comments",
+      "type": "developer_comments", "requireAiDisclosure": true, "ignoreCommentsBy": ["Brian Bird"],
       "maxScore": 1
     },
     {
@@ -136,14 +136,14 @@
     {
       "cell": "C21",
       "commentCell": "E21",
-      "type": "manual",
+      "type": "manual", "reviewRow": ["repository private", "collaborators"],
       "maxScore": 2,
       "msg": "NEEDS MANUAL CHECK (private repo, collaborators added)"
     },
     {
       "cell": "C22",
       "commentCell": "E22",
-      "type": "manual",
+      "type": "manual", "reviewRow": ["organized in a clear", "files named appropriately"],
       "maxScore": 2,
       "msg": "NEEDS MANUAL CHECK (folder/file organization and naming)"
     },

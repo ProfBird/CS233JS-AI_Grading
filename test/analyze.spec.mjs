@@ -269,7 +269,7 @@ describe('checkDeveloperComments', () => {
 
     it('Python: ignores `name = input()` and dict keys in code', () => {
         const f = write('main.py', 'name = input("Name: ")\nrecord = {"date": today, "author": me}\n');
-        expect(checkDeveloperComments([f], 'Ana Ruiz', py, dir)).toEqual({ filesChecked: 1, filesWith: 0, missing: ['main.py'] });
+        expect(checkDeveloperComments([f], 'Ana Ruiz', py, dir)).toMatchObject({ filesChecked: 1, filesWith: 0, missing: ['main.py'] });
     });
 
     it('Python: accepts a # comment header or a module docstring', () => {
@@ -288,7 +288,61 @@ describe('checkDeveloperComments', () => {
         const bad = write('tests.py', 'def test_x():\n    assert True\n');
         const empty = write('__init__.py', '');
         expect(checkDeveloperComments([ok, bad, empty], 'Ana Ruiz', py, dir))
-            .toEqual({ filesChecked: 2, filesWith: 1, missing: ['tests.py'] });
+            .toMatchObject({ filesChecked: 2, filesWith: 1, missing: ['tests.py'] });
+    });
+
+    it('records name, date and AI-use disclosure per file', () => {
+        const full = write('engine.py', '"""Inference engine.\nAuthor: Ana Ruiz, 1/12/2026\nAI used: GitHub Copilot for the test cases.\n"""\n');
+        const noAi = write('rules.py', '# Ana Ruiz -- Fall 2025\nRULES = []\n');
+        const noneAi = write('ui.py', '# Written by Ana Ruiz, Jan 12\n# No AI was used.\n');
+        const { files } = checkDeveloperComments([full, noAi, noneAi], 'Ana Ruiz', py, dir);
+        expect(files).toEqual([
+            { path: 'engine.py', name: true, date: true, ai: true },
+            { path: 'rules.py', name: true, date: true, ai: false },
+            { path: 'ui.py', name: true, date: true, ai: true },   // "No AI was used" is a disclosure
+        ]);
+    });
+
+    it('does not count AI words in code, ordinary words, or comments past the header', () => {
+        const body = Array.from({ length: 50 }, (_, i) => `x${i} = ${i}`).join('\n');
+        const f = write('game.py',
+            '# Ana Ruiz 2026-01-12\n# Moves the cursor; said the player\nclient = genai.Client()  # x\n'
+            + body + '\n# Ask Gemini for the AI opponent move\n');
+        expect(checkDeveloperComments([f], 'Ana Ruiz', py, dir).files[0].ai).toBe(false);
+    });
+
+    it('JS: detects an AI disclosure in a block-comment header', () => {
+        const f = write('app.js', '/*\n * Zoey McKee 3/2/2026\n * Used ChatGPT to debug the fetch call\n */\nlet x = 1;\n');
+        expect(checkDeveloperComments([f], 'Zoey McKee', resolveAdapter({}), dir).files[0])
+            .toEqual({ path: 'app.js', name: true, date: true, ai: true });
+    });
+
+    it('ignoreCommentsBy drops the instructor\'s starter-file header lines', () => {
+        const f = write('index.js', '// By Brian Bird, winter term 2026, using GitHub Copilot and Cursor.\nlet x = 1;\n');
+        const js = resolveAdapter({});
+        expect(checkDeveloperComments([f], 'Ana Ruiz', js, dir).files[0]).toMatchObject({ date: true, ai: true });
+        expect(checkDeveloperComments([f], 'Ana Ruiz', js, dir, { ignoreCommentsBy: ['brian bird'] }).files[0])
+            .toEqual({ path: 'index.js', name: false, date: false, ai: false });
+    });
+
+    it('ignoreCommentsBy keeps the student\'s own lines in the same header', () => {
+        const f = write('index.js', '/*\n * Starter by Brian Bird using Copilot\n * Modified by Ana Ruiz 2/1/2026 -- no AI used\n */\n');
+        expect(checkDeveloperComments([f], 'Ana Ruiz', resolveAdapter({}), dir, { ignoreCommentsBy: ['Brian Bird'] }).files[0])
+            .toEqual({ path: 'index.js', name: true, date: true, ai: true });
+    });
+
+    it('ignoreCommentsBy keeps a line that also names the student (their own attribution)', () => {
+        const f = write('index.js', '// Andy Still Jan. 2026 based on code by Brian Bird\n');
+        expect(checkDeveloperComments([f], 'Andy Still', resolveAdapter({}), dir, { ignoreCommentsBy: ['Brian Bird'] }).files[0])
+            .toEqual({ path: 'index.js', name: true, date: true, ai: false });
+    });
+
+    it('analysis reads ignoreCommentsBy from the developer_comments mapping', async () => {
+        write('main.js', '// By Brian Bird, Fall 2025, with ChatGPT\n');
+        const students = [{ name: 'Ana Ruiz', extractedDir: dir, urls: {} }];
+        const config = { analysis: { features: [] }, mappings: [{ type: 'developer_comments', ignoreCommentsBy: ['Brian Bird'] }] };
+        await analyzeStudents(students, config, dir);
+        expect(students[0].analysis.developerComments.files[0]).toMatchObject({ date: false, ai: false });
     });
 
     it('excludes a submitted .venv from analysis', async () => {
@@ -297,7 +351,7 @@ describe('checkDeveloperComments', () => {
         write('main.py', '# Ana Ruiz\n');
         const students = [{ name: 'Ana Ruiz', extractedDir: dir, urls: {} }];
         await analyzeStudents(students, { language: 'python', analysis: { features: [] } }, dir);
-        expect(students[0].analysis.developerComments).toEqual({ filesChecked: 1, filesWith: 1, missing: [] });
+        expect(students[0].analysis.developerComments).toMatchObject({ filesChecked: 1, filesWith: 1, missing: [] });
     });
 });
 

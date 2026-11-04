@@ -124,8 +124,8 @@ describe('name_check handler', () => {
 // ── manual handler: ambiguous-but-filled prod cell must not auto-score 0 ──────
 describe('manual handler — prod cell filled but not affirmative', () => {
     const handler = getHandler('manual');
-    const itemStudent = item => ({ codeReview: { found: true, items: [item] } });
-    const map = { type: 'manual', maxScore: 5, msg: 'CHECK', _reviewIndex: 0 };
+    const itemStudent = item => ({ codeReview: { found: true, items: [{ label: 'Does it work?', ...item }] } });
+    const map = { type: 'manual', maxScore: 5, msg: 'CHECK', reviewRow: 'does it work' };
 
     it('falls through to the beta score (not 0) when prod is filled with "-"/"NA" (affirmative null)', () => {
         const r = handler(map, itemStudent({ betaScore: 4, prodScore: null, prodFilled: true, prodAffirmative: null }));
@@ -748,25 +748,107 @@ describe('developer_comments handler', () => {
         expect(getHandler('developer_comments')({ maxScore: 1 }, {})).toEqual({ score: 0, comment: 'Missing name/date comments' });
     });
 
+    // analysis.developerComments as produced by checkDeveloperComments.
+    const dc = (...files) => ({
+        filesChecked: files.length,
+        files: files.map(([path, name, date, ai]) => ({ path, name, date, ai })),
+    });
+
     describe('scope: "each"', () => {
         const map = { maxScore: 2, scope: 'each' };
 
-        it('gives full credit only when every file has a header comment', () => {
-            const analysis = { hasDeveloperComments: true, developerComments: { filesChecked: 3, filesWith: 3, missing: [] } };
+        it('gives full credit only when every file has a name or date', () => {
+            const analysis = { developerComments: dc(['a.py', true, false, false], ['b.py', false, true, false]) };
             expect(handler(map, { analysis })).toEqual({ score: 2, comment: 'Yes' });
         });
 
         it('scores 0 and names the files missing one (kept through stock comments)', () => {
-            const analysis = { hasDeveloperComments: true, developerComments: { filesChecked: 3, filesWith: 1, missing: ['rules.py', 'tests.py'] } };
+            const analysis = { developerComments: dc(['main.py', true, true, false], ['rules.py', false, false, false], ['tests.py', false, false, true]) };
             expect(handler(map, { analysis })).toEqual({
                 score: 0,
-                comment: 'Missing name/date comments in 2 of 3 files: rules.py, tests.py',
+                comment: 'Missing name/date comments in 2 of 3 files: rules.py (name/date); tests.py (name/date)',
                 keepComment: true,
             });
         });
 
         it('scores 0 when there were no source files to check', () => {
             expect(handler(map, { analysis: {} })).toEqual({ score: 0, comment: 'Missing name/date comments' });
+        });
+    });
+
+    describe('requireAiDisclosure toggle', () => {
+        it('true: default name/date rule plus AI use, per file', () => {
+            const map = { maxScore: 1, scope: 'each', requireAiDisclosure: true };
+            const analysis = { developerComments: dc(['main.js', true, true, true], ['util.js', true, false, false]) };
+            expect(handler(map, { analysis })).toEqual({
+                score: 0,
+                comment: 'Missing name/date/AI use comments in 1 of 2 files: util.js (AI use)',
+                keepComment: true,
+            });
+        });
+
+        it('true with default scope: one file with a name/date and an AI disclosure is enough', () => {
+            const map = { maxScore: 1, requireAiDisclosure: true };
+            const ok = { developerComments: dc(['main.js', true, false, true], ['util.js', false, false, false]) };
+            expect(handler(map, { analysis: ok })).toEqual({ score: 1, comment: 'Yes' });
+            const noAi = { hasDeveloperComments: true, developerComments: dc(['main.js', true, true, false]) };
+            expect(handler(map, { analysis: noAi })).toEqual({
+                score: 0, comment: "No AI use found in any file's header comments", keepComment: true,
+            });
+        });
+
+        it('false (or absent) keeps the long-standing name-or-date behavior', () => {
+            const analysis = { hasDeveloperComments: true, developerComments: dc(['main.js', true, true, false]) };
+            expect(handler({ maxScore: 1, requireAiDisclosure: false }, { analysis })).toEqual({ score: 1, comment: 'Yes' });
+            expect(handler({ maxScore: 1 }, { analysis })).toEqual({ score: 1, comment: 'Yes' });
+        });
+
+        it('combines with require without double-counting ai', () => {
+            const map = { maxScore: 1, scope: 'each', require: ['name', 'ai'], requireAiDisclosure: true };
+            const analysis = { developerComments: dc(['main.js', true, false, false]) };
+            expect(handler(map, { analysis }).comment).toBe('Missing name/AI use comments in 1 of 1 files: main.js (AI use)');
+        });
+    });
+
+    describe('require (e.g. CS212: name, date and AI-use disclosure)', () => {
+        const require = ['name', 'date', 'ai'];
+
+        it('scope each: lists each file with exactly what it is missing', () => {
+            const map = { maxScore: 2, scope: 'each', require };
+            const analysis = { developerComments: dc(['main.py', true, true, true], ['rules.py', true, true, false], ['tests.py', false, true, false]) };
+            expect(handler(map, { analysis })).toEqual({
+                score: 0,
+                comment: 'Missing name/date/AI use comments in 2 of 3 files: rules.py (AI use); tests.py (name, AI use)',
+                keepComment: true,
+            });
+        });
+
+        it('scope each: full credit when every file has all three', () => {
+            const map = { maxScore: 2, scope: 'each', require };
+            const analysis = { developerComments: dc(['main.py', true, true, true], ['rules.py', true, true, true]) };
+            expect(handler(map, { analysis })).toEqual({ score: 2, comment: 'Yes' });
+        });
+
+        it('scope any: full credit when one file has all required elements', () => {
+            const map = { maxScore: 1, require };
+            const analysis = { developerComments: dc(['main.py', true, true, true], ['rules.py', false, false, false]) };
+            expect(handler(map, { analysis })).toEqual({ score: 1, comment: 'Yes' });
+        });
+
+        it('scope any: says which element no file has', () => {
+            const map = { maxScore: 1, require };
+            const analysis = { developerComments: dc(['main.py', true, true, false], ['rules.py', true, false, false]) };
+            expect(handler(map, { analysis })).toEqual({
+                score: 0, comment: "No AI use found in any file's header comments", keepComment: true,
+            });
+        });
+
+        it('scope any: elements split across files do not count as one header', () => {
+            const map = { maxScore: 1, require: ['name', 'ai'] };
+            const analysis = { developerComments: dc(['main.py', true, false, false], ['rules.py', false, false, true]) };
+            expect(handler(map, { analysis })).toEqual({
+                score: 0, comment: "No single file's header comments include all of: name/AI use", keepComment: true,
+            });
         });
     });
 });
@@ -1049,32 +1131,32 @@ describe('manual handler', () => {
     });
 
     it('uses production score when available', () => {
-        const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
-        const student = { codeReview: { found: true, items: [{ betaScore: 4, prodScore: 5 }] } };
+        const map = { maxScore: 5, msg: 'Check feature', reviewRow: 'feature works' };
+        const student = { codeReview: { found: true, items: [{ label: 'Feature works?', betaScore: 4, prodScore: 5 }] } };
         expect(handler(map, student)).toEqual({ score: 5, comment: 'Check feature [Production score: 5]' });
     });
 
     it('falls back to beta score when production is empty', () => {
-        const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
-        const student = { codeReview: { found: true, items: [{ betaScore: 4, prodScore: null, prodFilled: false }] } };
+        const map = { maxScore: 5, msg: 'Check feature', reviewRow: 'feature works' };
+        const student = { codeReview: { found: true, items: [{ label: 'Feature works?', betaScore: 4, prodScore: null, prodFilled: false }] } };
         expect(handler(map, student)).toEqual({ score: 4, comment: 'Check feature [Beta score: 4]' });
     });
 
     it('caps review score at maxScore', () => {
-        const map = { maxScore: 3, msg: 'Check feature', _reviewIndex: 0 };
-        const student = { codeReview: { found: true, items: [{ betaScore: 4, prodScore: 5 }] } };
+        const map = { maxScore: 3, msg: 'Check feature', reviewRow: 'feature works' };
+        const student = { codeReview: { found: true, items: [{ label: 'Feature works?', betaScore: 4, prodScore: 5 }] } };
         expect(handler(map, student)).toEqual({ score: 3, comment: 'Check feature [Production score: 5]' });
     });
 
     it('uses maxScore when production cell says Y', () => {
-        const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
-        const student = { codeReview: { found: true, items: [{ betaScore: 3, prodScore: null, prodFilled: true, prodAffirmative: true }] } };
+        const map = { maxScore: 5, msg: 'Check feature', reviewRow: 'feature works' };
+        const student = { codeReview: { found: true, items: [{ label: 'Feature works?', betaScore: 3, prodScore: null, prodFilled: true, prodAffirmative: true }] } };
         expect(handler(map, student)).toEqual({ score: 5, comment: 'Check feature [Production: Yes]' });
     });
 
     it('returns 0 when production cell says N', () => {
-        const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
-        const student = { codeReview: { found: true, items: [{ betaScore: 3, prodScore: null, prodFilled: true, prodAffirmative: false }] } };
+        const map = { maxScore: 5, msg: 'Check feature', reviewRow: 'feature works' };
+        const student = { codeReview: { found: true, items: [{ label: 'Feature works?', betaScore: 3, prodScore: null, prodFilled: true, prodAffirmative: false }] } };
         expect(handler(map, student)).toEqual({ score: 0, comment: 'Check feature [Production: No]' });
     });
 
@@ -1087,8 +1169,12 @@ describe('manual handler', () => {
         ] } };
 
         it('scores from the row whose label contains reviewRow (case-insensitive), ignoring position', () => {
-            const map = { maxScore: 5, msg: 'Interactive', reviewRow: 'INTERACTIVE', _reviewIndex: 0 };
+            const map = { maxScore: 5, msg: 'Interactive', reviewRow: 'INTERACTIVE' };
             expect(handler(map, student)).toEqual({ score: 0, comment: 'Interactive [Production: No]' });
+        });
+
+        it('is a pure placeholder without reviewRow, even when a review exists', () => {
+            expect(handler({ maxScore: 5, msg: 'Check' }, student)).toEqual({ score: 5, comment: 'Check' });
         });
 
         it('flags for manual review (placeholder maxScore) when reviewRow matches no criterion', () => {
@@ -1102,6 +1188,39 @@ describe('manual handler', () => {
         it('falls back to the plain placeholder when there is no code review at all', () => {
             const map = { maxScore: 5, msg: 'Check', reviewRow: 'interactive' };
             expect(handler(map, {})).toEqual({ score: 5, comment: 'Check' });
+        });
+    });
+
+    describe('reviewRow lists and repeated questions', () => {
+        const row = (label, yes) => ({ label, betaScore: null, prodScore: null, prodFilled: true, prodAffirmative: yes });
+        const student = { codeReview: { found: true, items: [
+            row('Is the repository private?', true),
+            row('Have lab partners and the instructor been added as collaborators?', false),
+            row('Does the game work correctly? (list any issues)', true),    // Part 1 table
+            row('Does the game work correctly? (list any issues)', false),   // Part 2 table
+        ] } };
+
+        it('a list of rows scores full only when every row is Yes', () => {
+            const map = { maxScore: 2, msg: 'Repo', reviewRow: ['repository private', 'collaborators'] };
+            expect(handler(map, student)).toEqual({ score: 0, comment: 'Repo [Production: Yes; Production: No]' });
+            const both = { ...map, reviewRow: ['repository private', 'game work'] };
+            expect(handler(both, student)).toEqual({ score: 2, comment: 'Repo [Production: Yes; Production: Yes]' });
+        });
+
+        it('a list with an unmatched row flags it', () => {
+            const map = { maxScore: 2, msg: 'Repo', reviewRow: ['repository private', 'gitignore'] };
+            expect(handler(map, student)).toEqual({ score: 2, comment: 'Repo [review row "gitignore" not found on code review form]' });
+        });
+
+        it('reviewRowOccurrence picks a repeated question from a later table', () => {
+            expect(handler({ maxScore: 8, msg: 'P1', reviewRow: 'game work correctly' }, student).score).toBe(8);
+            expect(handler({ maxScore: 8, msg: 'P2', reviewRow: 'game work correctly', reviewRowOccurrence: 2 }, student).score).toBe(0);
+            expect(handler({ maxScore: 8, msg: 'P3', reviewRow: 'game work correctly', reviewRowOccurrence: 3 }, student).comment)
+                .toMatch(/not found/);
+        });
+
+        it('a Yes on a mapping with no maxScore scores 0, never undefined', () => {
+            expect(handler({ msg: 'X', reviewRow: 'repository private' }, student).score).toBe(0);
         });
     });
 });

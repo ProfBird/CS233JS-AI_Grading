@@ -57,6 +57,8 @@ graph TD
         variation_detect[variation_detect.js]
         student_group[student_group.js]
         merge_config[merge_config.js]
+        notebook[notebook.js]
+        llm_check[llm_check.js]
         canvas_client[canvas_client.js]
     end
 
@@ -109,6 +111,11 @@ graph TD
 
     %% Module internal deps
     grades --> ollama
+    grades --> llm_check
+    llm_check --> llm_client
+    llm_check --> notebook
+    analyze --> notebook
+    extract --> notebook
     grades --> handler_registry
     val_html --> file_walker
     val_css --> file_walker
@@ -539,8 +546,10 @@ Handles extracting student code from submissions.
 | `acquireCode(student, codeDir, urls)` | Exported — the shared clone-with-fallback/unzip mechanics (idempotent skip, prefer-repo-over-zip, git clone with timeout). After a zip extracts, loose files uploaded next to it are merged in (`mergeLooseFilesAfterZip`; the zip's copy wins a name collision); if the zip won't extract, or there's no zip or repo at all, the loose files are used alone. `extractStudentCode()` resolves `codeDir` from the Moodle layout and calls this; `extract_code_canvas.js` resolves it from the Canvas layout and calls the same function. |
 | `copyLooseFiles(student, codeDir)` | Copies `student.filesDir`'s top-level regular files into `codeDir`, skipping hidden files and `LOOSE_FILE_SKIP_RE` (`.zip`, `.doc`, `.docx` — the review form stays where `read_code_review.js` looks for it, and its usually space-laden name doesn't trip `name_check`). Never overwrites a file already there. Returns `{ copied, skipped[] }`. Covers submissions of bare `.py`/`.csv` files (CS212). |
 | `applyGithubSubdir(student, urls)` | Exported — adjusts `student.extractedDir` for a GitHub tree URL pointing at a subdirectory. Shared by both acquisition sources for the same reason as `acquireCode`. |
+| `acquireColabNotebook(student, codeDir, urls)` / `colabFileId(url)` | Exported — when a submission's only code is a Colab link (`urls.colab`, needs `config.urlPatterns.colab`), downloads the notebook as `colab_notebook.ipynb` via Google Drive's public download URL (`https://drive.google.com/uc?export=download&id=…`). Works only for notebooks shared as "Anyone with the link"; a sign-in page or non-notebook reply sets `student.error` saying so. Async, so it runs after the sync `acquireCode()` in both `extractStudentCode()` and the Canvas import. |
 
 **Directory naming:**
+- Downloaded Colab notebooks → `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/extracted_code/colab_notebook.ipynb`
 - GitHub clones → `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/repo/`
 - ZIP extractions and loose uploaded files → `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/extracted_code/`
 
@@ -656,6 +665,7 @@ Regex-based analysis of student source files, driven by the resolved language ad
 - `findPartDir()` — multi-pass search for part subdirectories (game name matching, folder pattern fallback)
 - `checkDeveloperComments(files, studentName, adapter, baseDir, { ignoreCommentsBy })` — for each non-empty source file (per `sourceExtensions`), reads **comment text only** via `adapter.extractComments` (Python docstrings count) and records `{ path, name, date, ai }`: `name` = an author/name keyword or the student's first/last name as a whole word; `date` = a date keyword or an actual date (`1/5/2026`, `2026-01-05`, `Jan 5`, `Fall 2025`); `ai` = an AI-use disclosure in the file's first 40 lines. Comment lines containing an `ignoreCommentsBy` string (collected from the lab's `developer_comments` mappings) are dropped unless they also name the student. Stored as `analysis.developerComments` (`{ filesChecked, filesWith, missing[], files[] }`); `analysis.hasDeveloperComments` = any file with a name or date.
 - Excludes `.venv`/`venv`/`__pycache__` (as well as `node_modules`/`dist`/`.git`) from analysis by path segment
+- Reads source files through `lib/notebook.js`'s `readSourceFile()`, so a Jupyter/Colab notebook (`.ipynb`, one of the Python adapter's `sourceExtensions`) is analyzed as a Python script — feature regexes (use a `fileRegex` like `\\.(py|ipynb)$`), developer comments (markdown cells count as comments) and import scanning all see its cells
 - Checks for code review documents
 - `detectPartsPresent()` — scans extracted directory for part subdirectories; auto-detects `part1`, `part2`, etc. even without explicit `parts` config. Results stored in `analysis.partPresence`
 - `config.packageCheck` validation and `analysis.npmPackages` population both delegate to `adapter.checkManifest()` / `adapter.extractUsedPackages()` — both nullable (e.g. `null` for C++, which has no manifest/package concept); when null, `analysis.npmPackages` is simply `[]` and no manifest check runs
@@ -764,7 +774,7 @@ tool (`lint`, `install`, `build`, `runTests`, `preflight`) accept an optional tr
 |---|---|---|---|---|---|
 | `javascript.js` (default) | `package.json` (dependencies/devDependencies split) | ESLint (Node API) | `npm install` + `npm run build` | — (`runTests: null`) | The original implementation, extracted verbatim — behavior for existing JS labs is unchanged |
 | `typescript.js` | `package.json` (reuses the JS adapter's logic) | ESLint with `@typescript-eslint/parser` | `tsc --noEmit`, via the grader's own `node_modules/.bin/tsc` (not the student's) | — | Extends the JS adapter (`{ ...jsAdapter, ... }`) rather than reimplementing it |
-| `python.js` | `pyproject.toml` `[project].dependencies` (dev groups/extras count as declared but needn't be imported; a small TOML reader, not a full parser), else `requirements.txt`; distribution→import names via `IMPORT_ALIASES` + `packageCheck.importAliases` | `ruff check --output-format json`, classified: pyflakes (`F`)/syntax errors (`E9`) = errors, else warnings | `py_compile` per file (syntax-only — Python has no separate compile step). `install()`: for a uv project, `uv sync --no-install-project` in a scratch folder holding only `pyproject.toml`/`uv.lock`/`.python-version`, into a cached env at `<execution.envCacheDir>/<hash of those files>` (default `<tmp>/grader-python-envs`; a `.grader-env-ready` marker means reuse); `requirements.txt` → pip | Through the sandbox in a project copy: `pytest` (added to the uv env on first use; text summary parsed) or `testCheck.mode: "script"` (counts `PASS`/`FAIL` lines; `parseScriptTestOutput`) | `detectProject`: the shallowest folder with `pyproject.toml` is the project (`type: "python-uv"`), else the entry's folder; entry = `runCheck.entry`, else `main.py` (exact name), else the only/shallowest `.py` (`resolveEntry`). After `install()`, programs run with the env's own Python (`envPython()`: `bin/python`, or `Scripts\python.exe` on Windows). `preflight` warns when uv is missing for a lab that runs/tests code. `runScript: null` |
+| `python.js` | `pyproject.toml` `[project].dependencies` (dev groups/extras count as declared but needn't be imported; a small TOML reader, not a full parser), else `requirements.txt`; distribution→import names via `IMPORT_ALIASES` + `packageCheck.importAliases` | `ruff check --output-format json`, classified: pyflakes (`F`)/syntax errors (`E9`) = errors, else warnings | `py_compile` per file (syntax-only — Python has no separate compile step). `install()`: for a uv project, `uv sync --no-install-project` in a scratch folder holding only `pyproject.toml`/`uv.lock`/`.python-version`, into a cached env at `<execution.envCacheDir>/<hash of those files>` (default `<tmp>/grader-python-envs`; a `.grader-env-ready` marker means reuse); `requirements.txt` → pip | Through the sandbox in a project copy: `pytest` (added to the uv env on first use; text summary parsed) or `testCheck.mode: "script"` (counts `PASS`/`FAIL` lines; `parseScriptTestOutput`) | `detectProject`: the shallowest folder with `pyproject.toml` is the project (`type: "python-uv"`), else the entry's folder; entry = `runCheck.entry`, else `main.py` (exact name), else the only/shallowest `.py` (`resolveEntry`). After `install()`, programs run with the env's own Python (`envPython()`: `bin/python`, or `Scripts\python.exe` on Windows). `preflight` warns when uv is missing for a lab that runs/tests code. `sourceExtensions: ['.py', '.ipynb']` — notebooks are read as Python (`lib/notebook.js`) for analysis and import scanning and linted by ruff natively; they're never run. `runScript: null` |
 | `cpp.js` | none (`checkManifest: null`) | Compiler warnings via `-fdiagnostics-format=sarif-stderr` (GCC) or `=sarif` (clang, incl. macOS `g++`) — SARIF output, flag spelling probed via `--version`; same mechanism as `build()`, so `lint` re-runs the compile | Prefers CMakeLists.txt, then a Makefile, then compiles loose `.cpp`/`.cc`/`.cxx` files directly (only the "loose" path gets structured diagnostics) | not implemented (`runTests: null` — CTest/GoogleTest integration is a documented future step) | `stripComments` protects C++11 raw string literals (`R"(...)"`) before the generic string pass; header files (`.h`/`.hpp`) are scanned for features/lint but never independently compiled |
 | `csharp.js` | none in this adapter (NuGet `PackageReference` validation not implemented) | MSBuild plain-text diagnostics from `dotnet build` (regex-parsed — no binlog/XML dependency) | `dotnet build` | `dotnet test` (console-summary line parsed, e.g. `Failed: 1, Passed: 2, ...`) | `detectProject` parses a `.sln`/`.slnx` (supports both the classic text format and the newer XML format the .NET SDK now defaults to) for multi-project references, or a loose `.csproj`; `stripComments` protects verbatim (`@"..."`) and C# 11 raw string literals |
 
@@ -820,6 +830,7 @@ noticing).
 | `test_check` | Yes | Proportional score against `student.testCheck` (`{ total, passed, failures[] }` from the adapter's `runTests` — pytest, a PASS/FAIL test script, dotnet test); comment lists up to 5 failing test names. Optional `testId` scores one entry of a `testCheck` list |
 | `scripts_check` | Yes | Proportional score: how many of the specified named scripts pass (adapter-delegated; nullable for languages with no such concept) |
 | `manual` | No | Without `reviewRow`: a placeholder (`maxScore` + `msg`, default "NEEDS MANUAL CHECK"). With `reviewRow` (case-insensitive substring of a review criterion, or an array of them; `reviewRowOccurrence` picks a repeated question): pre-scored from the review form's production answer (fraction / Yes / No), else a beta fraction; for an array every row must be answerable and the lowest score wins. An unmatched `reviewRow` keeps the placeholder score with a `[review row "…" not found on code review form]` note (`findReviewItems()` / `reviewVerdict()`). |
+| `llm_check` | No | An AI model's suggested score for one qualitative row: `criterion` (required — the rubric row as a question), optional `guidance` (full/partial/no credit) and `files` (regex on project-relative paths; default the language's source files, notebooks included). Comment `NEEDS REVIEW (AI suggestion, <model>): <reason>` with `keepComment`; no model / unusable reply → 0 + `NEEDS MANUAL CHECK: AI check unavailable (…)`. Handler receives the lab config (`handler(map, student, config)`). See `lib/llm_check.js`. |
 | `part_feature` | Yes | Per-part feature check — reads `analysis.partFeatures[partId][featureId]` |
 | `repo_hygiene` | Yes | Score if no excluded folders (e.g. `node_modules`, `dist`) are committed to the repo |
 | `github_repo` | Yes | Score if a GitHub URL was provided and the repo was successfully cloned |
@@ -864,6 +875,22 @@ For labs whose groups (A/B/C) solve different problems. `config.variations[lette
 
 `mergeConfig(base, over)` — `over` wins; nested plain objects merge key by key; arrays and other values replace. Shared by course `defaults` (`lab_config.js`'s `applyCourseDefaults`) and group `overrides` (`student_group.js`). Dependency-free so `config_validation.js` stays light.
 
+### `lib/notebook.js` — Notebooks as Source Code
+
+`notebookToSource(jsonText)` turns an `.ipynb` into a Python script in the "percent" format: code cells as code, markdown cells as `#` comment lines, each cell after a `# %%` (or `# %% [markdown]`) marker; raw cells are dropped; returns `null` for anything that isn't a notebook (e.g. a Drive sign-in page). `readSourceFile(file)` is the reader analysis uses for every source file — notebooks converted (an unreadable one reads as empty), everything else as UTF-8 text.
+
+### `lib/llm_check.js` — AI-Suggested Scores (`llm_check`)
+
+| Export | Purpose |
+|---|---|
+| `runLLMCheck(map, student, config, opts?)` | Scores one row: collects code, asks the model, returns `{ score, comment: "NEEDS REVIEW (AI suggestion, <model>): …", keepComment: true }`; any failure (no code, no matching files, no model, no reply, unusable reply) → `{ score: 0, comment: "NEEDS MANUAL CHECK: AI check unavailable (…)" }` |
+| `collectCode(extractedDir, config, map, maxChars)` | The files the model reads (the language adapter's `sourceExtensions`, or `map.files`), each under a `===== path =====` header, skipping `.venv`/`node_modules`/…; cut at `maxChars` with a "more code not shown" note; returns `{ text, fileCount, totalFiles, truncated }` |
+| `buildPrompt(map, code)` / `SYSTEM_PROMPT` | Criterion, maximum, optional guidance, then the code; the system prompt asks for JSON `{ "score", "reason" }` only and says the instructor reviews every suggestion |
+| `parseVerdict(text, maxScore)` | Finds the JSON object anywhere in the reply (prose and code fences tolerated), clamps the score to `[0, maxScore]`, rounds to 0.5; `null` when unusable |
+| `setLLMCheckClientFactory(fn)` | Tests: substitute the client factory (`null` restores the default) |
+
+The default factory uses a local Ollama model (`llmCheck.model`, else the first installed one). A cloud provider is used only when the lab or course config sets `llmCheck.provider` — the lab wizard's `local-config.json` `llm` provider is never used here, so a cloud model chosen for drafting configs can't silently receive student work; the first cloud use per run logs a `NOTE`. One client per lab config object (cached), shared by all rows and students.
+
 ### `lib/llm_client.js` — Unified LLM Client
 
 Wraps Ollama, OpenRouter, and Anthropic behind a single `chat(systemPrompt, userPrompt)` interface.
@@ -876,6 +903,10 @@ Wraps Ollama, OpenRouter, and Anthropic behind a single `chat(systemPrompt, user
 - On HTTP 429, automatically retries with `fallbackModel` if configured; otherwise retries up to 3 times with exponential backoff
 - `DEFAULTS.ollama.baseUrl` is `http://localhost:11434/v1` — Ollama's OpenAI-compatible chat endpoint (`chat()` POSTs to `${baseUrl}/chat/completions`) lives under `/v1`, unlike its native `/api/*` endpoints
 - `new LLMClient({ ..., quiet: true })` suppresses this client's own `console.error` calls on failure/retry — for callers that already report failure themselves and don't want a duplicate line (e.g. `ollama_comments.js`, called once per student)
+
+### `lib/path_browser.js` — Folder/File Browser for Path Prompts
+
+`askPath(driver, { prompt, kind, start, extensions, baseDir })` — browse for a folder (`kind: 'dir'`) or a file (`'file'`, filtered by `extensions`). Built only on the driver's `askOptions`/`ask`, so the TUI and readline backends both get it. Screens list [Use this folder] (folders only), [Type a path...] (`~` expanded; a relative name resolves against `baseDir`; a typed folder in file mode opens it), [Up one level], quick jumps (Home; macOS `/Volumes` and Google Drive under `~/Library/CloudStorage`; Windows drive letters), then subfolders and matching files, and [Cancel] → `''`. `grade_setup.js` uses it for the lab root and code storage root when creating a term, the replacement writable code root, and a missing rubric (copied into the lab's config folder when chosen elsewhere).
 
 ### `lib/tui.js` — Terminal UI
 
@@ -1147,6 +1178,7 @@ a relative `extend` path wouldn't resolve.
 | `rubricName` | Yes* | Filename of the rubric spreadsheet in `configs/{Course}/{AssignmentName}/`. *Optional when `textReport: true` |
 | `textReport` | No | `true` makes this lab always produce per-student `.txt` grade reports (same as passing `--text-report` every run) and makes `rubricName` optional. Used by all CIS195 labs |
 | `titleCell` / `titleText` | No | Cell and text for the lab title |
+| `llmCheck` | No | The model `llm_check` rows use: `provider` `"ollama"` (default, local — student code stays on the machine) \| `"openrouter"` \| `"anthropic"` (sends student code to that service; API key from `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY`, else `local-config.json`'s `llm.apiKey` for the same provider — the provider itself is never taken from `local-config.json`); `model` (default: first installed Ollama model, or the provider's default), `baseUrl`, `maxChars` (default 40000), `timeoutMs` (default 120000) |
 | `summaryCell` | No | Cell for AI-generated or manual summary comment |
 | `graderCell` | No | Cell written with "Computer"; triggers versioned copy on regrade if changed |
 | `runtimeCheck` | Yes | `"none"`, `"build"`, `"browser"`, `"both"`, `"run_check"`, or any name registered via `registerCheckStrategy` in `runtime_check.js`. `"none"` is a no-op for labs with nothing to run (static markup labs) |
@@ -1154,7 +1186,7 @@ a relative `extend` path wouldn't resolve.
 | `testCheck` | No | How `test_check` runs Python tests: `mode` `"pytest"` (default) \| `"script"` (run `entry`, count lines matching `passPattern`/`failPattern`, default `^\s*PASS\b` / `^\s*FAIL\b`); `timeoutMs` (default `execution.timeoutMs`, else 60000). `script` mode requires `entry`. `supportFiles` as for `runCheck` (falls back to a single-object `runCheck`'s). May also be a **list** of test scripts, each with a unique `id`. |
 | `variations` | No | The lab's groups: `{ "A": { appName, overrides }, … }`. `appName` lets `variation_detect.js` detect a group from the code when the review form gives none. `overrides` — settings merged in for that group's students (`runCheck`, `testCheck`, `execution`, `analysis`, `packageCheck`, `webContent` only; nested objects merge, lists replace). Each group's merged config is validated on its own; a student whose group is unknown gets group-dependent rows flagged `NEEDS MANUAL CHECK` (see `lib/student_group.js`). |
 | `execution` | No | `mode` — isolation tier: `"direct"` (default, implemented) \| `"restricted-user"` \| `"container"` (both documented, loud-failing stubs). `cwd` — `"scratch"` (default, empty run directory) \| `"copy"` (copy of the project folder). `envCacheDir` / `installTimeoutMs` — Python uv environment cache (default `<tmp>/grader-python-envs`) and install timeout (default 10 min). `timeoutMs` — fallback run/test timeout |
-| `urlPatterns` | No | Overrides/extends the URL categories `extract_code.js` looks for. Default `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }`. `github` is structurally special (clone vs. zip); other keys are just `url_check`/`deploy_check` `urlType` labels |
+| `urlPatterns` | No | Overrides/extends the URL categories `extract_code.js` looks for. Default `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }`. `github` is structurally special (clone vs. zip); `colab` is too (a Colab link with no other code → the notebook is downloaded; CS212's course defaults set it); other keys are just `url_check`/`deploy_check` `urlType` labels |
 | `canvas` | No | `{ assignmentId }` — when set, `bin/grade.js` acquires this lab's code from Canvas (`extract_code_canvas.js`) instead of scanning a Moodle folder. Set once via `bin/grade.js <Lab> --canvas`'s interactive setup (prompts for the course ID, confirms the course name, lets you pick the assignment) or by hand. The course ID itself lives on the course, not here — see `configs/{Course}/course_config.json`'s `canvasCourseId` above. |
 | `handlerModules` | No | Paths (relative to the lab's config dir) to JS modules that call `registerHandler()` on import, so a lab can add mapping types without editing `generate_grades.js`. Loaded before config validation runs. |
 | `codeReview` | No | Cell refs for student name and group letter in rubric |

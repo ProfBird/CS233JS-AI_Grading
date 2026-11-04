@@ -225,7 +225,13 @@ matches *subdirectories*, not files, so it doesn't help with loose `.py` files. 
 `runCheck` to be an array of `{ id, entry, stdin, expectPatterns }` with a `run_check`
 mapping selecting one by `id`, the same pattern `file_count` uses with `countId`.
 
-### 3.4 Notebooks and Colab links are invisible — scope note
+### 3.4 Notebooks and Colab links are invisible — scope note — ✅ FIXED 2026-11-04
+
+> **Fixed:**
+> - `.ipynb` is one of the Python adapter's source extensions. Analysis reads notebooks as Python scripts (`src/lib/notebook.js`: code cells as code, markdown cells as comments), so feature checks, the developer-comment check and import scanning see them, and ruff lints them.
+> - A submission whose only code is a Colab link has its notebook downloaded through Google Drive's public download URL. That works only when the notebook is shared as "Anyone with the link"; otherwise a clear error tells the instructor to add it by hand.
+> - CS212's course defaults now recognize Colab links (`urlPatterns.colab`).
+> - Notebooks are analyzed and linted, never run.
 
 Lab05 submits a `.ipynb` file or a Colab URL. `sourceExtensions` is `['.py']`, so analysis and lint
 see nothing. A Colab link is a Google Drive resource that can't be fetched without auth.
@@ -272,6 +278,15 @@ and **always** sets `keepComment` with a "NEEDS REVIEW" flag the way `deploy_che
 fit the existing handler registry without new architecture. It's worth considering after the
 blockers, not before.
 
+> **✅ Built 2026-11-04 (step 8):** `llm_check` rows (`src/lib/llm_check.js`) take a `criterion`,
+> with optional `guidance` and a `files` regex. The model reads the student's code (notebooks
+> included) and suggests a score. The comment is always `NEEDS REVIEW (AI suggestion, <model>): <reason>`
+> with `keepComment`, and any failure scores 0 with `NEEDS MANUAL CHECK: AI check unavailable`.
+> The default model is a local Ollama one, so student code stays on the machine. A cloud
+> provider is used only when `llmCheck.provider` sets one, never from the wizard's
+> `local-config.json` setting. Tested with a fake model only; no real model ran during
+> development (Ollama wasn't running).
+
 ---
 
 ## 5. Housekeeping noticed along the way
@@ -301,7 +316,7 @@ blockers, not before.
    `supportFiles`, script-mode tests (1.5, section 2).
 6. ✅ Per-variation overrides and multi-entry `runCheck` (3.2, 3.3).
 7. ✅ Lazy phase imports, `rubric-to-md` header reuse, housekeeping (3.5, 3.6, 5).
-8. Optional: `llm_check` mapping type; notebook extraction.
+8. ✅ Optional: `llm_check` mapping type; notebook extraction.
 
 Steps 1–3 are independent bug fixes that also make CS233JS and CIS195 more robust. Steps 4–6 are
 the CS 212 enablement work and should come with a pilot config for one lab, such as

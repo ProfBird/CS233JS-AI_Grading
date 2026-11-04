@@ -58,6 +58,106 @@ repeating the same failure for every student).
 
 ---
 
+## Quick Start
+
+The short path from "new lab" to "graded spreadsheets." Each step links to the full details.
+
+**One-time setup**
+
+1. In the `AI_Grading/` folder, run `npm install`.
+2. For a lab that isn't JavaScript, install its toolchain too — e.g. a Python lab needs
+   Python, `pip install ruff pytest`, and [uv](https://docs.astral.sh/uv/) for `pyproject.toml`
+   projects (all of CS 212). See [Prerequisites](#prerequisites).
+3. The first time you run `node bin/grade.js`, it asks you to create a **term**: a label
+   (e.g. `Spring 2026`), the **lab root** (where submission downloads live) and the **code
+   storage root** (a local folder for students' code and the graded spreadsheets). See
+   [First-time setup](#first-time-setup).
+
+**Set up a lab** — run the wizard (once per lab, or once per step of a multi-step lab):
+
+```bash
+node bin/configure-lab.js
+```
+
+It asks, in order:
+
+1. **AI model for draft generation** — the model that drafts the checks. If none can be
+   used, it falls back to a simpler keyword-based draft.
+2. **Course** — pick one, or "Add new course".
+3. **Assignment** — pick one, or "Add new assignment" (e.g. `Lab07`). For a new assignment:
+   "Will there be multiple sets of submissions for this lab?" (No for an ordinary lab; Yes for
+   one with steps like Proposal/Beta/Production).
+4. **Rubric** — for a new lab, choose "Provide a rubric file path", enter the path to your
+   `.xlsx`/`.xlsm` rubric, and accept the suggested filename (e.g. `CS233JS_Lab07_Rubric.xlsm`);
+   it's copied into the lab's config folder. (If a spreadsheet is already in
+   `<codeRoot>/{Course}/{Lab}/`, it offers that one first.) Then confirm the detected columns
+   ("Are these columns correct?").
+5. **Review the draft** — a table with one check per rubric row. Arrow keys move, Enter
+   edits a row (change its check type or fields, or mark it graded by hand), `a` accepts.
+6. **Assignment settings** — title, **language** (`javascript` by default; `python` for
+   CS 212), **runtime check mode** (`browser`/`build`/`both` for web labs, `run_check` to run
+   a console program), and optional summary/grader/title cells.
+
+It writes `configs/{Course}/{Lab}/{lab}_config.json` (e.g. `configs/CS233JS/Lab07/lab07_config.json`).
+Some settings the wizard doesn't ask about — a Python program's `runCheck` input and expected
+output, test scripts, lab groups — you add to that file by hand; see
+[Python labs](#python-labs-uv-projects) and
+[Lab groups and labs with several programs](#lab-groups-and-labs-with-several-programs).
+Full wizard details: [Creating a new lab configuration](#creating-a-new-lab-configuration).
+
+> **No rubric spreadsheet?** The wizard can't draft checks without one; its only other choice
+> is "Extract-only" (collect the code, grade nothing). For `.txt` grade reports instead of
+> spreadsheets, add `"textReport": true` to the lab config (as the CIS 195 labs do), or run the
+> grader with `--text-report`.
+
+**Get the submissions**
+
+- **Moodle:** download the assignment's submissions and unzip them into
+  `<labRoot>/{Course}/{Lab}/` (e.g. `<labRoot>/CS233JS/Lab07/`). See [File layout](#file-layout).
+- **Canvas:** nothing to download — choose "Download from Canvas" in the grader's menu, or
+  add `--canvas`. The first time, it asks for your Canvas URL and an API token (Canvas:
+  Account → Settings → New Access Token) unless `CANVAS_URL`/`CANVAS_TOKEN` are set, then the
+  Canvas course ID and which assignment to use. All of it is saved, so on later runs the
+  default "Assignment's configured source" downloads from Canvas.
+
+**Grade it**
+
+```bash
+node bin/grade.js
+```
+
+The menu asks for the **course**, **term**, **submission source** ("Assignment's configured
+source" — the Moodle folder, or Canvas once the lab is set up for it — or "Download from
+Canvas"), **assignment** (and step, for a
+multi-step lab), then the grading mode:
+
+- **Normal** — grade new submissions; students who already have a grade spreadsheet are skipped.
+- **Regrade** — grade everyone again, keeping their code (cloned repos get a `git pull` first).
+- **Reclone** — delete everyone's code, download/clone it again, then grade.
+
+To go straight to an assignment, name the course and lab on the command line (it still asks
+for the term if you have more than one). The course name comes first whenever more than one
+course exists under `configs/`, as it does now:
+
+```bash
+node bin/grade.js CS233JS Lab03              # still asks Normal / Regrade / Reclone
+node bin/grade.js CS212 Lab02 --regrade      # no mode menu
+node bin/grade.js CS233JS TermProject ApiDoc # one step of a multi-step lab
+```
+
+See [Command-line mode](#command-line-mode) and [Flags](#flags) for the rest.
+
+**Review the results**
+
+- Each student's graded rubric is `StudentName_Grade.xlsx` / `.xlsm` (or `StudentName_Grade.txt`
+  for a text-report lab) in `<codeRoot>/{Course}/{Lab}/SubmissionsAndAssessment/StudentName/`,
+  next to their code. For a multi-step lab, add the step folder: `{Lab}/{Step}/…`.
+- `<codeRoot>/{Course}/{Lab}/Artifacts/grading_log.txt` summarizes the run.
+- Look for rows marked `NEEDS MANUAL CHECK` and other flagged comments, then fill in those
+  scores yourself — see [Manual Grading](#manual-grading).
+
+---
+
 ## Directory Setup
 
 ### Creating a new lab configuration
@@ -155,6 +255,17 @@ default your system temp folder), `execution.installTimeoutMs` (default 10 minut
 `testCheck.passPattern` / `failPattern` for a test script that prints something other than
 `PASS`/`FAIL`. For per-group (A/B/C) settings and labs with several programs, see the
 next section.
+
+**Notebooks and Colab links** (CS 212's Lab05, or anyone who submits a `.ipynb`): a
+notebook is read as a Python script — its code cells as code and its markdown cells as
+comments — so feature checks, the developer name/date/AI-use check, the dependency check and
+ruff all see it. (Use a `fileRegex` like `"\\.(py|ipynb)$"` on feature checks that should
+look in notebooks.) Notebooks are checked, not run. When a student's whole submission is a
+**Colab link**, the grader downloads the notebook itself — but only if the student shared it
+as **"Anyone with the link"**; otherwise the student is listed with the error *Colab notebook
+could not be downloaded — it is probably not shared…*, and you can download it from the link
+and drop it into their `extracted_code/` folder. Colab links are recognized when the lab's
+`urlPatterns` has `"colab": "colab.research.google.com"` (CS 212's course defaults include it).
 
 ### Lab groups and labs with several programs
 
@@ -269,6 +380,9 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
   - `require: ["name", "date", "ai"]` — require specific parts instead of "name or date".
   - `ignoreCommentsBy: ["Brian Bird"]` — ignore comment lines that mention these names, so your own header on starter files ("By Brian Bird, winter term 2026, using GitHub Copilot") doesn't count as the student's. A line that also names the student still counts ("Andy Still, Jan 2026, based on code by Brian Bird").
 - `manual` — a row for you to grade by hand: it's written with `maxScore` and the `msg` comment (default `NEEDS MANUAL CHECK`) for you to confirm or change. Add `reviewRow` to pre-score it from the student's peer code-review form instead: text from the review question (e.g. `"game work correctly"`), matched case-insensitively. The production answer is used — Yes → full credit, No → 0, a fraction like `4/5` → that score — falling back to a beta-column fraction. For a rubric row that covers two review questions, give a list (`["repository private", "collaborators"]`): every answer must be Yes for full credit. When a form repeats a question (e.g. CS 233JS Lab03 asks "Does the game work correctly?" for Part 1 and Part 2), `reviewRowOccurrence: 2` picks the second one. If the review is missing or the question isn't answered, the row stays a placeholder.
+- `llm_check` *(config-only or wizard)* — for qualitative rows a pattern can't judge ("rule design", "moderately complex", "explanations in comments"): an AI model reads the student's code and **suggests** a score for one `criterion` (the rubric row as a question), optionally guided by `guidance` (what full / partial / no credit look like). The comment always starts `NEEDS REVIEW (AI suggestion, <model>)` with the model's reason — check each one before you rely on it. Example: `{ "type": "llm_check", "criterion": "Is input/output separated from the inference code?", "guidance": "Full: no input()/print() in the inference module", "cell": "C11", "commentCell": "E11", "maxScore": 2 }`. Add `"files": "\\.(py|csv)$"` to let it read files other than the code (e.g. a rule file).
+  - **Where student code goes:** by default a **local Ollama** model on this computer (install Ollama and a model, e.g. `ollama pull qwen3-coder`), so student work never leaves the machine. A lab or course can set `"llmCheck": { "provider": "anthropic" }` (or `"openrouter"`) to use a cloud model — that sends student code, including the names in its header comments, to that company, so only do it where your college's student-privacy rules allow. Other `llmCheck` settings: `model`, `maxChars` (how much code it reads, default 40,000 characters), `timeoutMs`.
+  - Each row is one model request per student, so a local model may take a while for a whole class.
 
 Any mapping may also carry `stockComments: { full, partial, zero }` to write a short canned comment per score tier instead of the verbose auto-generated one. A few checks keep their own diagnostic comment regardless — `lint` (writes the actual findings), and `deploy_check` when it flags a row for manual review — so `stockComments` is ignored on those rows.
 
@@ -428,6 +542,8 @@ The first time you run the grader with no arguments, it walks you through:
    - **Lab root** — the Google Drive folder containing your lab directories (e.g., `StudentLabWork`).
    - **Code storage root** — a folder *outside* Google Drive where student code will be cloned or unzipped. The grader creates subfolders for each course/lab automatically (e.g., `GradingCode/CS233JS/Lab03/SubmissionsAndAssessment/`), so you only need to provide the base path once.
 
+   Both are chosen with a **folder browser**: open folders by name (or number, or arrow keys in the full-screen view), go up a level, or jump to Home, your drives (`/Volumes`) or your Google Drive folder, then pick **[Use this folder]**. **[Type a path...]** lets you paste a path instead.
+
 Everything here is saved to `AI_Grading/configs/local-config.json` — you only need to enter it
 once per term; future runs (and future courses in the same term) reuse it. To grade a new
 semester, run the grader and choose "Add new term" when prompted.
@@ -557,6 +673,8 @@ The pipeline leaves some items for you to review manually:
 | `No AI use found in any file's header comments` | A `developer_comments` row with `requireAiDisclosure` — no file's header says whether/how AI was used |
 | `NEEDS MANUAL CHECK: lab group unknown (…); this row depends on the group` | The lab has per-group settings and this student's group couldn't be worked out (no group on the review form, nothing detected) — check which version they did and grade the row |
 | `NEEDS MANUAL CHECK: Entry file "…" not found` / `None of the entry files were found (…)` | The program or test script to run wasn't found — the student may have named it differently; find it and check by hand (or add the name to `entry`) |
+| `NEEDS REVIEW (AI suggestion, <model>): …` | An `llm_check` row — the score is the AI model's suggestion with its reason. Read the student's work for that criterion and confirm or change the score |
+| `NEEDS MANUAL CHECK: AI check unavailable (…)` | The `llm_check` row couldn't be scored (no model running, no reply, or an unusable reply) and was given 0 — grade it yourself, or fix the cause (e.g. start Ollama) and `--regrade` |
 | `Pending manual checks for full verification.` | The summary cell — replace with your own comment (or use `--ai-comments`) |
 
 Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or LibreOffice, review the flagged items, fill in scores, and the formulas will auto-calculate the total.
@@ -566,6 +684,10 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 ## Tips & Troubleshooting
 
 **Google Drive is slow:** The lab data lives on Google Drive, which can cause file reads to hang. If the pipeline seems stuck, check whether it's waiting on a Google Drive file read. The `codeRoot` setting moves cloned/extracted code off the cloud drive to avoid this.
+
+**AI-suggested scores (`llm_check`) all say "AI check unavailable":** with the default local provider, Ollama must be running (`ollama serve`) with at least one model installed (`ollama list`); set `llmCheck.model` to choose one. With a cloud `llmCheck.provider`, set its API key (`ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY`).
+
+**Colab notebook could not be downloaded:** the student's notebook isn't shared as "Anyone with the link". Ask them to change the sharing, or open the link yourself, download the `.ipynb` and put it in that student's `extracted_code/` folder, then `--regrade`.
 
 **AI comments not working:** Ensure Ollama is running (`ollama serve`) and at least one model is installed. Run `ollama list` to check. The grader auto-selects the first available model; use `--ai-model=NAME` to pick a specific one.
 
@@ -585,6 +707,6 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 
 **`run_check` executes student code directly on this machine:** unlike the browser check (sandboxed by Chrome) or `npm run build` (no arbitrary execution), `run_check` (and `test_check`) compiles/interprets and then *runs* the student's program with your machine's permissions. It runs in a temporary folder (a copy of the project with `execution.cwd: "copy"`), so files it writes there never touch the submission, and it can't see the grader's own secrets — environment variables like `CANVAS_TOKEN` or API keys are removed before it starts. That's protection against accidents, not against a deliberately malicious program: this is appropriate for grading known students in a classroom setting, not for anonymous or adversarial submissions — see `src/lib/sandbox.js`'s documentation if you need to understand the isolation model in more depth.
 
-**Rubric not found:** If the rubric spreadsheet isn't in `configs/{Course}/{AssignmentName}/`, the grader will prompt you to provide one or automatically switch to `--text-report` mode (generates `.txt` files instead).
+**Rubric not found:** If the rubric spreadsheet isn't in `configs/{Course}/{AssignmentName}/`, the grader asks whether to provide one — then lets you browse to the `.xlsx`/`.xlsm` file (or type its name), copies it into the lab's config folder if it's somewhere else, and saves its name in the lab config. Otherwise it switches to `--text-report` mode (generates `.txt` files instead).
 
 **Output files:** Each student gets a graded spreadsheet (or `.txt` report) in `<codeRoot>/<courseName>/<labName>/SubmissionsAndAssessment/StudentName/` (flat) or `<codeRoot>/<courseName>/<labName>/<stepName>/SubmissionsAndAssessment/StudentName/` (multi-step) — under that term's `codeRoot` (see [Courses & terms](#courses--terms)). A `grading_log.txt` summary is written to the corresponding `Artifacts/` folder, alongside JSON reports for each pipeline phase.

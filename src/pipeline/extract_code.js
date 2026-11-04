@@ -10,6 +10,7 @@ const fsp = fs.promises;
 import path from 'path';
 import { execFileSync } from 'child_process';
 import AdmZip from 'adm-zip';
+import { notebookToSource } from '../lib/notebook.js';
 
 const CODE_DIR = 'extracted_code';
 const REPO_DIR = 'repo';
@@ -280,6 +281,56 @@ function acquireCode(student, codeDir, urls) {
     }
 }
 
+// ---------- Colab notebooks ----------
+
+// The Google Drive file id in a Colab or Drive link, or null.
+function colabFileId(url) {
+    const m = String(url).match(/colab\.research\.google\.com\/drive\/([A-Za-z0-9_-]{10,})/)
+        || String(url).match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:[^#]*&)?id=)([A-Za-z0-9_-]{10,})/);
+    return m ? m[1] : null;
+}
+
+const COLAB_NOTEBOOK_FILE = 'colab_notebook.ipynb';
+
+/**
+ * For a submission whose only code is a Colab link (urls.colab — needs a "colab" entry in
+ * config.urlPatterns, e.g. CS212's course defaults): downloads the notebook into codeDir as
+ * colab_notebook.ipynb through Google Drive's public download URL. That works only when the
+ * student shared it as "Anyone with the link"; otherwise Drive answers with a sign-in page and
+ * the student gets an error saying so. Does nothing when code was already acquired.
+ * @returns {Promise<boolean>} true when a notebook was downloaded
+ */
+async function acquireColabNotebook(student, codeDir, urls, fetchImpl = globalThis.fetch) {
+    if (student.extractedDir || !urls || !urls.colab) return false;
+    const id = colabFileId(urls.colab);
+    if (!id) {
+        student.error = `Couldn't find a notebook id in the Colab link ${urls.colab}`;
+        return false;
+    }
+    console.log(`  Downloading Colab notebook for ${student.name}...`);
+    try {
+        const res = await fetchImpl(`https://drive.google.com/uc?export=download&id=${id}`, {
+            redirect: 'follow',
+            signal: AbortSignal.timeout(30000),
+        });
+        const text = await res.text();
+        if (!res.ok || notebookToSource(text) === null) {
+            student.error = 'Colab notebook could not be downloaded — it is probably not shared as "Anyone with the link". Open the link and add the notebook by hand.';
+            console.log(`  ${student.name}: ${student.error}`);
+            return false;
+        }
+        fs.mkdirSync(codeDir, { recursive: true });
+        fs.writeFileSync(path.join(codeDir, COLAB_NOTEBOOK_FILE), text);
+        student.extractedDir = codeDir;
+        delete student.error;
+        return true;
+    } catch (e) {
+        student.error = `Colab notebook download failed: ${e.message}`;
+        console.log(`  ${student.name}: ${student.error}`);
+        return false;
+    }
+}
+
 async function extractStudentCode(student, labDir, repoClonePath, urlPatterns = DEFAULT_URL_PATTERNS) {
     const urls = await extractUrls(student.textDir, urlPatterns);
     // Prefer the GitHub repository over a submitted zip when both are present, so the dir is
@@ -313,6 +364,7 @@ async function extractStudentCode(student, labDir, repoClonePath, urlPatterns = 
     }
 
     acquireCode(student, codeDir, urls);
+    await acquireColabNotebook(student, codeDir, urls);
 
     return urls;
 }
@@ -358,4 +410,4 @@ export default async function(labDir, repoClonePath, config = {}) {
     return students; // returns array of augmented student objects
 };
 
-export { CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS, extractStudentCode, extractUrls, acquireCode, applyGithubSubdir, extractZip, normalizeGithubUrl, emptyUrls };
+export { CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS, extractStudentCode, extractUrls, acquireCode, acquireColabNotebook, colabFileId, applyGithubSubdir, extractZip, normalizeGithubUrl, emptyUrls };

@@ -16,6 +16,7 @@ import { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeC
 import { walk, toPosix } from '../lib/file_walker.js';
 import { registerHandler, getHandler, VALID_MAPPING_TYPES } from '../lib/handler_registry.js';
 import { groupUnknownWithOverrides, mappingDependsOnGroup } from '../lib/student_group.js';
+import { runLLMCheck } from '../lib/llm_check.js';
 
 // --- Cell helpers ---
 
@@ -522,6 +523,10 @@ function reviewVerdict(item, maxScore) {
 // msg, for the grader to confirm). With reviewRow, it's pre-scored from the student's code
 // review form: the production column, falling back to a beta fraction. For several rows,
 // every one must be answerable; the score is the lowest (any "No" → 0).
+// llm_check — an AI model's suggested score for a qualitative rubric row, always flagged for
+// the instructor's review. See ../lib/llm_check.js (provider, privacy, config).
+registerHandler('llm_check', (map, student, config = {}) => runLLMCheck(map, student, config));
+
 registerHandler('manual', (map, student) => {
     const msg = map.msg || 'NEEDS MANUAL CHECK';
     const placeholder = { score: map.maxScore ?? 0, comment: msg };
@@ -877,6 +882,7 @@ function isCodeSourceType(map) {
 
 function mappingDescription(map) {
     if (map.msg) return map.msg.replace('NEEDS MANUAL CHECK (', '').replace(')', '');
+    if (map.type === 'llm_check' && map.criterion) return map.criterion;
     if (map.featureId) return map.featureId;
     switch (map.type) {
         case 'build_check': return 'App builds without errors';
@@ -991,7 +997,8 @@ async function computeResults(student, config) {
             comment = `NEEDS MANUAL CHECK: lab group unknown (${reason}); this row depends on the group`;
             keepComment = true;
         } else if (handler) {
-            const result = await handler(map, student);
+            // Handlers take (map, student); a few also need the lab config (e.g. llm_check).
+            const result = await handler(map, student, config);
             score = result.score;
             comment = result.comment;
             keepComment = result.keepComment === true;

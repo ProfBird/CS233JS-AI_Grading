@@ -384,7 +384,8 @@ function keywordsToFolderPattern(keywords) {
 
 const MAPPING_TYPES = [
     { label: 'feature',               value: 'feature',               desc: 'Counts regex matches in student code; full credit if count meets minimum' },
-    { label: 'manual',                value: 'manual',                desc: 'No automation; score pulled from student\'s peer code review form' },
+    { label: 'manual',                value: 'manual',                desc: 'Graded by hand; optionally pre-scored from a code review form question (reviewRow)' },
+    { label: 'llm_check',             value: 'llm_check',             desc: 'AI model reads the code and suggests a score for a qualitative row (e.g. design, complexity); always flagged for your review' },
     { label: 'lint',                  value: 'lint',                  desc: 'Runs the lab language\'s linter/compiler diagnostics (ESLint/ruff/compiler warnings); choose errors (syntax) or warnings (style)' },
     { label: 'html_validate',         value: 'html_validate',         desc: 'Validates HTML files; partial credit up to a configurable error tolerance' },
     { label: 'css_validate',          value: 'css_validate',          desc: 'Validates CSS files; partial credit up to a configurable error tolerance' },
@@ -432,6 +433,13 @@ const MAPPING_TYPE_SCHEMA = {
         fields: [
             { key: 'maxScore', prompt: '  Max score [0]: ', type: 'int', default: 0 },
             { key: 'requireAiDisclosure', prompt: '  Require an AI-use disclosure in file comments', type: 'boolean', default: false },
+        ],
+    },
+    llm_check: {
+        fields: [
+            { key: 'maxScore',  prompt: '  Max score [0]: ', type: 'int', default: 0 },
+            { key: 'criterion', prompt: '  What should the AI judge? (the rubric row as a question)', required: true },
+            { key: 'guidance',  prompt: '  What full / partial / no credit look like (blank = none)', optional: true },
         ],
     },
     manual: {

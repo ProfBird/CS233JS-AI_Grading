@@ -16,6 +16,7 @@ import jsAdapter from '../adapters/javascript.js';
 import { resolveAdapter } from '../adapters/index.js';
 import { checkVersionVariation } from '../lib/variation_detect.js';
 import { configForStudent } from '../lib/student_group.js';
+import { readSourceFile } from '../lib/notebook.js';
 import { runPerStudentPhase, writePhaseReport } from '../lib/per_student_phase.js';
 
 const ANALYSIS_REPORT = 'analysis_report.json';
@@ -68,7 +69,7 @@ function countFeatures(allFiles, configFeatures, adapter = jsAdapter) {
         const contents = [];
         for (const file of filesToSearch) {
             let content;
-            try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
+            try { content = readSourceFile(file); } catch (e) { continue; }
             contents.push(isSourceFile(file) ? adapter.stripComments(content) : content);
         }
 
@@ -370,7 +371,7 @@ function checkDeveloperComments(files, studentName, adapter = jsAdapter, baseDir
     const result = { filesChecked: 0, filesWith: 0, missing: [], files: [] };
     for (const file of files) {
         let content;
-        try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
+        try { content = readSourceFile(file); } catch (e) { continue; }
         if (!content.trim()) continue;
         result.filesChecked++;
         const comments = extract(content);

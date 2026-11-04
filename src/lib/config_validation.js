@@ -14,6 +14,10 @@ import { VALID_MAPPING_TYPES } from './handler_registry.js';
 import { OVERRIDABLE_KEYS } from './student_group.js';
 import { mergeConfig } from './merge_config.js';
 
+// The providers llm_check rows may use (src/lib/llm_check.js); kept here rather than imported
+// so validation doesn't load the LLM client.
+const LLM_PROVIDERS = ['ollama', 'openrouter', 'anthropic'];
+
 // Validate that a cell reference looks like "A1" or "AA23"
 function isValidCellRef(ref) {
     return typeof ref === 'string' && /^[A-Z]+\d+$/.test(ref);
@@ -211,6 +215,11 @@ function configErrors(config) {
             if (map.type === 'developer_comments' && map.scope !== undefined && !['any', 'each'].includes(map.scope)) {
                 errors.push(`${prefix}.scope: "${map.scope}" must be "any" or "each"`);
             }
+            if (map.type === 'llm_check') {
+                if (!isNonEmptyString(map.criterion)) errors.push(`${prefix}.criterion: llm_check needs the rubric criterion for the AI to judge`);
+                if (map.guidance !== undefined && typeof map.guidance !== 'string') errors.push(`${prefix}.guidance: must be text`);
+                if (map.files !== undefined && !(typeof map.files === 'string' && isRegex(map.files))) errors.push(`${prefix}.files: must be a valid regular expression`);
+            }
             if (map.type === 'manual' && map.reviewRow !== undefined) {
                 const rows = Array.isArray(map.reviewRow) ? map.reviewRow : [map.reviewRow];
                 if (rows.length === 0 || rows.some(r => typeof r !== 'string' || !r.trim())) {
@@ -268,6 +277,17 @@ function configErrors(config) {
             };
             walkMatch(feat.match, 'match');
         });
+    }
+
+    // --- llmCheck (llm_check rows' AI model) ---
+    if (config.llmCheck !== undefined) {
+        const lc = config.llmCheck;
+        if (!lc || typeof lc !== 'object' || Array.isArray(lc)) errors.push('llmCheck: must be an object');
+        else {
+            if (lc.provider !== undefined && !LLM_PROVIDERS.includes(lc.provider)) errors.push(`llmCheck.provider: "${lc.provider}" must be one of ${LLM_PROVIDERS.join(', ')}`);
+            for (const k of ['model', 'baseUrl']) if (lc[k] !== undefined && !isNonEmptyString(lc[k])) errors.push(`llmCheck.${k}: must be text`);
+            for (const k of ['maxChars', 'timeoutMs']) if (lc[k] !== undefined && !isPosInt(lc[k])) errors.push(`llmCheck.${k}: must be a positive whole number`);
+        }
     }
 
     // --- execution / runCheck / testCheck, for the lab and for each group's overrides ---

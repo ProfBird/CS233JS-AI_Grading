@@ -25,6 +25,7 @@ import { getAllFiles as sharedGetAllFiles } from '../lib/file_walker.js';
 import { makeCommentStripper, makeCommentExtractor } from '../lib/comment_stripper.js';
 import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 import { runStudentArtifact, scrubEnv } from '../lib/sandbox.js';
+import { readSourceFile } from '../lib/notebook.js';
 
 const DEFAULT_EXCLUSIONS = ['__pycache__', '.venv', 'venv', '.git'];
 
@@ -226,7 +227,8 @@ function checkManifest(dir, packageCheckConfig = {}) {
 
 // Extracts top-level module names referenced via "import X" / "from X import Y".
 function extractUsedPackages(dir) {
-    const pyFiles = getAllFiles(dir).filter(f => f.toLowerCase().endsWith('.py'));
+    // Notebooks count: their code cells are read as Python (lib/notebook.js).
+    const pyFiles = getAllFiles(dir).filter(f => /\.(py|ipynb)$/i.test(f));
     const used = new Set();
     const patterns = [
         /^\s*import\s+([A-Za-z0-9_]+)/gm,
@@ -234,7 +236,7 @@ function extractUsedPackages(dir) {
     ];
     for (const file of pyFiles) {
         let content;
-        try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
+        try { content = readSourceFile(file); } catch (e) { continue; }
         for (const re of patterns) {
             re.lastIndex = 0;
             let m;
@@ -627,7 +629,9 @@ async function preflight(config = {}) {
 
 export default {
     language: 'python',
-    sourceExtensions: ['.py'],
+    // .ipynb: Jupyter/Colab notebooks — analysis reads their cells as Python (lib/notebook.js),
+    // and ruff lints notebooks natively.
+    sourceExtensions: ['.py', '.ipynb'],
     stripComments,
     extractComments,
     checkManifest,

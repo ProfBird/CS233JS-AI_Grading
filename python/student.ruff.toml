@@ -3,6 +3,9 @@
 # intent of eslint/student.eslint.config.mjs: catch real correctness issues (undefined
 # names, unused imports/vars) without penalizing students for every style nit.
 line-length = 100
+# Lint Jupyter notebooks too (CS212's Colab labs). Already the default in recent ruff;
+# kept explicit for older versions.
+extend-include = ["*.ipynb"]
 
 [lint]
 # E/W = pycodestyle, F = pyflakes (the correctness-relevant checks), C90 = complexity

@@ -18,7 +18,7 @@
 import fs from 'fs';
 const fsp = fs.promises;
 import path from 'path';
-import { toSafeName, matchUrlCategories, acquireCode, applyGithubSubdir, CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS, emptyUrls } from './extract_code.js';
+import { toSafeName, matchUrlCategories, acquireCode, acquireColabNotebook, applyGithubSubdir, CODE_DIR, REPO_DIR, DEFAULT_URL_PATTERNS, emptyUrls } from './extract_code.js';
 import * as canvas from '../lib/canvas_client.js';
 import { makeStudent } from '../lib/student.js';
 
@@ -112,6 +112,8 @@ async function importOneSubmission(submission, submissionsDir, urlPatterns) {
     if (!student.extractedDir && !student.error) {
         const codeDir = path.join(studentDir, urls.github ? REPO_DIR : CODE_DIR);
         acquireCode(student, codeDir, urls);
+        // A Colab link (online_text_entry / online_url) with no other code: fetch the notebook.
+        await acquireColabNotebook(student, codeDir, urls);
     }
     applyGithubSubdir(student, urls);
     student.urls = urls;

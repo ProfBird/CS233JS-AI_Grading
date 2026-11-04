@@ -8,6 +8,9 @@
 #       snake_case module (file) names
 #   I — isort: imports grouped standard library, then third-party, then local
 line-length = 100
+# Lint Jupyter notebooks too (CS212's Colab labs). Already the default in recent ruff;
+# kept explicit for older versions.
+extend-include = ["*.ipynb"]
 
 [lint]
 # E/W = pycodestyle, F = pyflakes (correctness), C90 = complexity — same as the shipped default

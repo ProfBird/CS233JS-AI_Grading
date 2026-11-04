@@ -6,6 +6,9 @@
     "language": "python",
     "execution": {
       "cwd": "copy"
+    },
+    "urlPatterns": {
+      "colab": "colab.research.google.com"
     }
   }
 }

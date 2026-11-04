@@ -14,7 +14,7 @@
  * with exactly one, grade.js auto-resolves it and positional args are NOT shifted, so
  * argv: ['Lab03'] (not ['CS233JS', 'Lab03']) is the realistic single-course invocation.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -461,5 +461,28 @@ describe('resolveGradeSetup — driver notes survive teardown', () => {
         await resolveGradeSetup(driver, opts({ argv: ['Lab03'] }));
 
         expect(driver.takeNotes().some(n => n.includes('Saved term "Spring 2026"'))).toBe(true);
+    });
+});
+
+describe('resolveGradeSetup — Canvas course ID reuse', () => {
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    it('does not re-ask for the course ID once the course has a saved canvasCourseId', async () => {
+        writeCourseConfig('CIS195', { courseName: 'CIS195', courseCode: 'CIS195', rubricPrefix: 'CIS195', canvasCourseId: 3878 });
+        writeLab('CIS195', 'Lab03');
+        writeLocalConfig({ ...oneTermConfig(), canvas: { url: 'https://canvas.example.edu', token: 'tok' } });
+
+        const json = (body) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => body, text: async () => '' });
+        vi.stubGlobal('fetch', vi.fn(async (url) => String(url).includes('/assignments')
+            ? json([{ id: 77, name: 'Lab03', published: true, submission_types: ['online_upload'] }])
+            : json({ id: 3878, name: 'CIS 195 Fall 2026', workflow_state: 'available' })));
+
+        const driver = mockDriver(['', ''], { strict: true });   // assignment pick, grading options
+        const setup = await resolveGradeSetup(driver, opts({ argv: ['Lab03', '--canvas'] }));
+
+        const asked = driver.calls.filter(c => c.method === 'ask').map(c => c.prompt);
+        expect(asked).not.toContain('Canvas course ID');
+        expect(setup.courseId).toBe(3878);
+        expect(setup.assignmentId).toBe(77);
     });
 });

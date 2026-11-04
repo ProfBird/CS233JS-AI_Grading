@@ -20,6 +20,7 @@ import { askPath } from './path_browser.js';
 import { validateConfig, loadHandlerModules } from './config_validation.js';
 import { resolveLegacyLabDir } from './resolve_lab_dir.js';
 import * as canvasClient from './canvas_client.js';
+import { writeLocalConfigFile } from './local_config_file.js';
 
 // This file lives in src/lib/; course config + the default-config template live at the
 // repo root, two levels up.
@@ -117,7 +118,7 @@ export async function resolveGradeSetup(driver, {
     function saveLocalConfig(cfg) {
         let existing = {};
         try { existing = JSON.parse(fs.readFileSync(localConfigPath, 'utf8')); } catch (e) {}
-        fs.writeFileSync(localConfigPath, JSON.stringify({ ...existing, ...cfg }, null, 2) + '\n', 'utf8');
+        writeLocalConfigFile(localConfigPath, { ...existing, ...cfg });
     }
 
     // One-time migration: earlier runs stored a single flat labRoot/codeRoot pair.
@@ -143,7 +144,7 @@ export async function resolveGradeSetup(driver, {
         delete onDisk.labRoot;
         delete onDisk.codeRoot;
         onDisk.terms = terms;
-        fs.writeFileSync(localConfigPath, JSON.stringify(onDisk, null, 2) + '\n', 'utf8');
+        writeLocalConfigFile(localConfigPath, onDisk);
         driver.note('  Migrated labRoot/codeRoot into a "Spring 2026" term in local-config.json');
         return terms;
     }
@@ -440,6 +441,18 @@ export async function resolveGradeSetup(driver, {
         if (canvasFlag || !assignmentId) {
             driver.print('\n--- Canvas Setup ---');
             let canvasCourse = null;
+            // A course ID saved on the course (from an earlier lab) is reused without
+            // asking: just fetch the course to confirm it still resolves. Only if that
+            // fails do we fall through to the prompt below.
+            if (courseId) {
+                try {
+                    canvasCourse = await canvasClient.getCourse(courseId, canvasConfig);
+                    driver.print(`  Canvas course: "${canvasCourse.name}" (id ${canvasCourse.id}, saved for ${course.courseName})`);
+                } catch (e) {
+                    driver.print(`  Saved Canvas course ${courseId} could not be loaded: ${canvasClient.sanitize(e.message, canvasConfig.token).slice(0, 200)}`);
+                    canvasCourse = null;
+                }
+            }
             while (!canvasCourse) {
                 const entered = await driver.ask('Canvas course ID', courseId ? String(courseId) : '');
                 if (!entered) { driver.print('  A course ID is required.'); continue; }

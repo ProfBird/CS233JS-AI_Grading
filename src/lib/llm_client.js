@@ -1,6 +1,7 @@
 // Unified LLM client supporting Ollama, OpenRouter, and Anthropic.
 // API key lookup: environment variable first, then local-config.json.
 
+import { writeLocalConfigFile } from './local_config_file.js';
 import http from 'http';
 import https from 'https';
 import fs from 'fs';
@@ -224,7 +225,7 @@ async function setupLLMInteractive(localConfigPath, { ask, askBoolean, askOption
     try { stored = JSON.parse(fs.readFileSync(localConfigPath, 'utf8')); } catch (e) {}
     stored.llm = { provider, model };
     if (saveKey && apiKey) stored.llm.apiKey = apiKey;
-    fs.writeFileSync(localConfigPath, JSON.stringify(stored, null, 2) + '\n');
+    writeLocalConfigFile(localConfigPath, stored);
     console.log('  LLM configuration saved.\n');
 
     return new LLMClient({ provider, apiKey, model });
@@ -290,7 +291,7 @@ async function selectModel(localConfigPath, { ask, askOptions }) {
 
     stored.llm = { provider: choice.provider, model };
     if (apiKey) stored.llm.apiKey = apiKey;
-    fs.writeFileSync(localConfigPath, JSON.stringify(stored, null, 2) + '\n');
+    writeLocalConfigFile(localConfigPath, stored);
 
     return new LLMClient({ provider: choice.provider, apiKey, model });
 }

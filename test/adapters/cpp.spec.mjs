@@ -40,7 +40,7 @@ let compilerAvailable = false;
 
 beforeAll(async () => {
     compilerAvailable = (await cppAdapter.preflight(CPP_CONFIG)).available;
-});
+}, 30000);   // compiler start-up can exceed the 10 s default hook timeout on a cold CI runner
 
 describe('cpp adapter — interface contract', () => {
     it('exposes all required adapter keys', () => {

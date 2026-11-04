@@ -24,11 +24,11 @@ const execFileAsync = util.promisify(execFile);
 let uvAvailable = false;
 const savedEnv = {};
 beforeAll(async () => {
-    try { await execFileAsync('uv', ['--version'], { timeout: 5000 }); uvAvailable = true; } catch (e) { /* not installed */ }
+    try { await execFileAsync('uv', ['--version'], { timeout: 15000 }); uvAvailable = true; } catch (e) { /* not installed */ }
     for (const k of ['UV_OFFLINE', 'UV_PYTHON_DOWNLOADS']) savedEnv[k] = process.env[k];
     process.env.UV_OFFLINE = '1';
     process.env.UV_PYTHON_DOWNLOADS = 'never';
-});
+}, 30000);   // tool start-up can be slow on a cold CI runner
 afterAll(() => {
     for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 });

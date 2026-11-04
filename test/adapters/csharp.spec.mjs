@@ -20,7 +20,7 @@ import { resolveAdapter } from '../../src/adapters/index.js';
 let dotnetAvailable = false;
 beforeAll(async () => {
     dotnetAvailable = (await csharpAdapter.preflight({})).available;
-});
+}, 30000);   // the .NET SDK's first start can exceed the 10 s default hook timeout on a cold CI runner
 
 describe('csharp adapter — interface contract', () => {
     it('exposes all required adapter keys', () => {

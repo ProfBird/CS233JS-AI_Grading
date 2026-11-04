@@ -25,14 +25,22 @@ const PY_BIN = process.platform === 'win32' ? 'py' : 'python3';
 let pythonAvailable = false;
 let ruffAvailable = false;
 let pytestAvailable = false;
+// Probes run in parallel with a generous per-probe limit: on a cold Windows CI runner each
+// Python start-up can take seconds, and three sequential 5 s probes overran vitest's default
+// 10 s hook timeout (CI run 41902676599). A probe that times out reads as "not installed"
+// and silently skips that tool's tests, so the limit must not be tight either.
+const PROBE_TIMEOUT_MS = 15000;
+const probe = args => execFileAsync(PY_BIN, args, { timeout: PROBE_TIMEOUT_MS }).then(() => true, () => false);
 beforeAll(async () => {
     // build() shells out to `py_compile` via the interpreter itself — on a Node-only CI
     // machine with no Python installed at all, that's a different (broader) gap than
     // "ruff/pytest aren't pip-installed", so it needs its own gate.
-    try { await execFileAsync(PY_BIN, ['--version'], { timeout: 5000 }); pythonAvailable = true; } catch (e) { /* not installed */ }
-    try { await execFileAsync(PY_BIN, ['-m', 'ruff', '--version'], { timeout: 5000 }); ruffAvailable = true; } catch (e) { /* not installed */ }
-    try { await execFileAsync(PY_BIN, ['-m', 'pytest', '--version'], { timeout: 5000 }); pytestAvailable = true; } catch (e) { /* not installed */ }
-});
+    [pythonAvailable, ruffAvailable, pytestAvailable] = await Promise.all([
+        probe(['--version']),
+        probe(['-m', 'ruff', '--version']),
+        probe(['-m', 'pytest', '--version']),
+    ]);
+}, 30000);
 
 describe('python adapter — interface contract', () => {
     it('exposes all required adapter keys', () => {
@@ -275,8 +283,8 @@ import { mkdirSync, readdirSync, existsSync, rmSync as rmSync2 } from 'fs';
 
 let uvAvailable = false;
 beforeAll(async () => {
-    try { await execFileAsync('uv', ['--version'], { timeout: 5000 }); uvAvailable = true; } catch (e) { /* not installed */ }
-});
+    try { await execFileAsync('uv', ['--version'], { timeout: PROBE_TIMEOUT_MS }); uvAvailable = true; } catch (e) { /* not installed */ }
+}, 30000);
 
 function scratchProject(files) {
     const dir = mkdtempSync(join(tmpdir(), 'pyproj-'));
@@ -469,5 +477,5 @@ describe('preflight', () => {
         expect(runs.warning).toMatch(/uv not found/);
         const lintOnly = await pyAdapter.preflight({ toolchains, runtimeCheck: 'none', mappings: [{ type: 'lint' }] });
         expect(lintOnly).toEqual({ available: true, hint: '' });
-    });
+    }, 30000);   // two interpreter/tool start-ups — over the 5 s default on a cold Windows runner
 });

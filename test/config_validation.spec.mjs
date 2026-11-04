@@ -130,6 +130,23 @@ describe('validateConfig', () => {
         expect(() => validateConfig(withManual({ reviewRow: 'x', reviewRowOccurrence: 0 }), 'Lab01')).toThrow(/reviewRowOccurrence/);
     });
 
+    it('accepts and checks execution / runCheck / testCheck settings', () => {
+        const withCfg = extra => ({ ...validBaseConfig(), ...extra });
+        expect(() => validateConfig(withCfg({
+            execution: { cwd: 'copy', envCacheDir: '/tmp/envs', timeoutMs: 20000, installTimeoutMs: 600000 },
+            runCheck: { entry: 'main.py', supportFiles: ['Data', { from: 'GroupA-Data', to: 'Data' }], expectPatterns: ['sections: \\d+'] },
+            testCheck: { mode: 'script', entry: 'test_scheduler.py', passPattern: '^PASS', failPattern: '^FAIL' },
+        }), 'Lab02')).not.toThrow();
+        expect(() => validateConfig(withCfg({ execution: { cwd: 'here' } }), 'x')).toThrow(/execution\.cwd/);
+        expect(() => validateConfig(withCfg({ execution: { installTimeoutMs: -1 } }), 'x')).toThrow(/installTimeoutMs/);
+        expect(() => validateConfig(withCfg({ runCheck: { supportFiles: 'Data' } }), 'x')).toThrow(/supportFiles/);
+        expect(() => validateConfig(withCfg({ runCheck: { supportFiles: [{ to: 'Data' }] } }), 'x')).toThrow(/supportFiles/);
+        expect(() => validateConfig(withCfg({ runCheck: { expectPatterns: ['('] } }), 'x')).toThrow(/expectPatterns/);
+        expect(() => validateConfig(withCfg({ testCheck: { mode: 'unittest' } }), 'x')).toThrow(/testCheck\.mode/);
+        expect(() => validateConfig(withCfg({ testCheck: { mode: 'script' } }), 'x')).toThrow(/testCheck\.entry/);
+        expect(() => validateConfig(withCfg({ testCheck: { failPattern: '[' } }), 'x')).toThrow(/failPattern/);
+    });
+
     it('accumulates multiple errors into a single thrown message', () => {
         const config = validBaseConfig();
         delete config.rubricName;

@@ -264,3 +264,210 @@ describe('extractComments exists on every comment-capable adapter', () => {
         }
     });
 });
+
+// ---------- uv projects, entry points, pyproject.toml, script-mode tests ----------
+
+import {
+    resolveEntry, parsePyprojectDependencies, importNamesFor, parseScriptTestOutput,
+    envPython, uvEnvKey,
+} from '../../src/adapters/python.js';
+import { mkdirSync, readdirSync, existsSync, rmSync as rmSync2 } from 'fs';
+
+let uvAvailable = false;
+beforeAll(async () => {
+    try { await execFileAsync('uv', ['--version'], { timeout: 5000 }); uvAvailable = true; } catch (e) { /* not installed */ }
+});
+
+function scratchProject(files) {
+    const dir = mkdtempSync(join(tmpdir(), 'pyproj-'));
+    for (const [rel, content] of Object.entries(files)) {
+        mkdirSync(join(dir, rel, '..'), { recursive: true });
+        writeFileSync(join(dir, rel), content);
+    }
+    return dir;
+}
+
+describe('resolveEntry / detectProject', () => {
+    it('picks main.py by exact name, never e.g. domain.py', () => {
+        const files = ['domain.py', 'main.py', 'util.py'].map(f => join('/p', f));
+        expect(resolveEntry('/p', files, null)).toEqual({ path: join('/p', 'main.py'), guessed: false });
+        expect(resolveEntry('/p', [join('/p', 'domain.py')], null)).toEqual({ path: join('/p', 'domain.py'), guessed: false });
+    });
+
+    it('honors runCheck.entry as a bare filename or a relative path, and reports a missing one', () => {
+        const dir = scratchProject({ 'scheduler.py': '', 'src/run_me.py': '', 'main.py': '' });
+        try {
+            const py = [join(dir, 'scheduler.py'), join(dir, 'src', 'run_me.py'), join(dir, 'main.py')];
+            expect(resolveEntry(dir, py, 'scheduler.py').path).toBe(join(dir, 'scheduler.py'));
+            expect(resolveEntry(dir, py, 'src/run_me.py').path).toBe(join(dir, 'src', 'run_me.py'));
+            expect(resolveEntry(dir, py, 'nope.py')).toMatchObject({ path: null, error: 'Entry file "nope.py" not found' });
+        } finally { rmSync2(dir, { recursive: true, force: true }); }
+    });
+
+    it('flags a guess when there is no main.py and several files', () => {
+        const r = resolveEntry('/p', [join('/p', 'b.py'), join('/p', 'a.py')], null);
+        expect(r).toMatchObject({ path: join('/p', 'a.py'), guessed: true });
+    });
+
+    it('a nested pyproject.toml makes its folder the project (python-uv), entry relative to it', () => {
+        const dir = scratchProject({ 'Lab02/pyproject.toml': '[project]\nname="x"\n', 'Lab02/main.py': '', 'Lab02/Data/a.csv': '', 'notes.py': '' });
+        try {
+            const [p] = pyAdapter.detectProject(dir, {});
+            expect(p).toMatchObject({ dir: join(dir, 'Lab02'), type: 'python-uv', entry: 'main.py', entryError: null });
+        } finally { rmSync2(dir, { recursive: true, force: true }); }
+    });
+
+    it('surfaces a configured entry that does not exist', () => {
+        const dir = scratchProject({ 'main.py': '' });
+        try {
+            const [p] = pyAdapter.detectProject(dir, { runCheck: { entry: 'scheduler.py' } });
+            expect(p.entryError).toBe('Entry file "scheduler.py" not found');
+            expect(p.runCommand).toBeNull();
+        } finally { rmSync2(dir, { recursive: true, force: true }); }
+    });
+});
+
+describe('pyproject.toml manifest', () => {
+    const toml = `[project]
+name = "lab02"
+dependencies = [
+    "z3-solver>=4.15.4",   # the solver
+    "httpx[cli]>=0.27; python_version > '3.9'",
+    "Scikit_Learn",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff"]
+`;
+
+    it('reads dependencies (multi-line, comments, extras, markers) and dev groups, normalized', () => {
+        expect(parsePyprojectDependencies(toml)).toEqual({
+            dependencies: ['z3-solver', 'httpx', 'scikit-learn'],
+            devDependencies: ['pytest', 'ruff'],
+        });
+    });
+
+    it('maps distribution names to import names', () => {
+        expect(importNamesFor('scikit-learn')).toEqual(['sklearn']);
+        expect(importNamesFor('Z3_Solver')).toEqual(['z3']);
+        expect(importNamesFor('tensorflow-datasets')).toEqual(['tensorflow_datasets']);
+        expect(importNamesFor('my-dist', { 'My_Dist': 'mymod' })).toEqual(['mymod']);
+    });
+
+    it('checkManifest: imported deps pass via aliases; unused runtime deps flagged; dev groups not', () => {
+        const dir = scratchProject({
+            'pyproject.toml': toml,
+            'solver.py': 'from z3 import Solver\nimport httpx\n',
+        });
+        try {
+            const r = pyAdapter.checkManifest(dir, { dependencies: ['z3-solver', 'numpy'] });
+            expect(r.found).toBe(true);
+            expect(r.issues).toEqual([
+                '"numpy" not found in pyproject.toml',
+                'extra package "scikit-learn" in pyproject.toml is never imported',
+            ]);
+        } finally { rmSync2(dir, { recursive: true, force: true }); }
+    });
+});
+
+describe('script-mode test output', () => {
+    const run = (stdout, extra = {}) => parseScriptTestOutput({ stdout, stderr: '', code: 0, timedOut: false, ...extra });
+
+    it('counts PASS/FAIL lines (the Lab02 driver format)', () => {
+        expect(run('PASS: test_a\nFAIL: test_b\nPASS: test_c\n2 of 3 tests passed\n', { code: 1 }))
+            .toEqual({ total: 3, passed: 2, failures: ['FAIL: test_b'] });
+    });
+
+    it('a traceback after some tests adds a failure for the tests that never ran', () => {
+        const r = run('PASS: test_a\n', { code: 1, stderr: 'Traceback (most recent call last):\n  ...\nModuleNotFoundError: No module named \'z3\'' });
+        expect(r.total).toBe(2);
+        expect(r.passed).toBe(1);
+        expect(r.failures[0]).toMatch(/exit code 1.*ModuleNotFoundError/);
+    });
+
+    it('no PASS/FAIL lines: one test, decided by the exit code', () => {
+        expect(run('all good')).toEqual({ total: 1, passed: 1, failures: [] });
+        expect(run('', { code: 1, stderr: 'AssertionError' }).passed).toBe(0);
+        expect(run('', { timedOut: true, code: null }).failures).toEqual(['Test run timed out']);
+    });
+
+    it('custom patterns', () => {
+        expect(parseScriptTestOutput({ stdout: 'ok 1\nnot ok 2\nok 3', stderr: '', code: 0 }, { passPattern: '^ok\\b', failPattern: '^not ok\\b' }))
+            .toEqual({ total: 3, passed: 2, failures: ['not ok 2'] });
+    });
+});
+
+describe('uv environments', () => {
+    it('finds the environment interpreter per platform', () => {
+        expect(envPython('/e', 'darwin')).toBe(join('/e', 'bin', 'python'));
+        expect(envPython('/e', 'win32')).toBe(join('/e', 'Scripts', 'python.exe'));
+    });
+
+    it('keys environments by pyproject.toml + uv.lock + .python-version contents', () => {
+        const a = scratchProject({ 'pyproject.toml': '[project]\nname="x"\n' });
+        const b = scratchProject({ 'pyproject.toml': '[project]\nname="x"\n', 'main.py': 'different code, same deps' });
+        const c = scratchProject({ 'pyproject.toml': '[project]\nname="x"\n', 'uv.lock': 'v1' });
+        try {
+            expect(uvEnvKey(a)).toBe(uvEnvKey(b));
+            expect(uvEnvKey(a)).not.toBe(uvEnvKey(c));
+        } finally { [a, b, c].forEach(d => rmSync2(d, { recursive: true, force: true })); }
+    });
+
+    // Real uv, but offline: a dependency-free project needs no package downloads, and
+    // UV_PYTHON_DOWNLOADS=never keeps uv from fetching an interpreter.
+    it('builds a cached environment outside the submission, then reuses it', async (ctx) => {
+        if (!uvAvailable) ctx.skip();
+        const saved = { UV_OFFLINE: process.env.UV_OFFLINE, UV_PYTHON_DOWNLOADS: process.env.UV_PYTHON_DOWNLOADS };
+        process.env.UV_OFFLINE = '1';
+        process.env.UV_PYTHON_DOWNLOADS = 'never';
+        const dir = scratchProject({ 'pyproject.toml': '[project]\nname = "lab"\nversion = "0.1.0"\nrequires-python = ">=3.9"\ndependencies = []\n', 'main.py': 'print("hi")\n' });
+        const cache = mkdtempSync(join(tmpdir(), 'uvcache-'));
+        try {
+            const config = { execution: { envCacheDir: cache } };
+            const [project] = pyAdapter.detectProject(dir, config);
+            const first = await pyAdapter.install(project, config);
+            expect(first).toMatchObject({ success: true, errors: [] });
+            expect(project.runCommand[0]).toBe(first.python);
+            expect(first.python.startsWith(cache)).toBe(true);
+            expect(existsSync(first.python)).toBe(true);
+            expect(readdirSync(dir).sort()).toEqual(['main.py', 'pyproject.toml']);  // no uv.lock/.venv written
+
+            const t0 = Date.now();
+            const [again] = pyAdapter.detectProject(dir, config);
+            const second = await pyAdapter.install(again, config);
+            expect(second.python).toBe(first.python);
+            expect(Date.now() - t0).toBeLessThan(2000);   // marker hit: no second sync
+        } finally {
+            for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+            rmSync2(dir, { recursive: true, force: true });
+            rmSync2(cache, { recursive: true, force: true });
+        }
+    }, 120000);
+
+    it('reports a uv sync failure with uv\'s own message', async (ctx) => {
+        if (!uvAvailable) ctx.skip();
+        const dir = scratchProject({ 'pyproject.toml': 'this is [not valid toml', 'main.py': '' });
+        const cache = mkdtempSync(join(tmpdir(), 'uvcache-'));
+        try {
+            const [project] = pyAdapter.detectProject(dir, {});
+            const r = await pyAdapter.install(project, { execution: { envCacheDir: cache } });
+            expect(r.success).toBe(false);
+            expect(r.errors[0]).toMatch(/^uv sync failed: /);
+        } finally {
+            rmSync2(dir, { recursive: true, force: true });
+            rmSync2(cache, { recursive: true, force: true });
+        }
+    }, 60000);
+});
+
+describe('preflight', () => {
+    it('warns (without failing) about a missing uv only when the lab runs or tests code', async (ctx) => {
+        if (!pythonAvailable) ctx.skip();
+        const toolchains = { uv: '/definitely/not/uv' };
+        const runs = await pyAdapter.preflight({ toolchains, runtimeCheck: 'run_check', mappings: [] });
+        expect(runs.available).toBe(true);
+        expect(runs.warning).toMatch(/uv not found/);
+        const lintOnly = await pyAdapter.preflight({ toolchains, runtimeCheck: 'none', mappings: [{ type: 'lint' }] });
+        expect(lintOnly).toEqual({ available: true, hint: '' });
+    });
+});

@@ -243,6 +243,44 @@ async function checkBuild(extractedDir, adapter, config) {
 // see that module for the isolation-tier documentation (direct/restricted-user/container).
 // This strategy never spawns the artifact itself.
 
+// runCheck.supportFiles entries — "Data" or { from: "GroupA-Data", to: "Data" } — resolved
+// against the lab's config folder, for the sandbox to add to the run directory.
+function resolveSupportFiles(runCheck, configDir) {
+    const entries = (runCheck && runCheck.supportFiles) || [];
+    return entries.map(e => {
+        const { from, to } = typeof e === 'string' ? { from: e, to: e } : { from: e.from, to: e.to ?? path.basename(e.from) };
+        return { from: path.resolve(configDir || '.', from), to };
+    });
+}
+
+// The sandbox options shared by run_check and test_check. With execution.cwd "copy" the
+// program runs in a copy of its project folder (plus support files) instead of an empty
+// directory — what a program that opens files relative to its project folder needs.
+function execOptionsFor(project, config, ctx) {
+    const executionConfig = config.execution || {};
+    const copying = executionConfig.cwd === 'copy';
+    return {
+        mode: executionConfig.mode,
+        cwdSource: copying ? project.dir : null,
+        supportFiles: resolveSupportFiles(config.runCheck, ctx.configDir),
+        env: project.env || {},
+    };
+}
+
+// When running in a copy of the project, argv paths inside the project folder must point at
+// the copy — i.e. be relative to it (the copy is the working directory).
+function argvForCopy(argv, project) {
+    return argv.map(a => (typeof a === 'string' && a.startsWith(project.dir + path.sep) ? path.relative(project.dir, a) : a));
+}
+
+// Installs a project's dependencies when the adapter knows how (e.g. a uv environment for a
+// Python project). Returns an error list, empty on success.
+async function installIfNeeded(adapter, project, config) {
+    if (!adapter.install) return [];
+    const result = await adapter.install(project, config);
+    return result.success ? [] : (result.errors.length ? result.errors : ['Dependency install failed']);
+}
+
 registerCheckStrategy('run_check', async (student, config, ctx) => {
     const { adapter } = ctx;
     const projects = adapter.detectProject(student.extractedDir, config);
@@ -251,6 +289,10 @@ registerCheckStrategy('run_check', async (student, config, ctx) => {
     // check, so a class-library/test project in the same solution isn't picked over the
     // actual console app); adapters that don't tag this (cpp/python) fall back to [0].
     const project = projects.find(p => p.executable) || projects[0];
+    if (project.entryError) return { success: false, errors: [project.entryError] };
+
+    const installErrors = await installIfNeeded(adapter, project, config);
+    if (installErrors.length) return { success: false, errors: installErrors };
 
     let artifactPath = project.artifactPath;
     if (!project.runCommand && adapter.build) {
@@ -259,19 +301,22 @@ registerCheckStrategy('run_check', async (student, config, ctx) => {
         artifactPath = buildResult.artifactPath || artifactPath;
     }
 
-    const runCommand = project.runCommand || (artifactPath ? [artifactPath] : null);
+    let runCommand = project.runCommand || (artifactPath ? [artifactPath] : null);
     if (!runCommand) return { success: false, errors: ['No run command available for this project'] };
 
     const runConfig = config.runCheck || {};
     const executionConfig = config.execution || {};
+    const execOptions = execOptionsFor(project, config, ctx);
+    if (execOptions.cwdSource) runCommand = argvForCopy(runCommand, project);
     const result = await runStudentArtifact(runCommand, {
-        mode: executionConfig.mode,
+        ...execOptions,
         stdin: runConfig.stdin || '',
         timeoutMs: runConfig.timeoutMs || executionConfig.timeoutMs || 10000,
     });
 
     const errors = [];
-    if (result.timedOut) errors.push('Program timed out (possible infinite loop or unclosed stdin read)');
+    if (result.setupError) errors.push(result.stderr);
+    else if (result.timedOut) errors.push('Program timed out (possible infinite loop or unclosed stdin read)');
     else if (result.code !== 0) errors.push(`Exited with code ${result.code}${result.stderr ? `: ${result.stderr.trim().slice(0, 300)}` : ''}`);
 
     for (const pattern of (runConfig.expectPatterns || [])) {
@@ -324,12 +369,17 @@ async function checkStudentScripts(extractedDir, scriptNames, adapter = resolveA
 
 // Runs when at least one test_check mapping is configured and the adapter supports
 // running tests (pytest/dotnet test/CTest — wired up per-language in later phases).
-async function checkStudentTests(extractedDir, adapter, config = {}) {
+// Dependencies are installed first (a cached environment makes this free after run_check),
+// and the adapter gets the same sandbox options run_check uses (project copy, support files).
+async function checkStudentTests(extractedDir, adapter, config = {}, ctx = {}) {
     if (!extractedDir) return { error: 'No code extracted' };
     if (!adapter.runTests) return { error: `Test running is not supported for the "${adapter.language}" language yet` };
     const projects = adapter.detectProject(extractedDir, config);
     if (projects.length === 0) return { error: 'No project found' };
-    return adapter.runTests(projects[0], config);
+    const project = projects[0];
+    const installErrors = await installIfNeeded(adapter, project, config);
+    if (installErrors.length) return { error: installErrors.join('; ') };
+    return adapter.runTests(project, config, execOptionsFor(project, config, ctx));
 }
 
 // ========== Built-in strategies ==========
@@ -398,7 +448,8 @@ registerCheckStrategy('both', async (student, config, ctx) => {
 
 // ========== Main export ==========
 
-export default async function(students, config, labDir) {
+// configDir: the lab's (or step's) config folder — runCheck.supportFiles resolve against it.
+export default async function(students, config, labDir, configDir = null) {
     const adapter = resolveAdapter(config);
     const mode = config.runtimeCheck || 'build';
     const strategy = getCheckStrategy(mode);
@@ -437,7 +488,7 @@ export default async function(students, config, labDir) {
         }
     }
 
-    const ctx = { adapter, browser };
+    const ctx = { adapter, browser, configDir };
     for (const student of students) {
         if (!student.extractedDir || !fs.existsSync(student.extractedDir) || student.error) {
             student.runtimeCheck = { success: false, errors: [] };
@@ -487,7 +538,7 @@ export default async function(students, config, labDir) {
                 student.testCheck = { error: 'No code extracted' };
                 continue;
             }
-            student.testCheck = await checkStudentTests(student.extractedDir, adapter, config);
+            student.testCheck = await checkStudentTests(student.extractedDir, adapter, config, ctx);
             const tc = student.testCheck;
             if (tc.error) {
                 console.log(`  FAIL: ${student.name}: ${tc.error}`);

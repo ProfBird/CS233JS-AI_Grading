@@ -63,18 +63,77 @@ function killProcessTree(pid) {
     }
 }
 
-async function runDirect(argv, execConfig) {
-    const { stdin = '', timeoutMs = 10000 } = execConfig;
+// Folders never copied into a run directory: dependency/virtual-env/VCS/cache folders. A
+// student's own .venv would be wrong for this machine anyway; the grader supplies the env.
+const COPY_SKIP_DIRS = new Set(['.venv', 'venv', '.git', '__pycache__', 'node_modules', '.pytest_cache']);
 
-    // Fresh, empty, throwaway working directory — any relative-path file writes/deletes
-    // the student program makes land here, not in the actual submission/grading tree.
+// Copies a project folder into dest, skipping COPY_SKIP_DIRS and symlinks (a symlink could
+// point anywhere on the grading machine; nothing a student project needs).
+function copyProject(src, dest) {
+    fs.cpSync(src, dest, {
+        recursive: true,
+        filter: from => {
+            if (from === src) return true;
+            let st;
+            try { st = fs.lstatSync(from); } catch (e) { return false; }
+            if (st.isSymbolicLink()) return false;
+            return !(st.isDirectory() && COPY_SKIP_DIRS.has(path.basename(from)));
+        },
+    });
+}
+
+// Copies instructor-supplied support files into the run directory, only where the student
+// doesn't already have a file at that path — students may legitimately edit supplied data
+// (e.g. CS212 Lab02's Challenge 1 refactors the CSV files). Each entry: { from: absolute
+// source file or folder, to: path relative to the run directory }.
+function overlaySupportFiles(supportFiles, runDir) {
+    for (const { from, to } of supportFiles) {
+        if (!fs.existsSync(from)) throw new Error(`support file not found: ${from}`);
+        const dest = path.join(runDir, to);
+        if (fs.statSync(from).isDirectory()) {
+            fs.cpSync(from, dest, { recursive: true, force: false, errorOnExist: false });
+        } else if (!fs.existsSync(dest)) {
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.copyFileSync(from, dest);
+        }
+    }
+}
+
+// The grader's own credentials (Canvas token, LLM API keys) must not be readable by student
+// code through its environment. Removes them; everything else (PATH, HOME, locale, …) is kept
+// so interpreters and toolchains still work.
+const SECRET_ENV_RE = /(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|CREDENTIALS?)$/i;
+function scrubEnv(env) {
+    const out = {};
+    for (const [k, v] of Object.entries(env)) {
+        if (!SECRET_ENV_RE.test(k) && !/^CANVAS_/i.test(k)) out[k] = v;
+    }
+    return out;
+}
+
+async function runDirect(argv, execConfig) {
+    const { stdin = '', timeoutMs = 10000, cwdSource = null, supportFiles = [], env = {} } = execConfig;
+
+    // Fresh, throwaway working directory — any relative-path file writes/deletes the student
+    // program makes land here, not in the actual submission/grading tree. Empty by default;
+    // with cwdSource (execution.cwd "copy") it starts as a copy of the student's project
+    // folder plus any instructor support files, so a program that opens e.g.
+    // "Data/instructors.csv" relative to its project folder (as CS212 students are told to
+    // run it) finds it.
     const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grader-run-'));
     try {
+        try {
+            if (cwdSource) copyProject(cwdSource, scratchDir);
+            overlaySupportFiles(supportFiles, scratchDir);
+        } catch (err) {
+            return { code: null, stdout: '', stderr: `Could not prepare the run directory: ${err.message}`, timedOut: false, setupError: true };
+        }
         return await new Promise(resolve => {
             let child;
             try {
                 child = spawn(argv[0], argv.slice(1), {
                     cwd: scratchDir,
+                    env: { ...scrubEnv(process.env), ...env },
                     stdio: 'pipe',
                     shell: false,
                     detached: process.platform !== 'win32', // POSIX process group for kill-tree
@@ -142,8 +201,13 @@ const MODES = {
  * Execute a student-produced artifact under the configured isolation tier.
  * @param {string[]} argv — argv array (never a shell string — cross-platform quoting is
  *   exactly the kind of bug a shell string introduces on Windows).
- * @param {{mode?: string, stdin?: string, timeoutMs?: number}} execConfig
- * @returns {Promise<{code: number|null, stdout: string, stderr: string, timedOut: boolean}>}
+ * @param {{mode?: string, stdin?: string, timeoutMs?: number, cwdSource?: string|null,
+ *          supportFiles?: {from: string, to: string}[], env?: Object}} execConfig
+ *   cwdSource — copy this project folder into the run directory first (execution.cwd "copy");
+ *   supportFiles — instructor files/folders added to the run directory where missing;
+ *   env — extra environment variables (on top of the grader's environment minus secrets).
+ * @returns {Promise<{code: number|null, stdout: string, stderr: string, timedOut: boolean,
+ *          setupError?: boolean}>}
  */
 async function runStudentArtifact(argv, execConfig = {}) {
     const mode = execConfig.mode || 'direct';
@@ -154,4 +218,4 @@ async function runStudentArtifact(argv, execConfig = {}) {
     return runner(argv, execConfig);
 }
 
-export { runStudentArtifact, killProcessTree };
+export { runStudentArtifact, killProcessTree, scrubEnv, COPY_SKIP_DIRS };

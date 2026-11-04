@@ -122,6 +122,52 @@ function validateConfig(config, labName) {
         });
     }
 
+    // --- execution / runCheck / testCheck (running student programs and tests) ---
+    const isPosInt = v => Number.isInteger(v) && v > 0;
+    const isRegex = src => { try { new RegExp(src); return true; } catch (e) { return false; } };
+    if (config.execution !== undefined) {
+        const ex = config.execution;
+        if (ex.cwd !== undefined && !['scratch', 'copy'].includes(ex.cwd)) {
+            errors.push(`execution.cwd: "${ex.cwd}" must be "scratch" or "copy"`);
+        }
+        if (ex.envCacheDir !== undefined && (typeof ex.envCacheDir !== 'string' || !ex.envCacheDir.trim())) {
+            errors.push('execution.envCacheDir: must be a folder path');
+        }
+        for (const k of ['timeoutMs', 'installTimeoutMs']) {
+            if (ex[k] !== undefined && !isPosInt(ex[k])) errors.push(`execution.${k}: must be a positive whole number of milliseconds`);
+        }
+    }
+    if (config.runCheck !== undefined) {
+        const rc = config.runCheck;
+        if (rc.entry !== undefined && (typeof rc.entry !== 'string' || !rc.entry.trim())) {
+            errors.push('runCheck.entry: must be a file name or a path relative to the project folder');
+        }
+        if (rc.supportFiles !== undefined) {
+            const ok = Array.isArray(rc.supportFiles) && rc.supportFiles.every(e =>
+                (typeof e === 'string' && e.trim())
+                || (e && typeof e === 'object' && typeof e.from === 'string' && e.from.trim()
+                    && (e.to === undefined || (typeof e.to === 'string' && e.to.trim()))));
+            if (!ok) errors.push('runCheck.supportFiles: must be a list of paths, or { "from": ..., "to": ... } entries');
+        }
+        if (rc.expectPatterns !== undefined && !(Array.isArray(rc.expectPatterns) && rc.expectPatterns.every(isRegex))) {
+            errors.push('runCheck.expectPatterns: must be a list of valid regular expressions');
+        }
+        if (rc.timeoutMs !== undefined && !isPosInt(rc.timeoutMs)) errors.push('runCheck.timeoutMs: must be a positive whole number of milliseconds');
+    }
+    if (config.testCheck !== undefined) {
+        const tc = config.testCheck;
+        if (tc.mode !== undefined && !['pytest', 'script'].includes(tc.mode)) {
+            errors.push(`testCheck.mode: "${tc.mode}" must be "pytest" or "script"`);
+        }
+        if (tc.mode === 'script' && (typeof tc.entry !== 'string' || !tc.entry.trim())) {
+            errors.push('testCheck.entry: "script" mode needs the test script to run');
+        }
+        for (const k of ['passPattern', 'failPattern']) {
+            if (tc[k] !== undefined && (typeof tc[k] !== 'string' || !isRegex(tc[k]))) errors.push(`testCheck.${k}: must be a valid regular expression`);
+        }
+        if (tc.timeoutMs !== undefined && !isPosInt(tc.timeoutMs)) errors.push('testCheck.timeoutMs: must be a positive whole number of milliseconds');
+    }
+
     // --- webContent block (check_web_content.js) + the mapping types that read it ---
     const WEB_CONTENT_TYPES = new Set(['element_check', 'css_selector_check', 'css_property_check', 'file_count']);
     const webMappings = Array.isArray(config.mappings)

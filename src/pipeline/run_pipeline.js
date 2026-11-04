@@ -40,7 +40,7 @@ const LOG_FILE = 'grading_log.txt';
 const PHASES = [
     {
         name: 'runtimeCheck',
-        run: (students, config, dirs) => runtimeCheck(students, config, dirs.artifactsDir),
+        run: (students, config, dirs) => runtimeCheck(students, config, dirs.artifactsDir, dirs.labConfigDir),
         when: () => true,
     },
     {
@@ -112,6 +112,7 @@ async function runPreflight(config) {
     if (!result.available) {
         console.warn(`  WARNING: ${adapter.language} toolchain not available. ${result.hint}`);
     }
+    if (result.warning) console.warn(`  WARNING: ${result.warning}`);
 }
 
 async function runPipeline(students, config, dirs, options) {

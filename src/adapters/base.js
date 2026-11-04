@@ -70,7 +70,10 @@
  *             A language whose build step produces rich diagnostics (e.g. compiler
  *             warnings) surfaces those through `lint()`, not through `build()`.
  * @property {((project: Project, name: string) => Promise<{defined: boolean, ran: boolean, passed: boolean, error: string|null}>) | null} runScript
- * @property {((project: Project, config?: Object) => Promise<{total: number, passed: number, failures: string[], _failed?: number}>) | null} runTests
+ * @property {((project: Project, config?: Object, execOptions?: Object) => Promise<{total: number, passed: number, failures: string[], error?: string, _failed?: number}>) | null} runTests
+ *           execOptions: the sandbox options runtime_check.js also uses for run_check (isolation mode,
+ *           support files, env) — an adapter that executes student code should pass them to
+ *           runStudentArtifact (src/lib/sandbox.js).
  *           - runs the language's test runner (pytest/dotnet test/CTest) and returns proportional
  *             pass/fail counts for the test_check mapping type; null for languages/labs with no
  *             test-runner integration yet (JS/TS explicitly set this to null — no test-runner
@@ -78,7 +81,8 @@
  *             csharp.js's runTests also sets `_failed` (the raw "Failed: N" count parsed from
  *             `dotnet test`'s summary line) — currently unused by any caller, kept for parity
  *             with the summary line rather than silently dropped.
- * @property {((config?: Object) => Promise<{available: boolean, hint: string}>) | null} preflight - toolchain availability check
+ * @property {((config?: Object) => Promise<{available: boolean, hint: string, warning?: string}>) | null} preflight - toolchain availability check;
+ *           `warning` reports a missing optional tool (e.g. uv for Python) without failing the check
  *
  * The optional trailing `config` parameter on lint/install/build/runTests/preflight is
  * the lab config object, carrying config.toolchains (machine-specific compiler/interpreter

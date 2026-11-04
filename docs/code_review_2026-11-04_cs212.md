@@ -113,7 +113,9 @@ in **each** file", and the CS 212 review form adds "any AI used (and how)".
 `stripComments` removes), require it per file, and match whole words. Making the required tokens
 configurable (`config.developerComments.require: ["name", "date", "ai"]`) would also cover CS 212's AI-disclosure line.
 
-### 1.5 `run_check` can't run a CS 212 program as students are told to run it — HIGH
+### 1.5 `run_check` can't run a CS 212 program as students are told to run it — HIGH — ✅ FIXED 2026-11-04
+
+> **Fixed:** `execution.cwd: "copy"` (CS212's course default) runs the program in a throwaway copy of its project folder, and `runCheck.supportFiles` adds instructor files such as `Data/` where the student has none. uv projects get a cached, grader-owned environment and run with its Python. `runCheck.entry` picks the program, and the `main.py` default is now an exact match. Student processes also no longer see the grader's secrets (`CANVAS_TOKEN`, API keys) in their environment. An end-to-end test (`test/python_run_integration.spec.mjs`) covers a nested uv project, instructor data and a PASS/FAIL test driver. Per-group data and multiple entry points are step 6.
 
 Three compounding problems:
 
@@ -139,7 +141,16 @@ Three compounding problems:
 
 ---
 
-## 2. Python adapter: built for a different Python workflow
+## 2. Python adapter: built for a different Python workflow — ✅ FIXED 2026-11-04
+
+> **Fixed:** everything in the table and fix list below is done:
+> - `pyproject.toml` is read for the manifest, and a distribution-to-import alias map plus `packageCheck.importAliases` decide what counts as imported.
+> - Dependencies install with `uv sync --no-install-project` into a cached environment keyed by `pyproject.toml`/`uv.lock`/`.python-version`. The sync runs in a scratch folder, never the submission, and has a 10-minute default timeout (`execution.installTimeoutMs`).
+> - Tests run through the sandbox. `testCheck.mode: "script"` counts PASS/FAIL lines, and pytest mode adds pytest to the uv environment when needed.
+> - `preflight` warns when uv is missing.
+> - The requirements.txt/pip path is unchanged.
+>
+> Not verified against real packages: every test uses dependency-free projects offline, because syncing z3-solver or scikit-learn would download from PyPI.
 
 The adapter in `src/adapters/python.js` is coherent, but it assumes `requirements.txt` + `pip` +
 pytest. CS 212 standardized on **uv + `pyproject.toml`** from Lab02 onward.
@@ -271,7 +282,7 @@ blockers, not before.
 2. ✅ Review-form parsing: "Release" header and spacer rows (1.2, 1.3). Small, with high scoring impact.
 3. ✅ `developer_comments` comment-only, per-file check (1.4).
 4. ✅ Course-level `defaults` + course-level lint config (3.1, section 2's lint item).
-5. Python uv workflow: `pyproject.toml`, `uv sync` in a copied directory, `runCheck.entry`,
+5. ✅ Python uv workflow: `pyproject.toml`, `uv sync` in a copied directory, `runCheck.entry`,
    `supportFiles`, script-mode tests (1.5, section 2).
 6. Per-variation overrides and multi-entry `runCheck` (3.2, 3.3).
 7. Lazy phase imports, `rubric-to-md` header reuse, housekeeping (3.5, 3.6, 5).

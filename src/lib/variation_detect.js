@@ -29,7 +29,7 @@ function variationKeywords(appName) {
 
 /**
  * Collects a corpus of searchable text from the repo: HTML title tags,
- * top-level directory names, package.json name fields, and README content.
+ * top-level directory names, package.json / pyproject.toml name fields, and README content.
  * @param {string} extractedDir
  * @returns {string} lowercase combined text
  */
@@ -89,6 +89,19 @@ function buildVariationCorpus(extractedDir, extraNameExclusions = []) {
         } catch (e) {
             console.warn(`  WARNING: buildVariationCorpus: could not parse ${f}: ${e.message}`);
         }
+    }
+
+    // pyproject.toml name/description (Python/uv projects) — a cheap secondary signal, read with
+    // a line regex rather than a TOML parser since only these two simple keys matter here.
+    const pyprojects = allFiles.filter(f => path.basename(f).toLowerCase() === 'pyproject.toml');
+    for (const f of pyprojects.slice(0, 5)) {
+        try {
+            const content = fs.readFileSync(f, 'utf8');
+            for (const key of ['name', 'description']) {
+                const m = content.match(new RegExp(`^\\s*${key}\\s*=\\s*["']([^"'\\n]*)["']`, 'm'));
+                if (m) parts.push(m[1]);
+            }
+        } catch (e) { /* skip */ }
     }
 
     // README (first 1 000 chars)

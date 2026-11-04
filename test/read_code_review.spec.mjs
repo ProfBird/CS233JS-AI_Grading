@@ -153,3 +153,15 @@ describe('parseGroupFromTable', () => {
         expect(parseGroupFromTable(html)).toBe('B');
     });
 });
+
+describe('parseGroupFromTable — CS212 layout (letter cell, then group-name cell)', () => {
+    it('accepts a lone lowercase letter, and never reads the group-name cell', () => {
+        expect(parseGroupFromTable(thTable(thRow("Developer's lab version (A, B, or C) and lab partner group name", 'b', 'Team Rocket')))).toBe('B');
+        expect(parseGroupFromTable(thTable(thRow('lab version', '', 'Plan B')))).toBeNull();
+        expect(parseGroupFromTable(thTable(thRow('lab version', 'C', 'A-Team')))).toBe('C');
+    });
+
+    it('does not take the article "a" in a sentence as group A', () => {
+        expect(parseGroupFromTable(thTable(thRow('lab version', 'not sure, a mix')))).toBeNull();
+    });
+});

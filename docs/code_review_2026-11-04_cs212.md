@@ -198,7 +198,9 @@ the runtime and execution settings, `codeReview` cells, and the lint, timeout an
 `validateConfig`. It's a ~15-line change in `grade_setup.js`, and CS233JS and CIS195 would
 benefit too.
 
-### 3.2 Group variations only drive app-name detection — MEDIUM
+### 3.2 Group variations only drive app-name detection — MEDIUM — ✅ FIXED 2026-11-04
+
+> **Fixed:** `variations[group].overrides` holds the settings that differ for a group (`runCheck`, `testCheck`, `execution`, `analysis`, `packageCheck`, `webContent`), merged in per student by `lib/student_group.js`'s `configForStudent`. The review form is now read first, then a new `resolveGroups` phase settles each student's group (form letter, else detected from the code, now including `pyproject.toml`'s name), then the runtime check runs with that group's settings. A student whose group is unknown gets group-dependent rows flagged `NEEDS MANUAL CHECK: lab group unknown`, never scored with another group's settings. Validation checks each group's merged config on its own. The group-letter parser also accepts a lone lowercase letter, and checks confirmed it never reads the group-name cell.
 
 `config.variations` maps a group letter to an `appName` used by `variation_detect.js`. The
 detector's corpus is built from HTML titles, `package.json` and README files, and gets almost
@@ -209,7 +211,13 @@ is already read reliably from the review form. What's missing is per-variation o
 mappings. A `variations.B.overrides: { … }` block applied after group detection would cover it.
 Add `pyproject.toml`'s `name` to the variation corpus as a cheap secondary signal.
 
-### 3.3 One entry point per submission — MEDIUM
+### 3.3 One entry point per submission — MEDIUM — ✅ FIXED 2026-11-04
+
+> **Fixed:**
+> - `runCheck` and `testCheck` can be lists of entries with `id`s; `run_check`/`test_check` mappings pick one with `runId`/`testId`.
+> - `entry` can list several candidate filenames.
+> - A program or test script that isn't found is flagged `NEEDS MANUAL CHECK` rather than scored 0.
+> - An end-to-end test runs a Lab01-style submission with two programs, each given its own stdin, including the stdin-starved `EOFError` case.
 
 `run_check` executes a single program. Lab01 has two independent programs plus tests, Lab04's flow
 is `fetch_data.py` then the main program, and Lab02 has a program plus a test module. `parts[]`
@@ -284,7 +292,7 @@ blockers, not before.
 4. ✅ Course-level `defaults` + course-level lint config (3.1, section 2's lint item).
 5. ✅ Python uv workflow: `pyproject.toml`, `uv sync` in a copied directory, `runCheck.entry`,
    `supportFiles`, script-mode tests (1.5, section 2).
-6. Per-variation overrides and multi-entry `runCheck` (3.2, 3.3).
+6. ✅ Per-variation overrides and multi-entry `runCheck` (3.2, 3.3).
 7. Lazy phase imports, `rubric-to-md` header reuse, housekeeping (3.5, 3.6, 5).
 8. Optional: `llm_check` mapping type; notebook extraction.
 

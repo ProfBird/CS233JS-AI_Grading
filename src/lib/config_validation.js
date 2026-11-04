@@ -11,6 +11,8 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { VALID_RUNTIME_MODES } from '../pipeline/runtime_check.js';
 import { VALID_MAPPING_TYPES } from './handler_registry.js';
+import { OVERRIDABLE_KEYS } from './student_group.js';
+import { mergeConfig } from './merge_config.js';
 
 // Validate that a cell reference looks like "A1" or "AA23"
 function isValidCellRef(ref) {
@@ -42,12 +44,143 @@ async function loadHandlerModules(config, labConfigDir) {
 
 // Throws an Error (with all validation issues joined into the message) instead of
 // exiting the process directly, so this is unit-testable without stubbing process.exit.
-function validateConfig(config, labName) {
+// ---------- Running student programs and tests (execution / runCheck / testCheck) ----------
+
+const isPosInt = v => Number.isInteger(v) && v > 0;
+const isRegex = src => { try { new RegExp(src); return true; } catch (e) { return false; } };
+const isNonEmptyString = v => typeof v === 'string' && v.trim() !== '';
+
+// One run's settings (runCheck object, or one entry of a runCheck array).
+function runEntryErrors(rc, label) {
+    const errors = [];
+    if (rc.entry !== undefined) {
+        const entries = Array.isArray(rc.entry) ? rc.entry : [rc.entry];
+        if (entries.length === 0 || !entries.every(isNonEmptyString)) {
+            errors.push(`${label}.entry: must be a file name or path, or a list of them`);
+        }
+    }
+    if (rc.supportFiles !== undefined) {
+        const ok = Array.isArray(rc.supportFiles) && rc.supportFiles.every(e =>
+            isNonEmptyString(e)
+            || (e && typeof e === 'object' && isNonEmptyString(e.from) && (e.to === undefined || isNonEmptyString(e.to))));
+        if (!ok) errors.push(`${label}.supportFiles: must be a list of paths, or { "from": ..., "to": ... } entries`);
+    }
+    if (rc.expectPatterns !== undefined && !(Array.isArray(rc.expectPatterns) && rc.expectPatterns.every(isRegex))) {
+        errors.push(`${label}.expectPatterns: must be a list of valid regular expressions`);
+    }
+    if (rc.stdin !== undefined && typeof rc.stdin !== 'string') errors.push(`${label}.stdin: must be text`);
+    if (rc.timeoutMs !== undefined && !isPosInt(rc.timeoutMs)) errors.push(`${label}.timeoutMs: must be a positive whole number of milliseconds`);
+    return errors;
+}
+
+// One test script's settings (testCheck object, or one entry of a testCheck array).
+function testEntryErrors(tc, label) {
+    const errors = [];
+    if (tc.mode !== undefined && !['pytest', 'script'].includes(tc.mode)) {
+        errors.push(`${label}.mode: "${tc.mode}" must be "pytest" or "script"`);
+    }
+    if (tc.mode === 'script') {
+        const entries = Array.isArray(tc.entry) ? tc.entry : [tc.entry];
+        if (entries.length === 0 || !entries.every(isNonEmptyString)) errors.push(`${label}.entry: "script" mode needs the test script to run`);
+    }
+    for (const k of ['passPattern', 'failPattern']) {
+        if (tc[k] !== undefined && (typeof tc[k] !== 'string' || !isRegex(tc[k]))) errors.push(`${label}.${k}: must be a valid regular expression`);
+    }
+    if (tc.timeoutMs !== undefined && !isPosInt(tc.timeoutMs)) errors.push(`${label}.timeoutMs: must be a positive whole number of milliseconds`);
+    if (tc.supportFiles !== undefined) errors.push(...runEntryErrors({ supportFiles: tc.supportFiles }, label));
+    return errors;
+}
+
+// runCheck/testCheck may be one entry (an object) or several (an array, each with a unique id).
+function entriesErrors(value, key, checkEntry) {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) {
+        return value && typeof value === 'object' ? checkEntry(value, key) : [`${key}: must be an object or a list of them`];
+    }
+    const errors = [];
+    const seen = new Set();
+    value.forEach((e, i) => {
+        const label = `${key}[${i}]`;
+        if (!e || typeof e !== 'object') { errors.push(`${label}: must be an object`); return; }
+        if (!isNonEmptyString(e.id)) errors.push(`${label}.id: each entry in a list needs an "id"`);
+        else if (seen.has(e.id)) errors.push(`${label}.id: "${e.id}" is used twice`);
+        else seen.add(e.id);
+        errors.push(...checkEntry(e, label));
+    });
+    return errors;
+}
+
+// The ids a runCheck/testCheck defines (empty for the single-object form).
+const entryIds = value => new Set(Array.isArray(value) ? value.map(e => e && e.id).filter(Boolean) : []);
+
+/**
+ * Errors in a config's settings for running programs and tests, including that every
+ * run_check `runId` / test_check `testId` names an entry this config defines.
+ * @param {object} cfg - the lab config, or a group's merged config
+ * @param {string} [where] - appended to messages, e.g. ' (group B)'
+ */
+function runSettingsErrors(cfg, where = '') {
+    const errors = [];
+    const ex = cfg.execution;
+    if (ex !== undefined) {
+        if (ex.cwd !== undefined && !['scratch', 'copy'].includes(ex.cwd)) errors.push(`execution.cwd: "${ex.cwd}" must be "scratch" or "copy"`);
+        if (ex.envCacheDir !== undefined && !isNonEmptyString(ex.envCacheDir)) errors.push('execution.envCacheDir: must be a folder path');
+        for (const k of ['timeoutMs', 'installTimeoutMs']) {
+            if (ex[k] !== undefined && !isPosInt(ex[k])) errors.push(`execution.${k}: must be a positive whole number of milliseconds`);
+        }
+    }
+    errors.push(...entriesErrors(cfg.runCheck, 'runCheck', runEntryErrors));
+    errors.push(...entriesErrors(cfg.testCheck, 'testCheck', testEntryErrors));
+
+    const runIds = entryIds(cfg.runCheck);
+    const testIds = entryIds(cfg.testCheck);
+    (Array.isArray(cfg.mappings) ? cfg.mappings : []).forEach((m, i) => {
+        if (m.type === 'run_check' && m.runId !== undefined && !runIds.has(m.runId)) {
+            errors.push(`mappings[${i}].runId: "${m.runId}" isn't one of runCheck's ids (${[...runIds].join(', ') || 'none — runCheck isn\'t a list'})`);
+        }
+        if (m.type === 'test_check' && m.testId !== undefined && !testIds.has(m.testId)) {
+            errors.push(`mappings[${i}].testId: "${m.testId}" isn't one of testCheck's ids (${[...testIds].join(', ') || 'none — testCheck isn\'t a list'})`);
+        }
+    });
+    return where ? errors.map(e => e + where) : errors;
+}
+
+/**
+ * Errors in config.variations: shape, allowed override keys, and each group's merged config
+ * validated on its own with the full lab-config checks (feature regexes, packageCheck,
+ * webContent, run/test settings, …) — rubric rows are shared by every group, so e.g. a runId
+ * must exist in every group's runCheck, and a bad regex in one group's features must not wait
+ * until grading. Errors the lab's own config already has aren't repeated per group.
+ */
+function groupErrors(config) {
+    const v = config.variations;
+    if (v === undefined) return [];
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return ['variations: must be an object of groups, e.g. { "A": {...}, "B": {...} }'];
+    const withoutGroups = c => { const copy = { ...c }; delete copy.variations; return copy; };
+    const baseErrors = new Set(configErrors(withoutGroups(config)));
+    const errors = [];
+    for (const [letter, group] of Object.entries(v)) {
+        if (!group || typeof group !== 'object') { errors.push(`variations.${letter}: must be an object`); continue; }
+        if (group.overrides === undefined) continue;
+        const ov = group.overrides;
+        if (!ov || typeof ov !== 'object' || Array.isArray(ov)) { errors.push(`variations.${letter}.overrides: must be an object`); continue; }
+        const bad = Object.keys(ov).filter(k => !OVERRIDABLE_KEYS.includes(k));
+        if (bad.length) errors.push(`variations.${letter}.overrides: can't set ${bad.join(', ')} (allowed: ${OVERRIDABLE_KEYS.join(', ')})`);
+        if (bad.length) continue;
+        const merged = withoutGroups(mergeConfig(config, ov));
+        errors.push(...configErrors(merged).filter(e => !baseErrors.has(e)).map(e => `${e} (group ${letter})`));
+    }
+    return errors;
+}
+
+// Every validation error in a config (an empty list when it's valid). validateConfig() below
+// throws them; groupErrors() also runs this on each group's merged config.
+function configErrors(config) {
     const errors = [];
 
     // Extract-only configs need no rubric, runtimeCheck, or mappings
     if (config.extractOnly === true) {
-        return;
+        return errors;
     }
 
     // Text-report labs (config.textReport === true) have no rubric spreadsheet —
@@ -119,54 +252,27 @@ function validateConfig(config, labName) {
             // A feature needs either a single "regex" (counted) or a nested "match"
             // tree of allOf/anyOf/regex (boolean) — see analyze_code.js evalMatchNode.
             if (!feat.regex && !feat.match) errors.push(`${prefix}: needs "regex" or "match"`);
+            // Compile every pattern now, so a typo fails at startup rather than as
+            // "Analysis failed" for each student at grading time.
+            const badRegex = (src, flags, where) => {
+                try { new RegExp(src, flags || ''); } catch (e) { errors.push(`${prefix}.${where}: invalid regular expression (${e.message})`); }
+            };
+            if (typeof feat.regex === 'string') badRegex(feat.regex, feat.flags, 'regex');
+            if (typeof feat.fileRegex === 'string') badRegex(feat.fileRegex, null, 'fileRegex');
+            const walkMatch = (node, where) => {
+                if (!node || typeof node !== 'object') return;
+                if (typeof node.regex === 'string') badRegex(node.regex, node.flags, `${where}.regex`);
+                for (const k of ['allOf', 'anyOf']) {
+                    if (Array.isArray(node[k])) node[k].forEach((child, j) => walkMatch(child, `${where}.${k}[${j}]`));
+                }
+            };
+            walkMatch(feat.match, 'match');
         });
     }
 
-    // --- execution / runCheck / testCheck (running student programs and tests) ---
-    const isPosInt = v => Number.isInteger(v) && v > 0;
-    const isRegex = src => { try { new RegExp(src); return true; } catch (e) { return false; } };
-    if (config.execution !== undefined) {
-        const ex = config.execution;
-        if (ex.cwd !== undefined && !['scratch', 'copy'].includes(ex.cwd)) {
-            errors.push(`execution.cwd: "${ex.cwd}" must be "scratch" or "copy"`);
-        }
-        if (ex.envCacheDir !== undefined && (typeof ex.envCacheDir !== 'string' || !ex.envCacheDir.trim())) {
-            errors.push('execution.envCacheDir: must be a folder path');
-        }
-        for (const k of ['timeoutMs', 'installTimeoutMs']) {
-            if (ex[k] !== undefined && !isPosInt(ex[k])) errors.push(`execution.${k}: must be a positive whole number of milliseconds`);
-        }
-    }
-    if (config.runCheck !== undefined) {
-        const rc = config.runCheck;
-        if (rc.entry !== undefined && (typeof rc.entry !== 'string' || !rc.entry.trim())) {
-            errors.push('runCheck.entry: must be a file name or a path relative to the project folder');
-        }
-        if (rc.supportFiles !== undefined) {
-            const ok = Array.isArray(rc.supportFiles) && rc.supportFiles.every(e =>
-                (typeof e === 'string' && e.trim())
-                || (e && typeof e === 'object' && typeof e.from === 'string' && e.from.trim()
-                    && (e.to === undefined || (typeof e.to === 'string' && e.to.trim()))));
-            if (!ok) errors.push('runCheck.supportFiles: must be a list of paths, or { "from": ..., "to": ... } entries');
-        }
-        if (rc.expectPatterns !== undefined && !(Array.isArray(rc.expectPatterns) && rc.expectPatterns.every(isRegex))) {
-            errors.push('runCheck.expectPatterns: must be a list of valid regular expressions');
-        }
-        if (rc.timeoutMs !== undefined && !isPosInt(rc.timeoutMs)) errors.push('runCheck.timeoutMs: must be a positive whole number of milliseconds');
-    }
-    if (config.testCheck !== undefined) {
-        const tc = config.testCheck;
-        if (tc.mode !== undefined && !['pytest', 'script'].includes(tc.mode)) {
-            errors.push(`testCheck.mode: "${tc.mode}" must be "pytest" or "script"`);
-        }
-        if (tc.mode === 'script' && (typeof tc.entry !== 'string' || !tc.entry.trim())) {
-            errors.push('testCheck.entry: "script" mode needs the test script to run');
-        }
-        for (const k of ['passPattern', 'failPattern']) {
-            if (tc[k] !== undefined && (typeof tc[k] !== 'string' || !isRegex(tc[k]))) errors.push(`testCheck.${k}: must be a valid regular expression`);
-        }
-        if (tc.timeoutMs !== undefined && !isPosInt(tc.timeoutMs)) errors.push('testCheck.timeoutMs: must be a positive whole number of milliseconds');
-    }
+    // --- execution / runCheck / testCheck, for the lab and for each group's overrides ---
+    errors.push(...runSettingsErrors(config));
+    errors.push(...groupErrors(config));
 
     // --- webContent block (check_web_content.js) + the mapping types that read it ---
     const WEB_CONTENT_TYPES = new Set(['element_check', 'css_selector_check', 'css_property_check', 'file_count']);
@@ -258,6 +364,11 @@ function validateConfig(config, labName) {
         }
     }
 
+    return errors;
+}
+
+function validateConfig(config, labName) {
+    const errors = configErrors(config);
     if (errors.length > 0) {
         const message = [`Config validation failed for ${labName}:`, ...errors.map(e => `  - ${e}`)].join('\n');
         throw new Error(message);

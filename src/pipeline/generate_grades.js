@@ -15,6 +15,7 @@ import { getAvailableModel, generateSummary as ollamaGenerateSummary } from '../
 import { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeCell } from '../lib/rubric_writer.js';
 import { walk, toPosix } from '../lib/file_walker.js';
 import { registerHandler, getHandler, VALID_MAPPING_TYPES } from '../lib/handler_registry.js';
+import { groupUnknownWithOverrides, mappingDependsOnGroup } from '../lib/student_group.js';
 
 // --- Cell helpers ---
 
@@ -465,8 +466,14 @@ registerHandler('build_and_browser_check', (map, student) => {
 
 // run_check: scores the "run_check" runtime-check strategy (build/interpret + execute the
 // artifact directly, matching stdin/stdout expectations) — see runtime_check.js.
+// runId (optional) scores one named run when runCheck lists several programs; without it,
+// every run must pass.
 registerHandler('run_check', (map, student) => {
-    const rt = student.runtimeCheck || {};
+    let rt = student.runtimeCheck || {};
+    if (map.runId) {
+        rt = rt.runs && rt.runs[map.runId];
+        if (!rt) return { score: 0, comment: `NEEDS MANUAL CHECK: no result for run "${map.runId}"`, keepComment: true };
+    }
     if (rt.success) {
         return { score: map.maxScore, comment: 'Program ran and matched expected output' };
     }
@@ -752,8 +759,14 @@ registerHandler('scripts_check', (map, student) => {
 // test_check: proportional scoring against a language adapter's test-runner results
 // (pytest/dotnet test/CTest — see student.testCheck, attached by runtime_check.js's
 // checkStudentTests). Scores proportionally to tests passed, same pattern as scripts_check.
+// testId (optional) scores one named test script when testCheck lists several; without it,
+// the totals across all scripts.
 registerHandler('test_check', (map, student) => {
-    const tc = student.testCheck;
+    let tc = student.testCheck;
+    if (map.testId) {
+        tc = tc && tc.runs && tc.runs[map.testId];
+        if (!tc) return { score: 0, comment: `NEEDS MANUAL CHECK: no result for test script "${map.testId}"`, keepComment: true };
+    }
     if (!tc) return { score: 0, comment: 'NEEDS MANUAL CHECK (no test check data)', keepComment: true };
     if (tc.error) return { score: 0, comment: tc.error, keepComment: true };
     if (!tc.total) return { score: 0, comment: 'No tests found', keepComment: true };
@@ -970,7 +983,14 @@ async function computeResults(student, config) {
         const handler = getHandler(map.type);
         let score, comment, keepComment = false;
 
-        if (handler) {
+        if (handler && groupUnknownWithOverrides(config, student) && mappingDependsOnGroup(config, map.type)) {
+            // This row is checked with group-specific settings, and the student's group is
+            // unknown — flag it rather than score it with another group's settings.
+            const reason = (student.group && student.group.reason) || 'no group found';
+            score = 0;
+            comment = `NEEDS MANUAL CHECK: lab group unknown (${reason}); this row depends on the group`;
+            keepComment = true;
+        } else if (handler) {
             const result = await handler(map, student);
             score = result.score;
             comment = result.comment;
@@ -1039,12 +1059,18 @@ function writeResultsToSheet(sheet, results, analysis) {
     }
 }
 
-function formatTextReport(student, config, results, labTitle) {
+// The group shown on the grade sheet / text report: the one the student was graded as
+// (student.group, settled by resolveGroups), else what the form or the code says, else '?'.
+function displayGroup(student) {
+    if (student.group && student.group.letter) return student.group.letter;
     const cr = student.codeReview || {};
-    const group = cr.group
-        || (student.analysis && student.analysis.versionVariation
-            && student.analysis.versionVariation.detected)
+    return cr.group
+        || (student.analysis && student.analysis.versionVariation && student.analysis.versionVariation.detected)
         || '?';
+}
+
+function formatTextReport(student, config, results, labTitle) {
+    const group = displayGroup(student);
 
     const lines = [];
     const divider = '='.repeat(56);
@@ -1222,12 +1248,7 @@ export default async function(students, config, labDir, opts = {}) {
 
                 const groupCell = config.codeReview && config.codeReview.groupCell;
                 if (groupCell) {
-                    const cr = student.codeReview || {};
-                    const group = cr.group
-                        || (student.analysis && student.analysis.versionVariation
-                            && student.analysis.versionVariation.detected)
-                        || '?';
-                    setCellValue(sheet, groupCell, group);
+                    setCellValue(sheet, groupCell, displayGroup(student));
                 }
             }
 

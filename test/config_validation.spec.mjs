@@ -265,3 +265,14 @@ describe('loadHandlerModules', () => {
         expect(typeof getHandler('custom_test_type')).toBe('function');
     });
 });
+
+describe('validateConfig: feature regexes are compiled up front', () => {
+    const withFeature = feat => ({ rubricName: 'R.xlsx', runtimeCheck: 'none', mappings: [{ type: 'lint', cell: 'B2' }], analysis: { features: [feat] } });
+    it('reports an invalid regex, fileRegex, or match-tree leaf', () => {
+        expect(() => validateConfig(withFeature({ id: 'a', regex: 'class\\s+\\w+' }), 'x')).not.toThrow();
+        expect(() => validateConfig(withFeature({ id: 'a', regex: '(' }), 'x')).toThrow(/analysis\.features\[0\]\.regex: invalid regular expression/);
+        expect(() => validateConfig(withFeature({ id: 'a', regex: 'x', fileRegex: '[' }), 'x')).toThrow(/fileRegex: invalid/);
+        expect(() => validateConfig(withFeature({ id: 'a', match: { allOf: [{ regex: 'ok' }, { anyOf: [{ regex: '*' }] }] } }), 'x'))
+            .toThrow(/match\.allOf\[1\]\.anyOf\[0\]\.regex: invalid/);
+    });
+});

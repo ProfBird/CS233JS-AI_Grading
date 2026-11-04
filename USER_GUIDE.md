@@ -153,8 +153,67 @@ and `"execution": { "cwd": "copy" }`, so the lab doesn't repeat them):
 Other settings (all optional): `execution.envCacheDir` (where environments are cached;
 default your system temp folder), `execution.installTimeoutMs` (default 10 minutes), and
 `testCheck.passPattern` / `failPattern` for a test script that prints something other than
-`PASS`/`FAIL`. Per-group (A/B/C) data and labs with several programs to run aren't
-supported yet.
+`PASS`/`FAIL`. For per-group (A/B/C) settings and labs with several programs, see the
+next section.
+
+### Lab groups and labs with several programs
+
+**Several programs in one submission** — CS 212's Lab01, for example, has a translated
+program and a separate expert system. Make `runCheck` (and `testCheck`) a list, give each
+entry an `id`, and point each rubric row at one with `runId` / `testId`:
+
+```json
+"runCheck": [
+  { "id": "translated", "entry": ["shipping_calculator.py", "shipping_cost.py"], "stdin": "7\nB\n", "expectPatterns": ["Cost: 20"] },
+  { "id": "expert", "entry": "recommender.py", "stdin": "long\nhigh\n", "expectPatterns": ["Diversified"] }
+],
+"testCheck": [
+  { "id": "translatedTests", "mode": "script", "entry": ["test_shipping.py", "test_shipping_calculator.py"] },
+  { "id": "expertTests", "mode": "script", "entry": "test_recommender.py" }
+],
+"mappings": [
+  { "type": "run_check",  "runId": "translated",      "cell": "C10", "commentCell": "E10", "maxScore": 3 },
+  { "type": "test_check", "testId": "translatedTests", "cell": "C9",  "commentCell": "E9",  "maxScore": 4 }
+]
+```
+
+- `entry` can be a list of names to try in order, since students name their files freely.
+  If none is found, the row is flagged `NEEDS MANUAL CHECK` instead of scoring 0, and the
+  same goes for a missing test script.
+- Each test script gets its own `supportFiles` when it needs instructor data — a run's
+  `supportFiles` aren't shared with the tests once `runCheck` is a list.
+- Give each run the `stdin` its program reads. A console program that asks for more input
+  than it gets crashes (`EOFError`), and the run fails.
+- A `run_check` row without `runId` needs every run to pass; a `test_check` row without
+  `testId` scores the totals across all the test scripts.
+
+**Per-group settings** — when lab groups solve different problems (CS 212's Lab02 groups
+schedule class sections, flights or van deliveries), give each group in `variations` the
+settings that differ in `overrides`:
+
+```json
+"runCheck": { "entry": "main.py", "timeoutMs": 60000 },
+"variations": {
+  "A": { "appName": "Class Section Scheduler", "overrides": { "runCheck": { "supportFiles": [{ "from": "GroupA-Data", "to": "Data" }], "expectPatterns": ["S01"] } } },
+  "B": { "appName": "Flight Crew Scheduler",   "overrides": { "runCheck": { "supportFiles": [{ "from": "GroupB-Data", "to": "Data" }], "expectPatterns": ["F01"] } } },
+  "C": { "appName": "Van Delivery Scheduler",  "overrides": { "runCheck": { "supportFiles": [{ "from": "GroupC-Data", "to": "Data" }], "expectPatterns": ["D01"] } } }
+}
+```
+
+- **Which group a student is in** comes from their code review form ("Developer's lab
+  version (A, B, or C)"). If the form doesn't say, it's detected from the code by matching the
+  group's `appName` against folder names, page titles, the `package.json` / `pyproject.toml`
+  name, and the README. If the form and the code disagree, the form wins and the log says so.
+- **What can be overridden:** `runCheck`, `testCheck`, `execution`, `analysis` (feature
+  checks), `packageCheck`, and `webContent`. Settings merge with the lab's own: a nested
+  object merges key by key, and a list replaces the lab's list. Keep feature `id`s the same in
+  every group, so the shared rubric rows find them.
+- **Group unknown:** when a student's group can't be worked out (no form, and nothing
+  detected), every rubric row that depends on an overridden setting is flagged
+  `NEEDS MANUAL CHECK: lab group unknown …` instead of being checked with another group's
+  settings.
+- **Validation:** the config check validates each group's combined settings separately. For
+  example, a `runId` a rubric row uses must exist for every group.
 
 ### Available checks (rubric mapping types)
 
@@ -172,8 +231,8 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
 - `build_check` — the lab's build step succeeds (`npm run build` for JS, `tsc --noEmit` for TS, a syntax check for Python, compiling for C++, `dotnet build` for C#).
 - `browser_check` — app loads in headless Chrome with no console errors (JS/TS web labs only).
 - `build_and_browser_check` — both; half credit if only one passes.
-- `run_check` — (needs `runtimeCheck: "run_check"`) the program runs and its output matches `runCheck.expectPatterns` — the console-program equivalent of `browser_check`, for Python/C++/C# labs.
-- `test_check` — (needs a `test_check`-supporting lab, e.g. Python/C#) proportional credit for how many automated tests pass: pytest, dotnet test, or — with `testCheck.mode: "script"` — the student's own test script, counted by its `PASS`/`FAIL` lines (see [Python labs](#python-labs-uv-projects)).
+- `run_check` — (needs `runtimeCheck: "run_check"`) the program runs and its output matches `runCheck.expectPatterns` — the console-program equivalent of `browser_check`, for Python/C++/C# labs. `runId` scores one program of a lab with several (see [Lab groups and labs with several programs](#lab-groups-and-labs-with-several-programs)).
+- `test_check` — (needs a `test_check`-supporting lab, e.g. Python/C#) proportional credit for how many automated tests pass: pytest, dotnet test, or — with `testCheck.mode: "script"` — the student's own test script, counted by its `PASS`/`FAIL` lines (see [Python labs](#python-labs-uv-projects)). `testId` scores one test script of several.
 - `scripts_check` — the named npm scripts (e.g. `dev,build,preview`) are defined and run. JS/TS only — other languages have no npm-style named-script concept.
 
 > **Pick the right `runtimeCheck` mode:** `"browser"` serves the submission's *source* and only suits plain static sites. A Vite/bundled project has bare module imports the browser can't resolve unbuilt, so `"browser"` reports false load failures for it — set `runtimeCheck` to `"build"` (or `"both"` to also browser-check the built `dist/`) for any project with a build step.
@@ -441,13 +500,13 @@ node bin/grade.js CS233JS Lab04                # explicit course — only needed
 
 ## What the Pipeline Does
 
-For each student, the grader runs these phases in order. Steps 2, 4, and 5 use whichever
+For each student, the grader runs these phases in order. Steps 3, 4, and 5 use whichever
 language's tooling the lab is configured for (JavaScript by default) — see
 [Choosing a language](#choosing-a-language).
 
 1. **Code Acquisition** — clones the student's GitHub repo if they linked one; otherwise unzips their `.zip`, adding any loose files they uploaded next to it (the zip's copy wins if both have the same file name). A submission of only loose files — e.g. CS 212's bare `.py` and `.csv` uploads — uses those files. Word documents (the review form) and hidden files are never treated as code.
-2. **Runtime Check** — depending on the lab config: builds (`npm run build` / `tsc` / a Python syntax check / compiling / `dotnet build`), opens the app in headless Chrome, does both, or (`run_check`) installs the program's dependencies (for a Python uv project, a cached environment built with `uv sync`), builds it if needed, then actually runs it and checks its output — in an empty temporary folder, or with `execution.cwd: "copy"` in a temporary copy of the student's project folder plus any `runCheck.supportFiles`. Also verifies that specified npm scripts (dev/build/preview) run without errors when the config includes a `scripts_check` mapping, and runs the lab's tests (pytest, dotnet test, or the student's own PASS/FAIL test script) when it includes a `test_check` mapping.
-3. **Code Review Reading** — reads the student's `.docx` peer review form: the beta and production answers for every question in every table headed Beta / Prod. (or Release), and the lab group letter (A/B/C)
+2. **Code Review Reading** — reads the student's `.docx` peer review form: the beta and production answers for every question in every table headed Beta / Prod. (or Release), and the lab group letter (A/B/C). The student's **lab group** is settled here too: the form's letter, else detected from the code (see [Lab groups](#lab-groups-and-labs-with-several-programs)).
+3. **Runtime Check** — depending on the lab config: builds (`npm run build` / `tsc` / a Python syntax check / compiling / `dotnet build`), opens the app in headless Chrome, does both, or (`run_check`) installs the program's dependencies (for a Python uv project, a cached environment built with `uv sync`), builds it if needed, then actually runs it and checks its output — in an empty temporary folder, or with `execution.cwd: "copy"` in a temporary copy of the student's project folder plus any `runCheck.supportFiles`. Also verifies that specified npm scripts (dev/build/preview) run without errors when the config includes a `scripts_check` mapping, and runs the lab's tests (pytest, dotnet test, or the student's own PASS/FAIL test script) when it includes a `test_check` mapping.
 4. **Analysis** — scans the lab's source files for required features using regex patterns
 5. **Linting** — runs the language's linter/analyzer (ESLint for JS/TS, `ruff` for Python, compiler warnings for C++/C#) to flag code quality issues
 6. **HTML Validation** — checks `.html`/`.htm` files for validity using `html-validate` (offline)
@@ -486,6 +545,8 @@ The pipeline leaves some items for you to review manually:
 | `… [review row "…" not found on code review form]` | A `manual` row's `reviewRow` text didn't match any question on this student's form (an older form, or edited questions) — grade it yourself |
 | `Missing name/date comments in 2 of 5 files: rules.py (name/date); …` | A `developer_comments` row (with `scope: "each"` or `require`) — the listed files lack the listed parts of the header |
 | `No AI use found in any file's header comments` | A `developer_comments` row with `requireAiDisclosure` — no file's header says whether/how AI was used |
+| `NEEDS MANUAL CHECK: lab group unknown (…); this row depends on the group` | The lab has per-group settings and this student's group couldn't be worked out (no group on the review form, nothing detected) — check which version they did and grade the row |
+| `NEEDS MANUAL CHECK: Entry file "…" not found` / `None of the entry files were found (…)` | The program or test script to run wasn't found — the student may have named it differently; find it and check by hand (or add the name to `entry`) |
 | `Pending manual checks for full verification.` | The summary cell — replace with your own comment (or use `--ai-comments`) |
 
 Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or LibreOffice, review the flagged items, fill in scores, and the formulas will auto-calculate the total.

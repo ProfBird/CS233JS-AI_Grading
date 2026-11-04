@@ -31,21 +31,30 @@ import checkNames from './check_names.js';
 import checkWebContent from './check_web_content.js';
 import generateGrades from './generate_grades.js';
 import { resolveAdapter } from '../adapters/index.js';
+import { resolveGroups } from '../lib/student_group.js';
 
 const LOG_FILE = 'grading_log.txt';
 
 // Each phase: { name, run(students, config, dirs), when(config) }. `when` defaults to
 // always-on; a future per-language config key (e.g. skipping markup validation for a
 // non-web language) can gate a phase here without touching the loop below.
+// Order matters at the top: the code review form (read first) gives each student's lab group,
+// resolveGroups settles it (form, else detected from code), and the runtime check and
+// analysis then use that group's settings (config.variations[group].overrides).
 const PHASES = [
-    {
-        name: 'runtimeCheck',
-        run: (students, config, dirs) => runtimeCheck(students, config, dirs.artifactsDir, dirs.labConfigDir),
-        when: () => true,
-    },
     {
         name: 'readCodeReview',
         run: (students, config, dirs) => readCodeReview(students, config, dirs.artifactsDir),
+        when: () => true,
+    },
+    {
+        name: 'resolveGroups',
+        run: (students, config) => resolveGroups(students, config),
+        when: () => true,
+    },
+    {
+        name: 'runtimeCheck',
+        run: (students, config, dirs) => runtimeCheck(students, config, dirs.artifactsDir, dirs.labConfigDir),
         when: () => true,
     },
     {

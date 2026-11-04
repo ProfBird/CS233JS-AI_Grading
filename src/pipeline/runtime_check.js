@@ -29,6 +29,7 @@ import http from 'http';
 import { walk } from '../lib/file_walker.js';
 import { resolveAdapter } from '../adapters/index.js';
 import { runStudentArtifact } from '../lib/sandbox.js';
+import { configForStudent, groupUnknownWithOverrides, overriddenKeys } from '../lib/student_group.js';
 
 const RUNTIME_REPORT = 'runtime_report.json';
 
@@ -243,26 +244,38 @@ async function checkBuild(extractedDir, adapter, config) {
 // see that module for the isolation-tier documentation (direct/restricted-user/container).
 // This strategy never spawns the artifact itself.
 
-// runCheck.supportFiles entries — "Data" or { from: "GroupA-Data", to: "Data" } — resolved
-// against the lab's config folder, for the sandbox to add to the run directory.
-function resolveSupportFiles(runCheck, configDir) {
-    const entries = (runCheck && runCheck.supportFiles) || [];
-    return entries.map(e => {
+// supportFiles entries — "Data" or { from: "GroupA-Data", to: "Data" } — resolved against
+// the lab's config folder, for the sandbox to add to the run directory.
+function resolveSupportFiles(entries, configDir) {
+    return (entries || []).map(e => {
         const { from, to } = typeof e === 'string' ? { from: e, to: e } : { from: e.from, to: e.to ?? path.basename(e.from) };
         return { from: path.resolve(configDir || '.', from), to };
     });
 }
 
+// Which instructor support files a run or a test script gets. A run: its runCheck entry's
+// supportFiles. A test script: its own testCheck entry's supportFiles, else (single-object
+// runCheck only) runCheck.supportFiles — so a lab whose runCheck is a list of programs
+// must give each test script its own, rather than tests silently running without data.
+function supportFilesFor(config, kind) {
+    const runCheck = Array.isArray(config.runCheck) ? null : config.runCheck;
+    if (kind === 'test') {
+        const testCheck = Array.isArray(config.testCheck) ? null : config.testCheck;
+        return (testCheck && testCheck.supportFiles) || (runCheck && runCheck.supportFiles) || [];
+    }
+    return (runCheck && runCheck.supportFiles) || [];
+}
+
 // The sandbox options shared by run_check and test_check. With execution.cwd "copy" the
 // program runs in a copy of its project folder (plus support files) instead of an empty
 // directory — what a program that opens files relative to its project folder needs.
-function execOptionsFor(project, config, ctx) {
+function execOptionsFor(project, config, ctx, kind = 'run') {
     const executionConfig = config.execution || {};
     const copying = executionConfig.cwd === 'copy';
     return {
         mode: executionConfig.mode,
         cwdSource: copying ? project.dir : null,
-        supportFiles: resolveSupportFiles(config.runCheck, ctx.configDir),
+        supportFiles: resolveSupportFiles(supportFilesFor(config, kind), ctx.configDir),
         env: project.env || {},
     };
 }
@@ -281,7 +294,30 @@ async function installIfNeeded(adapter, project, config) {
     return result.success ? [] : (result.errors.length ? result.errors : ['Dependency install failed']);
 }
 
+// runCheck may be one run (an object) or several (an array of runs, each with an `id`) —
+// e.g. CS212 Lab01's two separate programs. Several runs give
+// { success: every run passed, errors: each prefixed "[id]", runs: { [id]: result } };
+// a run_check mapping with `runId` scores just that run.
+// The end of stderr — where a Python traceback's actual error line ("EOFError: …",
+// "FileNotFoundError: …") is — rather than its start.
+function stderrTail(stderr, maxLines = 3, maxChars = 300) {
+    const tail = stderr.trim().split(/\r?\n/).slice(-maxLines).join(' | ');
+    return tail.length > maxChars ? '…' + tail.slice(-maxChars) : tail;
+}
+
 registerCheckStrategy('run_check', async (student, config, ctx) => {
+    if (!Array.isArray(config.runCheck)) return runOneProgram(student, config, ctx);
+    const runs = {};
+    const errors = [];
+    for (const run of config.runCheck) {
+        const result = await runOneProgram(student, { ...config, runCheck: run }, ctx);
+        runs[run.id] = result;
+        errors.push(...result.errors.map(e => `[${run.id}] ${e}`));
+    }
+    return { success: Object.values(runs).every(r => r.success), errors, runs };
+});
+
+async function runOneProgram(student, config, ctx) {
     const { adapter } = ctx;
     const projects = adapter.detectProject(student.extractedDir, config);
     if (projects.length === 0) return { success: false, errors: ['No runnable project found'] };
@@ -289,7 +325,9 @@ registerCheckStrategy('run_check', async (student, config, ctx) => {
     // check, so a class-library/test project in the same solution isn't picked over the
     // actual console app); adapters that don't tag this (cpp/python) fall back to [0].
     const project = projects.find(p => p.executable) || projects[0];
-    if (project.entryError) return { success: false, errors: [project.entryError] };
+    // Students name files freely; a program that can't be found is for the grader to look at,
+    // not an automatic zero.
+    if (project.entryError) return { success: false, errors: [`NEEDS MANUAL CHECK: ${project.entryError}`], entryNotFound: true };
 
     const installErrors = await installIfNeeded(adapter, project, config);
     if (installErrors.length) return { success: false, errors: installErrors };
@@ -317,14 +355,14 @@ registerCheckStrategy('run_check', async (student, config, ctx) => {
     const errors = [];
     if (result.setupError) errors.push(result.stderr);
     else if (result.timedOut) errors.push('Program timed out (possible infinite loop or unclosed stdin read)');
-    else if (result.code !== 0) errors.push(`Exited with code ${result.code}${result.stderr ? `: ${result.stderr.trim().slice(0, 300)}` : ''}`);
+    else if (result.code !== 0) errors.push(`Exited with code ${result.code}${result.stderr ? `: ${stderrTail(result.stderr)}` : ''}`);
 
     for (const pattern of (runConfig.expectPatterns || [])) {
         if (!new RegExp(pattern).test(result.stdout)) errors.push(`Expected output pattern not found: ${pattern}`);
     }
 
     return { success: errors.length === 0, errors, stdout: (result.stdout || '').slice(0, 2000) };
-});
+}
 
 // ========== Scripts check (delegates script execution to the language adapter) ==========
 
@@ -373,13 +411,33 @@ async function checkStudentScripts(extractedDir, scriptNames, adapter = resolveA
 // and the adapter gets the same sandbox options run_check uses (project copy, support files).
 async function checkStudentTests(extractedDir, adapter, config = {}, ctx = {}) {
     if (!extractedDir) return { error: 'No code extracted' };
+    // Several test scripts (testCheck as an array of entries with an `id`): totals add up across
+    // scripts; one script that can't run counts as a failure line, never hiding the others.
+    // A test_check mapping with `testId` scores just that script (from `runs`).
+    if (Array.isArray(config.testCheck)) {
+        const runs = {};
+        const combined = { total: 0, passed: 0, failures: [] };
+        for (const t of config.testCheck) {
+            const r = await checkStudentTests(extractedDir, adapter, { ...config, testCheck: t }, ctx);
+            runs[t.id] = r;
+            if (r.error) {
+                combined.total += 1;
+                combined.failures.push(`[${t.id}] ${r.error}`);
+            } else {
+                combined.total += r.total;
+                combined.passed += r.passed;
+                combined.failures.push(...(r.failures || []).map(f => `[${t.id}] ${f}`));
+            }
+        }
+        return { ...combined, runs };
+    }
     if (!adapter.runTests) return { error: `Test running is not supported for the "${adapter.language}" language yet` };
     const projects = adapter.detectProject(extractedDir, config);
     if (projects.length === 0) return { error: 'No project found' };
     const project = projects[0];
     const installErrors = await installIfNeeded(adapter, project, config);
     if (installErrors.length) return { error: installErrors.join('; ') };
-    return adapter.runTests(project, config, execOptionsFor(project, config, ctx));
+    return adapter.runTests(project, config, execOptionsFor(project, config, ctx, 'test'));
 }
 
 // ========== Built-in strategies ==========
@@ -489,12 +547,28 @@ export default async function(students, config, labDir, configDir = null) {
     }
 
     const ctx = { adapter, browser, configDir };
+    // When a lab group overrides run/test settings, a student whose group is unknown has no
+    // right settings to run with: flag them for manual review rather than run another
+    // group's program checks and score that failure.
+    // Each check is skipped only when a setting IT reads differs by group (matches
+    // student_group.js's MAPPING_TYPES_BY_KEY): a run reads runCheck/execution; tests also
+    // read testCheck.
+    const overridden = overriddenKeys(config);
+    const runByGroup = overridden.some(k => ['runCheck', 'execution'].includes(k));
+    const testsByGroup = overridden.some(k => ['runCheck', 'execution', 'testCheck'].includes(k));
+    const groupUnknown = (student, byGroup) => byGroup && groupUnknownWithOverrides(config, student);
+    const groupUnknownMessage = student =>
+        `NEEDS MANUAL CHECK: lab group unknown (${(student.group && student.group.reason) || 'no group'}) — run settings differ by group`;
     for (const student of students) {
         if (!student.extractedDir || !fs.existsSync(student.extractedDir) || student.error) {
             student.runtimeCheck = { success: false, errors: [] };
             continue;
         }
-        student.runtimeCheck = await strategy.fn(student, config, ctx);
+        if (groupUnknown(student, runByGroup)) {
+            student.runtimeCheck = { success: false, errors: [groupUnknownMessage(student)], groupUnknown: true };
+            continue;
+        }
+        student.runtimeCheck = await strategy.fn(student, configForStudent(config, student), ctx);
     }
 
     if (browser) await browser.close();
@@ -538,7 +612,12 @@ export default async function(students, config, labDir, configDir = null) {
                 student.testCheck = { error: 'No code extracted' };
                 continue;
             }
-            student.testCheck = await checkStudentTests(student.extractedDir, adapter, config, ctx);
+            if (groupUnknown(student, testsByGroup)) {
+                student.testCheck = { error: groupUnknownMessage(student), groupUnknown: true };
+                console.log(`  SKIP: ${student.name}: lab group unknown`);
+                continue;
+            }
+            student.testCheck = await checkStudentTests(student.extractedDir, adapter, configForStudent(config, student), ctx);
             const tc = student.testCheck;
             if (tc.error) {
                 console.log(`  FAIL: ${student.name}: ${tc.error}`);

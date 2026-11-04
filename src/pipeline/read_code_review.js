@@ -69,6 +69,10 @@ function parseGroupFromTable(html) {
                     const nextCell = row[i + 1];
                     const letterMatch = nextCell.match(/\b([A-C])\b/);
                     if (letterMatch) return letterMatch[1].toUpperCase();
+                    // A lone lowercase letter ("b") — only when it's the whole cell, so the
+                    // article "a" in a sentence can't be mistaken for group A.
+                    const lone = nextCell.trim().match(/^([a-c])\.?$/);
+                    if (lone) return lone[1].toUpperCase();
                 }
             }
         }

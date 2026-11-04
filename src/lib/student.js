@@ -28,6 +28,9 @@
  *           parseable zip/URL, clone failure, storage error). Downstream phases treat a set
  *           `error` as "skip — no code to analyze" via per_student_phase.js's skipIfNoCode.
  * @property {string} [zipFile] - path to a submitted zip file, if any, before extraction
+ * @property {{letter: string|null, source: string|null, reason?: string}|null} group - the
+ *           student's lab group (A/B/C), set by student_group.js's resolveGroups phase from the
+ *           code review form or detected from the code; letter null = unknown (see `reason`)
  *
  * Two related-but-distinct per-student flags exist elsewhere and are easy to conflate:
  *   - analyze_code.js's `student.analysis.hasCodeReview` — true if ANY file whose name
@@ -54,6 +57,7 @@ function makeStudent(overrides = {}) {
         filesDir: null,
         gradeDir: null,
         urls: {},
+        group: null,
         ...overrides,
     };
 }

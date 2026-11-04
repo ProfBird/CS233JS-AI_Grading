@@ -41,7 +41,7 @@ describe('PHASES', () => {
 
     it('includes the expected built-in phase names in order', () => {
         expect(PHASES.map(p => p.name)).toEqual([
-            'runtimeCheck', 'readCodeReview', 'analyzeCode', 'lintCode',
+            'readCodeReview', 'resolveGroups', 'runtimeCheck', 'analyzeCode', 'lintCode',
             'validateHtml', 'validateCss', 'checkNames', 'checkWebContent',
         ]);
     });

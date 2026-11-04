@@ -15,6 +15,7 @@ import xlsx from '../lib/xlsx.js';
 import jsAdapter from '../adapters/javascript.js';
 import { resolveAdapter } from '../adapters/index.js';
 import { checkVersionVariation } from '../lib/variation_detect.js';
+import { configForStudent } from '../lib/student_group.js';
 import { runPerStudentPhase, writePhaseReport } from '../lib/per_student_phase.js';
 
 const ANALYSIS_REPORT = 'analysis_report.json';
@@ -455,6 +456,7 @@ export default async function(students, config, labDir, configDir = null) {
     // empty `partFeatures`/`partPresence` objects are never shared references between
     // students (the bug class described in per_student_phase.js's noCodeResult docs).
     const baseAnalysis = (student) => {
+        const sc = configForStudent(config, student);
         const analysis = {
             error: null,
             urls: student.urls || {},
@@ -464,8 +466,8 @@ export default async function(students, config, labDir, configDir = null) {
             partFeatures: {},
             partPresence: {}
         };
-        if (config.analysis && config.analysis.features) {
-            config.analysis.features.forEach(feat => {
+        if (sc.analysis && sc.analysis.features) {
+            sc.analysis.features.forEach(feat => {
                 analysis.features[feat.id] = 0;
             });
         }
@@ -488,6 +490,8 @@ export default async function(students, config, labDir, configDir = null) {
             return analysis;
         },
         checkStudent: async (student) => {
+        // This student's group overrides (config.variations[group].overrides), if any.
+        const sc = configForStudent(config, student);
         const analysis = baseAnalysis(student);
         // Path-segment exclusions: build output, VCS metadata, and dependency/virtual-env
         // folders a student may have submitted by mistake (a stray Python .venv would
@@ -520,25 +524,25 @@ export default async function(students, config, labDir, configDir = null) {
 
         // ignoreCommentsBy lives on the developer_comments mapping(s); analysis runs before
         // grading, so collect it here.
-        const ignoreCommentsBy = (config.mappings || [])
+        const ignoreCommentsBy = (sc.mappings || [])
             .filter(m => m.type === 'developer_comments' && Array.isArray(m.ignoreCommentsBy))
             .flatMap(m => m.ignoreCommentsBy);
         analysis.developerComments = checkDeveloperComments(jsFiles, student.name, adapter, student.extractedDir, { ignoreCommentsBy });
         analysis.hasDeveloperComments = analysis.developerComments.filesWith > 0;
 
         // Whole-repo feature counts — used by feature-type mappings in generate_grades
-        const wholeCounts = countFeatures(allExtractedFiles, config.analysis && config.analysis.features, adapter);
+        const wholeCounts = countFeatures(allExtractedFiles, sc.analysis && sc.analysis.features, adapter);
         Object.assign(analysis.features, wholeCounts);
 
         // Per-part feature counts
-        if (config.parts) {
-            config.parts.forEach(part => {
+        if (sc.parts) {
+            sc.parts.forEach(part => {
                 const gameNames = partGameNames[part.id] || [];
                 const partDir = findPartDir(student.extractedDir, gameNames, part.folderPattern);
                 if (partDir) {
                     const partFiles = getAllFiles(partDir, exclusions);
-                    analysis.partFeatures[part.id] = countFeatures(partFiles, config.analysis && config.analysis.features, adapter);
-                    const featureLog = (config.analysis && config.analysis.features || []).map(f =>
+                    analysis.partFeatures[part.id] = countFeatures(partFiles, sc.analysis && sc.analysis.features, adapter);
+                    const featureLog = (sc.analysis && sc.analysis.features || []).map(f =>
                         `${f.id}=${analysis.partFeatures[part.id][f.id] || 0}`
                     ).join(', ');
                     console.log(`    ${student.name} / ${part.id} (${path.basename(partDir)}): ${featureLog}`);
@@ -557,8 +561,8 @@ export default async function(students, config, labDir, configDir = null) {
             await applyCustomAnalyzer(customAnalyzer, jsFiles, analysis, config, student);
         }
 
-        if (config.packageCheck && adapter.checkManifest) {
-            analysis.packageCheck = adapter.checkManifest(student.extractedDir, config.packageCheck);
+        if (sc.packageCheck && adapter.checkManifest) {
+            analysis.packageCheck = adapter.checkManifest(student.extractedDir, sc.packageCheck);
             if (!analysis.packageCheck.passed) {
                 console.log(`    ${student.name} package.json: ${analysis.packageCheck.issues.join('; ')}`);
             }
@@ -574,15 +578,15 @@ export default async function(students, config, labDir, configDir = null) {
             analysis.npmPackages = [];
         }
 
-        if (config.repoHygiene) {
-            analysis.repoHygiene = checkRepoHygiene(student.extractedDir, config.repoHygiene);
+        if (sc.repoHygiene) {
+            analysis.repoHygiene = checkRepoHygiene(student.extractedDir, sc.repoHygiene);
             if (analysis.repoHygiene && !analysis.repoHygiene.passed) {
                 console.log(`    ${student.name} repo hygiene: found ${analysis.repoHygiene.foundDirs.join(', ')}`);
             }
         }
 
-        if (config.variations) {
-            analysis.versionVariation = checkVersionVariation(student.extractedDir, config.variations, config.variationExcludeNamePatterns);
+        if (sc.variations) {
+            analysis.versionVariation = checkVersionVariation(student.extractedDir, sc.variations, sc.variationExcludeNamePatterns);
             const vv = analysis.versionVariation;
             if (vv.detected) {
                 console.log(`    ${student.name} version: ${vv.detected} (${vv.appName})`);

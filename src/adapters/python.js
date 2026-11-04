@@ -307,30 +307,38 @@ function lintConfigCandidates(configsDir, labName, parentName, courseName = null
 
 // ---------- Project detection / install / build ----------
 
-// A Python "project" is any directory containing .py files, whether or not it has a
-// requirements.txt — plenty of intro-level submissions are loose scripts with no
-// packaging at all. detectProject still returns a project descriptor for those so
-// build/lint/run_check have somewhere to work.
 // Shallowest-first, then alphabetical — deterministic regardless of directory-walk order.
 const byDepthThenName = (a, b) =>
     a.split(/[\\/]/).length - b.split(/[\\/]/).length || a.localeCompare(b);
 
 /**
- * Picks the program to run. `entry` (config.runCheck.entry) is either a path relative to the
- * project folder ("src/main.py") or a bare filename found anywhere under it ("scheduler.py").
- * Without one: main.py (exact filename — not e.g. "domain.py"), else the only .py file, else
- * the shallowest .py file, flagged as a guess.
+ * Picks the program to run. `entry` (config.runCheck.entry / testCheck.entry) is a path
+ * relative to the project folder ("src/main.py"), a bare filename found anywhere under it
+ * ("scheduler.py"), or a list of those tried in order — for when students name the same
+ * program differently (["shipping_calculator.py", "shipping_cost.py"]). Without one:
+ * main.py (exact filename — not e.g. "domain.py"), else the only .py file, else the
+ * shallowest .py file, flagged as a guess.
  * @returns {{ path: string|null, guessed: boolean, error?: string }}
  */
 function resolveEntry(projectDir, pyFiles, entry) {
     const sorted = [...pyFiles].sort(byDepthThenName);
-    if (entry) {
-        if (/[\\/]/.test(entry)) {
-            const p = path.join(projectDir, entry);
-            return fs.existsSync(p) ? { path: p, guessed: false } : { path: null, guessed: false, error: `Entry file "${entry}" not found` };
+    const findOne = candidate => {
+        if (/[\\/]/.test(candidate)) {
+            const p = path.join(projectDir, candidate);
+            return fs.existsSync(p) ? p : null;
         }
-        const match = sorted.find(f => path.basename(f).toLowerCase() === entry.toLowerCase());
-        return match ? { path: match, guessed: false } : { path: null, guessed: false, error: `Entry file "${entry}" not found` };
+        return sorted.find(f => path.basename(f).toLowerCase() === candidate.toLowerCase()) || null;
+    };
+    if (entry) {
+        const candidates = Array.isArray(entry) ? entry : [entry];
+        for (const c of candidates) {
+            const found = findOne(c);
+            if (found) return { path: found, guessed: false };
+        }
+        const error = candidates.length === 1
+            ? `Entry file "${candidates[0]}" not found`
+            : `None of the entry files were found (${candidates.map(c => `"${c}"`).join(', ')})`;
+        return { path: null, guessed: false, error };
     }
     const main = sorted.find(f => path.basename(f).toLowerCase() === 'main.py');
     if (main) return { path: main, guessed: false };
@@ -581,7 +589,8 @@ async function runTests(project, config = {}, execOptions = {}) {
     if (testCheck.mode === 'script') {
         const pyFiles = getAllFiles(project.dir).filter(f => f.toLowerCase().endsWith('.py'));
         const entry = resolveEntry(project.dir, pyFiles, testCheck.entry);
-        if (!entry.path) return { total: 0, passed: 0, failures: [], error: entry.error || 'No test script found' };
+        // A missing test script may just be named differently — the grader should look.
+        if (!entry.path) return { total: 0, passed: 0, failures: [], error: `NEEDS MANUAL CHECK: ${entry.error || 'no test script found'}` };
         const result = await runStudentArtifact([python, path.relative(project.dir, entry.path)], sandboxOptions);
         return parseScriptTestOutput(result, testCheck);
     }

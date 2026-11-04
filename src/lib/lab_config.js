@@ -5,6 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 import XLSX from './xlsx.js';
+import { mergeConfig, isPlainObject } from './merge_config.js';
 
 // This module lives at src/lib/, two levels under the repo root, so reach the root
 // with two '..' segments — matching the repoRoot convention in src/pipeline/lint_code.js.
@@ -304,18 +305,6 @@ function readCourseConfig(coursePath) {
 // relative to the lab's own config dir).
 const COURSE_DEFAULTS_FORBIDDEN_KEYS = ['mappings', 'rubricName', 'canvas', 'handlerModules'];
 
-const isPlainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-
-// Recursive merge where `over` wins: plain objects merge key by key; arrays and scalars
-// from `over` replace the base value outright (an array in a lab config is a complete list,
-// e.g. lint.exclude, not an addition to the course's list). Returns a new object.
-function mergeConfig(base, over) {
-    const out = { ...base };
-    for (const [k, v] of Object.entries(over)) {
-        out[k] = isPlainObject(v) && isPlainObject(base[k]) ? mergeConfig(base[k], v) : v;
-    }
-    return out;
-}
 
 /**
  * Applies a course's shared settings (course_config.json's `defaults` block) underneath a lab

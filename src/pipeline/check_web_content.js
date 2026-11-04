@@ -24,6 +24,7 @@ import { JSDOM } from 'jsdom';
 import { parse as parseCss, walk as walkCss, generate as generateCss } from 'css-tree';
 import { walk as walkDir, getAllFilesByExt, toPosix, DEFAULT_SKIP_DIRS } from '../lib/file_walker.js';
 import { runPerStudentPhase, writePhaseReport } from '../lib/per_student_phase.js';
+import { configForStudent } from '../lib/student_group.js';
 
 const WEB_CONTENT_REPORT = 'web_content_report.json';
 
@@ -227,10 +228,13 @@ function checkWebContent(extractedDir, webConfig, exclusions = []) {
 const emptyResult = () => ({ htmlFiles: 0, cssFiles: 0, elements: [], cssSelectors: [], cssProperties: [], fileCounts: [] });
 
 export default async function(students, config, labDir) {
-    const webConfig = config.webContent || {};
-    const exclusions = webConfig.exclude
-        || (config.validate && config.validate.exclude)
-        || [];
+    // Per student: a lab group may override webContent (config.variations[group].overrides).
+    const settingsFor = student => {
+        const sc = configForStudent(config, student);
+        const webConfig = sc.webContent || {};
+        const exclusions = webConfig.exclude || (sc.validate && sc.validate.exclude) || [];
+        return { webConfig, exclusions };
+    };
 
     await runPerStudentPhase(students, {
         name: 'Web Content Check Phase',
@@ -238,6 +242,7 @@ export default async function(students, config, labDir) {
         noCodeResult: emptyResult,
         errorResult: (e) => ({ ...emptyResult(), error: e.message }),
         checkStudent: (student) => {
+            const { webConfig, exclusions } = settingsFor(student);
             const result = checkWebContent(student.extractedDir, webConfig, exclusions);
             const elPassed = result.elements.filter(e => e.passed).length;
             const selPassed = result.cssSelectors.filter(s => s.found).length;

@@ -55,6 +55,8 @@ graph TD
         tui[tui.js]
         config_prompts[config_prompts.js]
         variation_detect[variation_detect.js]
+        student_group[student_group.js]
+        merge_config[merge_config.js]
         canvas_client[canvas_client.js]
     end
 
@@ -114,6 +116,14 @@ graph TD
     lint --> file_walker
     analyze --> file_walker
     analyze --> variation_detect
+    run_pipeline --> student_group
+    student_group --> variation_detect
+    student_group --> merge_config
+    runtime --> student_group
+    analyze --> student_group
+    grades --> student_group
+    lab_config --> merge_config
+    config_validation --> merge_config
     runtime --> sandbox
     adapter_py -->|runTests through the chokepoint| sandbox
     configure_lab --> tui
@@ -294,9 +304,10 @@ sequenceDiagram
     end
     extract-->>grade: return students[] array
 
-    Note over pipeline: === Phase: Runtime Check (registerCheckStrategy) ===
+    Note over pipeline: === Phase: Runtime Check (registerCheckStrategy) — runs after readCodeReview + resolveGroups ===
     pipeline->>runtime: runtimeCheck(students, config, artifactsDir, labConfigDir)
     runtime->>runtime: strategy = getCheckStrategy(config.runtimeCheck || "build")
+    runtime->>runtime: per student: configForStudent(config, student) — the group's overrides merged in; group unknown + run settings overridden → skip, groupUnknown: true
     alt strategy == "build"
         runtime->>adapter: detectProject(dir, config) → Project[]
         runtime->>adapter: install(project, config), then build(project, config)
@@ -308,7 +319,8 @@ sequenceDiagram
         runtime->>runtime: then browser phase on the built dist/
         runtime->>runtime: store buildSuccess + browserSuccess separately
     else "run_check"
-        runtime->>adapter: detectProject() — entryError fails the check
+        runtime->>runtime: runCheck a list? → once per run {id, entry, stdin, …}, results in runs[id], success = all runs passed
+        runtime->>adapter: detectProject() — entryError → "NEEDS MANUAL CHECK: …" (entry may be a list of candidate names)
         runtime->>adapter: install(project, config) — e.g. Python uv env (cached); sets project.runCommand's interpreter
         runtime->>adapter: build (if no runCommand), then execute the artifact
         runtime->>runtime: execOptionsFor() — execution.cwd "copy" → cwdSource = project.dir; supportFiles resolved against labConfigDir
@@ -385,6 +397,9 @@ sequenceDiagram
     code_review->>code_review: mammoth → HTML table parse
     code_review->>code_review: items[] from every Beta/Prod(/Release/Final)-headed table, each with its criterion label; group letter
     code_review-->>pipeline: (attaches student.codeReview)
+
+    Note over pipeline: === Phase: Lab Group Resolution (student_group.js) ===
+    pipeline->>pipeline: resolveGroups() — student.group = form letter (if one of config.variations), else detected from code, else unknown + reason
 
     Note over pipeline: === Phase: Analysis ===
     pipeline->>analyze: analyzeCode(students, config, artifactsDir, labConfigDir)
@@ -598,7 +613,9 @@ register, so a new strategy doesn't require editing the validator.
 - Use `build_check`, `browser_check`, or `build_and_browser_check` mapping types to score each sub-result
 
 **`"run_check"` strategy:**
-- Fails early with the adapter's `project.entryError` (e.g. a configured `runCheck.entry` that doesn't exist)
+- `runCheck` may be one run (object) or a list of runs, each with an `id`: the list form runs `runOneProgram()` per entry and returns `{ success: every run passed, errors: each prefixed "[id]", runs: { [id]: result } }`; the object form returns exactly the single-run shape
+- Each student runs with `configForStudent(config, student)` (`lib/student_group.js`) — their group's `overrides` merged in. When a group overrides `runCheck`/`testCheck`/`execution` and the student's group is unknown, the student isn't run: `{ success: false, groupUnknown: true, errors: ["NEEDS MANUAL CHECK: lab group unknown …"] }`
+- Fails early with the adapter's `project.entryError` as `NEEDS MANUAL CHECK: …` (`entryNotFound: true`) — a program the student named differently is for the grader to find, not an automatic 0. Python's `entry` may be a list of candidate names
 - Installs dependencies via `adapter.install(project, config)` when the adapter has one (`installIfNeeded`) — for a Python uv project this builds or reuses the cached environment and points `project.runCommand` at its interpreter
 - Builds next (if the adapter has a build step and the project has no static `runCommand` — interpreted languages like Python skip straight to running)
 - Executes the produced artifact via `../lib/sandbox.js`'s `runStudentArtifact()` chokepoint (see that section above) — this strategy never spawns the artifact itself. `execOptionsFor(project, config, ctx)` builds the sandbox options shared with the test sub-phase: `cwdSource: project.dir` when `config.execution.cwd === "copy"`, and `supportFiles` from `config.runCheck.supportFiles` resolved against `ctx.configDir` (the lab's config folder, passed in by `run_pipeline.js` as `runtimeCheck()`'s 4th argument)
@@ -615,10 +632,11 @@ register, so a new strategy doesn't require editing the validator.
 - Automatically runs when any `test_check` mapping is present in the config
 - Installs dependencies first (same `installIfNeeded` — free after `run_check` thanks to the environment cache), then delegates to `adapter.runTests(project, config, execOptions)` (nullable — implemented for Python and C#; `null` for JS/C++ — no test-runner integration for those yet). Python runs through the sandbox in a copy of the project: `config.testCheck.mode` `"pytest"` (pytest is added to a uv environment on first use) or `"script"` (runs the student's own test script `testCheck.entry`, counting `PASS`/`FAIL` lines; a crash, traceback or timeout adds one failure)
 - Returns `{ total, passed, failures[] }`; results stored in `student.testCheck`, scored proportionally by the `test_check` mapping type
+- `testCheck` may be a list of scripts, each with an `id`: totals add up, `runs[id]` holds each script's result, and a script that can't run (e.g. `NEEDS MANUAL CHECK: Entry file … not found`) counts as one failure line rather than hiding the others
 
 ### `read_code_review.js` — Code Review Reader
 
-Runs **before** `analyze_code.js` so the group letter is available during analysis.
+Runs **first** after acquisition (before `resolveGroups` and the runtime check) so the group letter is available to everything after it. The group letter is read from the cell right of the "lab version" label (never the group-name cell after it); a lone lowercase letter (`b`) counts only when it's the whole cell.
 
 - Finds `.docx` code review forms in each student's submission folder
 - Uses `mammoth` to convert the docx to HTML, then parses the tables
@@ -641,7 +659,8 @@ Regex-based analysis of student source files, driven by the resolved language ad
 - Checks for code review documents
 - `detectPartsPresent()` — scans extracted directory for part subdirectories; auto-detects `part1`, `part2`, etc. even without explicit `parts` config. Results stored in `analysis.partPresence`
 - `config.packageCheck` validation and `analysis.npmPackages` population both delegate to `adapter.checkManifest()` / `adapter.extractUsedPackages()` — both nullable (e.g. `null` for C++, which has no manifest/package concept); when null, `analysis.npmPackages` is simply `[]` and no manifest check runs
-- When `config.variations` is set, delegates to `../lib/variation_detect.js`'s `checkVersionVariation(extractedDir, variations)` — keyword-matches each variation's `appName` against a corpus of repo text and stores the result in `analysis.versionVariation`. Self-contained module, not analyze_code.js's own logic.
+- When `config.variations` is set, delegates to `../lib/variation_detect.js`'s `checkVersionVariation(extractedDir, variations)` — keyword-matches each variation's `appName` against a corpus of repo text (folder names, HTML titles, package.json / pyproject.toml names, README) and stores the result in `analysis.versionVariation`. Self-contained module, not analyze_code.js's own logic.
+- Reads each student's settings through `configForStudent(config, student)`, so a group's `overrides.analysis` (feature definitions) and `overrides.packageCheck` apply to that group's students
 - **Custom analyzer hook** — `config.analysis.customAnalyzer` specifies a JS module (relative to `configs/{Course}/{AssignmentName}/`) that receives `(jsFiles, analysis, config, student)` and can mutate `analysis` directly. Enables lab-specific checks beyond regex (e.g., Lab02's `modules` feature requires both `import` AND `export`). **Deprecated** — see the Config Schema section; no analyzers currently exist.
 
 ### `lint_code.js` — ESLint Runner
@@ -722,7 +741,7 @@ sequence diagram.
 | Export | Purpose |
 |---|---|
 | `runPipeline(students, config, dirs, options)` | Runs `preflight` → `filterAlreadyGraded` → each phase in `PHASES` (skipping any whose `when(config)` is false) → `generateGrades` → the log summary. Returns `{ successful, errors }`. |
-| `PHASES` | `[{ name, run(students, config, dirs), when(config) }]` — currently: `runtimeCheck`, `readCodeReview`, `analyzeCode`, `lintCode`, `validateHtml`, `validateCss`, `checkNames`, `checkWebContent`. All run unconditionally except `checkWebContent`, whose `when` is `config => !!config.webContent`. |
+| `PHASES` | `[{ name, run(students, config, dirs), when(config) }]` — currently: `readCodeReview`, `resolveGroups`, `runtimeCheck`, `analyzeCode`, `lintCode`, `validateHtml`, `validateCss`, `checkNames`, `checkWebContent`. All run unconditionally except `checkWebContent`, whose `when` is `config => !!config.webContent`. |
 | `filterAlreadyGraded(students, config, options)` | Pure function — filters out students whose grade output file already exists, unless `options.regrade`. |
 | `runPreflight(config)` | Calls the resolved adapter's `preflight(config)` once, upfront, logging a `console.warn` with the adapter's hint if the toolchain isn't available — informational only, not a hard gate (some mapping types don't need the toolchain at all). |
 
@@ -797,8 +816,8 @@ noticing).
 | `build_check` | Yes | Score based on build success (from `"build"` or `"both"` mode) |
 | `browser_check` | Yes | Score based on browser console errors (from `"browser"` or `"both"` mode) |
 | `build_and_browser_check` | Yes | Full/half/zero based on both build and browser results combined |
-| `run_check` | Yes | Score based on the `"run_check"` runtime strategy's result — full credit if the program ran and matched `config.runCheck.expectPatterns`, else 0 with the failure detail preserved |
-| `test_check` | Yes | Proportional score against `student.testCheck` (`{ total, passed, failures[] }` from the adapter's `runTests` — pytest, a PASS/FAIL test script, dotnet test); comment lists up to 5 failing test names |
+| `run_check` | Yes | Score based on the `"run_check"` runtime strategy's result — full credit if the program ran and matched `config.runCheck.expectPatterns`, else 0 with the failure detail preserved. Optional `runId` scores one entry of a `runCheck` list (missing result → `NEEDS MANUAL CHECK`) |
+| `test_check` | Yes | Proportional score against `student.testCheck` (`{ total, passed, failures[] }` from the adapter's `runTests` — pytest, a PASS/FAIL test script, dotnet test); comment lists up to 5 failing test names. Optional `testId` scores one entry of a `testCheck` list |
 | `scripts_check` | Yes | Proportional score: how many of the specified named scripts pass (adapter-delegated; nullable for languages with no such concept) |
 | `manual` | No | Without `reviewRow`: a placeholder (`maxScore` + `msg`, default "NEEDS MANUAL CHECK"). With `reviewRow` (case-insensitive substring of a review criterion, or an array of them; `reviewRowOccurrence` picks a repeated question): pre-scored from the review form's production answer (fraction / Yes / No), else a beta fraction; for an array every row must be answerable and the lowest score wins. An unmatched `reviewRow` keeps the placeholder score with a `[review row "…" not found on code review form]` note (`findReviewItems()` / `reviewVerdict()`). |
 | `part_feature` | Yes | Per-part feature check — reads `analysis.partFeatures[partId][featureId]` |
@@ -828,6 +847,22 @@ Used by analyze_code, lint_code, validate_html, validate_css, and check_names. R
 | `walk(dir, opts)` | Core pre-order DFS traversal. Callbacks: `visit`, `onFile`, `onDir`, `shouldSkip`, `shouldDescend`. Options: `followSymlinks` (default false), `maxDepth` (default Infinity). Unreadable dirs are silently skipped. |
 | `getAllFilesByExt(dir, ext, exclusions)` | Collect all files with a given extension (or array of extensions). Skips `DEFAULT_SKIP_DIRS`, dot-directories, and any path matching an exclusion substring. |
 | `DEFAULT_SKIP_DIRS` | `Set(['node_modules', 'dist', 'build', '.git', '__MACOSX'])` — dirs never scanned. |
+
+### `lib/student_group.js` — Lab Groups and Per-Group Settings
+
+For labs whose groups (A/B/C) solve different problems. `config.variations[letter].overrides` holds the settings that differ.
+
+| Export | Purpose |
+|---|---|
+| `resolveStudentGroup(student, config)` | `{ letter, source: 'codeReview'\|'detected'\|null, detected?, conflict?, reason? }` — the review form's letter when it's one of the lab's groups, else keyword detection (`variation_detect.js`), else unknown with a `reason`. Form wins a disagreement (`conflict: true`). |
+| `resolveGroups(students, config)` | The pipeline phase (after `readCodeReview`, before `runtimeCheck`): sets `student.group` and logs it. |
+| `configForStudent(config, student)` | The lab config with the student's group overrides merged in (`merge_config.js`), cached per group; the config itself when there's nothing to merge. Used by `runtime_check.js`, `analyze_code.js` and `check_web_content.js`. |
+| `OVERRIDABLE_KEYS` | `runCheck`, `testCheck`, `execution`, `analysis`, `packageCheck`, `webContent` — exactly what those phases read per student; `config_validation.js` rejects other override keys. |
+| `groupUnknownWithOverrides` / `mappingDependsOnGroup` | Used by `generate_grades.js`'s `computeResults`: a row whose mapping type reads an overridden setting is scored 0 with `NEEDS MANUAL CHECK: lab group unknown (…)` (`keepComment`) for a student whose group is unknown, instead of being scored with another group's settings. |
+
+### `lib/merge_config.js` — The Config Merge Rule
+
+`mergeConfig(base, over)` — `over` wins; nested plain objects merge key by key; arrays and other values replace. Shared by course `defaults` (`lab_config.js`'s `applyCourseDefaults`) and group `overrides` (`student_group.js`). Dependency-free so `config_validation.js` stays light.
 
 ### `lib/llm_client.js` — Unified LLM Client
 
@@ -1115,8 +1150,9 @@ a relative `extend` path wouldn't resolve.
 | `summaryCell` | No | Cell for AI-generated or manual summary comment |
 | `graderCell` | No | Cell written with "Computer"; triggers versioned copy on regrade if changed |
 | `runtimeCheck` | Yes | `"none"`, `"build"`, `"browser"`, `"both"`, `"run_check"`, or any name registered via `registerCheckStrategy` in `runtime_check.js`. `"none"` is a no-op for labs with nothing to run (static markup labs) |
-| `runCheck` | No | Used when `runtimeCheck: "run_check"` (`supportFiles` also applies to tests). `stdin` fed to the program; `expectPatterns` (all must match combined stdout); `timeoutMs` (default 10000) is the kill-tree timeout. `entry` — the program to run (Python: bare filename or project-relative path; default `main.py`). `supportFiles` — instructor files/folders (paths relative to the lab's config folder, or `{ from, to }`) added to the run directory where the student has none |
-| `testCheck` | No | How `test_check` runs Python tests: `mode` `"pytest"` (default) \| `"script"` (run `entry`, count lines matching `passPattern`/`failPattern`, default `^\s*PASS\b` / `^\s*FAIL\b`); `timeoutMs` (default `execution.timeoutMs`, else 60000). `script` mode requires `entry` |
+| `runCheck` | No | Used when `runtimeCheck: "run_check"` (`supportFiles` also applies to tests). `stdin` fed to the program; `expectPatterns` (all must match combined stdout); `timeoutMs` (default 10000) is the kill-tree timeout. `entry` — the program to run (Python: bare filename or project-relative path; default `main.py`). `supportFiles` — instructor files/folders (paths relative to the lab's config folder, or `{ from, to }`) added to the run directory where the student has none May also be a **list** of runs, each with a unique `id` (one per program, e.g. CS212 Lab01); `entry` may be a list of candidate names. |
+| `testCheck` | No | How `test_check` runs Python tests: `mode` `"pytest"` (default) \| `"script"` (run `entry`, count lines matching `passPattern`/`failPattern`, default `^\s*PASS\b` / `^\s*FAIL\b`); `timeoutMs` (default `execution.timeoutMs`, else 60000). `script` mode requires `entry`. `supportFiles` as for `runCheck` (falls back to a single-object `runCheck`'s). May also be a **list** of test scripts, each with a unique `id`. |
+| `variations` | No | The lab's groups: `{ "A": { appName, overrides }, … }`. `appName` lets `variation_detect.js` detect a group from the code when the review form gives none. `overrides` — settings merged in for that group's students (`runCheck`, `testCheck`, `execution`, `analysis`, `packageCheck`, `webContent` only; nested objects merge, lists replace). Each group's merged config is validated on its own; a student whose group is unknown gets group-dependent rows flagged `NEEDS MANUAL CHECK` (see `lib/student_group.js`). |
 | `execution` | No | `mode` — isolation tier: `"direct"` (default, implemented) \| `"restricted-user"` \| `"container"` (both documented, loud-failing stubs). `cwd` — `"scratch"` (default, empty run directory) \| `"copy"` (copy of the project folder). `envCacheDir` / `installTimeoutMs` — Python uv environment cache (default `<tmp>/grader-python-envs`) and install timeout (default 10 min). `timeoutMs` — fallback run/test timeout |
 | `urlPatterns` | No | Overrides/extends the URL categories `extract_code.js` looks for. Default `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }`. `github` is structurally special (clone vs. zip); other keys are just `url_check`/`deploy_check` `urlType` labels |
 | `canvas` | No | `{ assignmentId }` — when set, `bin/grade.js` acquires this lab's code from Canvas (`extract_code_canvas.js`) instead of scanning a Moodle folder. Set once via `bin/grade.js <Lab> --canvas`'s interactive setup (prompts for the course ID, confirms the course name, lets you pick the assignment) or by hand. The course ID itself lives on the course, not here — see `configs/{Course}/course_config.json`'s `canvasCourseId` above. |

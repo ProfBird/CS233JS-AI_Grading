@@ -1,4 +1,8 @@
-# AI Grading Assistant
+<h1>AI Grading Assistant</h1>
+
+[TOC]
+
+## Introduction
 
 This is an AI-assisted grading pipeline built for **CS233JS** (Lane Community College), but designed to be extensible so that it can be used for grading any kind of programming assignment. It automates grading of student lab submissions downloaded from an LMS by: extracting student code, running analysis/lint/build/runtime checks, and filling in rubric spreadsheets (`.xlsx`/`.xlsm`) with scores and comments.
 

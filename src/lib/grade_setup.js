@@ -424,7 +424,7 @@ export async function resolveGradeSetup(driver, {
         if (!canvasConfig.url) {
             const input = await driver.ask('Canvas URL (e.g. https://yourschool.instructure.com)', '');
             if (!input.trim()) { throw new SetupError('ERROR: A Canvas URL is required.'); }
-            canvasConfig.url = input.trim();
+            canvasConfig.url = canvasClient.normalizeCanvasUrl(input);
             canvasLocalChanged = true;
         }
         if (!canvasConfig.token) {

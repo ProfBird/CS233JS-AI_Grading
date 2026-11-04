@@ -30,8 +30,23 @@ function sanitize(text, token) {
     return text;
 }
 
+/**
+ * Reduce whatever was typed or pasted as the Canvas URL to its origin
+ * ("https://canvas.lanecc.edu/courses/680" -> "https://canvas.lanecc.edu"),
+ * adding https:// when the scheme is missing. Unparseable input is returned trimmed.
+ */
+function normalizeCanvasUrl(input) {
+    const text = String(input || '').trim();
+    if (!text) return '';
+    try {
+        return new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`).origin;
+    } catch {
+        return text.replace(/\/+$/, '');
+    }
+}
+
 function apiBase(canvasConfig) {
-    return (canvasConfig.url || '').replace(/\/+$/, '') + '/api/v1';
+    return normalizeCanvasUrl(canvasConfig.url) + '/api/v1';
 }
 
 function authHeaders(canvasConfig) {
@@ -123,4 +138,4 @@ async function downloadFile(url, dest) {
     return buf.length;
 }
 
-export { CanvasError, sanitize, isQuizOrForum, getCourse, listAssignments, listSubmissions, downloadFile };
+export { CanvasError, sanitize, normalizeCanvasUrl, isQuizOrForum, getCourse, listAssignments, listSubmissions, downloadFile };

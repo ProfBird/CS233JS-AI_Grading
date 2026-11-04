@@ -183,3 +183,13 @@ describe('CanvasError', () => {
         expect(e.message).toBe('boom');
     });
 });
+
+describe('normalizeCanvasUrl', () => {
+    it('reduces pasted URLs to the origin', async () => {
+        const { normalizeCanvasUrl } = await import('../src/lib/canvas_client.js');
+        expect(normalizeCanvasUrl('https://canvas.lanecc.edu/courses')).toBe('https://canvas.lanecc.edu');
+        expect(normalizeCanvasUrl('https://canvas.lanecc.edu/courses/680/assignments/1?x=2')).toBe('https://canvas.lanecc.edu');
+        expect(normalizeCanvasUrl('canvas.lanecc.edu/')).toBe('https://canvas.lanecc.edu');
+        expect(normalizeCanvasUrl('')).toBe('');
+    });
+});

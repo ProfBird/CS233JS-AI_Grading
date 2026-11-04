@@ -75,6 +75,9 @@ function validateConfig(config, labName) {
             if (map.cell && !isValidCellRef(map.cell)) {
                 errors.push(`${prefix}.cell: "${map.cell}" is not a valid cell reference`);
             }
+            if (map.type === 'developer_comments' && map.scope !== undefined && !['any', 'each'].includes(map.scope)) {
+                errors.push(`${prefix}.scope: "${map.scope}" must be "any" or "each"`);
+            }
             if (map.commentCell && !isValidCellRef(map.commentCell)) {
                 errors.push(`${prefix}.commentCell: "${map.commentCell}" is not a valid cell reference`);
             }

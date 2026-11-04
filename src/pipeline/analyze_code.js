@@ -302,6 +302,41 @@ function checkRepoHygiene(extractedDir, hygiene) {
     return { passed: found.length === 0, foundDirs: found };
 }
 
+// "author: …", "Name = …", "@date …" — header-comment keywords. Only ever tested against
+// comment text, never raw code (raw code would match `name = input()` in Python).
+const DEV_COMMENT_KEYWORD_RE = /@(author|name|date)\b|\b(author|name|date)\s*[:=]/i;
+
+/**
+ * Checks each source file's COMMENTS (adapter.extractComments; docstrings count for Python)
+ * for a developer header: a name/author/date keyword or the student's first or last name as
+ * a whole word. Empty files (e.g. a blank __init__.py) are not counted.
+ * @returns {{ filesChecked: number, filesWith: number, missing: string[] }} — missing holds
+ *   posix paths relative to baseDir.
+ */
+function checkDeveloperComments(files, studentName, adapter = jsAdapter, baseDir = '') {
+    // Whole-word, Unicode-aware name matching; 1-letter parts (initials) are ignored since
+    // they'd match nearly anything.
+    const nameParts = (studentName || '').split(/\s+/).filter(p => p.length > 1);
+    const candidates = [nameParts[0], nameParts.length > 1 ? nameParts[nameParts.length - 1] : null].filter(Boolean);
+    const nameRes = candidates.map(n => new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(n)}(?![\\p{L}\\p{N}_])`, 'iu'));
+    const extract = adapter.extractComments || (s => s);
+
+    const result = { filesChecked: 0, filesWith: 0, missing: [] };
+    for (const file of files) {
+        let content;
+        try { content = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
+        if (!content.trim()) continue;
+        result.filesChecked++;
+        const comments = extract(content);
+        if (DEV_COMMENT_KEYWORD_RE.test(comments) || nameRes.some(re => re.test(comments))) {
+            result.filesWith++;
+        } else {
+            result.missing.push(toPosix(baseDir ? path.relative(baseDir, file) : file));
+        }
+    }
+    return result;
+}
+
 /**
  * Custom analyzer extension point. Invokes a lab's custom analyzer and merges its
  * returned object into the analysis. A throwing analyzer is logged and skipped
@@ -403,7 +438,10 @@ export default async function(students, config, labDir, configDir = null) {
         },
         checkStudent: async (student) => {
         const analysis = baseAnalysis(student);
-        const exclusions = ['node_modules', 'dist', '.git'];
+        // Path-segment exclusions: build output, VCS metadata, and dependency/virtual-env
+        // folders a student may have submitted by mistake (a stray Python .venv would
+        // otherwise add thousands of library files to feature counts and comment checks).
+        const exclusions = ['node_modules', 'dist', '.git', '.venv', 'venv', '__pycache__'];
         const allExtractedFiles = getAllFiles(student.extractedDir, exclusions);
 
         // Loose existence check ("did they submit anything review-named"), deliberately
@@ -422,24 +460,15 @@ export default async function(students, config, labDir, configDir = null) {
         }
         allExtractedFiles.forEach(checkCodeReview);
 
+        // node_modules/dist are already excluded by path segment above — a substring test
+        // here would wrongly drop e.g. "distance.py".
         const jsFiles = allExtractedFiles.filter(f => {
             const lf = f.toLowerCase();
-            return adapter.sourceExtensions.some(ext => lf.endsWith(ext)) && !lf.includes('node_modules') && !lf.includes('dist');
+            return adapter.sourceExtensions.some(ext => lf.endsWith(ext));
         });
 
-        const nameParts = student.name.toLowerCase().split(/\s+/);
-        const firstName = nameParts.length > 0 ? nameParts[0] : null;
-        const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : null;
-        jsFiles.forEach(js => {
-            const content = fs.readFileSync(js, 'utf8');
-            const lowerContent = content.toLowerCase();
-            if (content.match(/@author\s|@name\s|@date\s/i) ||
-                content.match(/\b(name|author|date)\s*[:=]/i) ||
-                (firstName && lowerContent.includes(firstName)) ||
-                (lastName && lowerContent.includes(lastName))) {
-                analysis.hasDeveloperComments = true;
-            }
-        });
+        analysis.developerComments = checkDeveloperComments(jsFiles, student.name, adapter, student.extractedDir);
+        analysis.hasDeveloperComments = analysis.developerComments.filesWith > 0;
 
         // Whole-repo feature counts — used by feature-type mappings in generate_grades
         const wholeCounts = countFeatures(allExtractedFiles, config.analysis && config.analysis.features, adapter);
@@ -519,4 +548,4 @@ export default async function(students, config, labDir, configDir = null) {
     }));
 };
 
-export { stripComments, normalizeDirName, getAllFiles, getSubdirs, checkRepoHygiene, detectPartsPresent, applyCustomAnalyzer, countFeatures, readGameNamesFromRubric };
+export { stripComments, normalizeDirName, getAllFiles, getSubdirs, checkRepoHygiene, detectPartsPresent, applyCustomAnalyzer, countFeatures, readGameNamesFromRubric, checkDeveloperComments };

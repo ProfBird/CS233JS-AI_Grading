@@ -17,7 +17,7 @@ import { execFile } from 'child_process';
 import util from 'util';
 const execFileAsync = util.promisify(execFile);
 import { getAllFiles as sharedGetAllFiles } from '../lib/file_walker.js';
-import { makeCommentStripper } from '../lib/comment_stripper.js';
+import { makeCommentStripper, makeCommentExtractor } from '../lib/comment_stripper.js';
 import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 
 const DEFAULT_EXCLUSIONS = ['.git', 'bin', 'obj'];
@@ -32,7 +32,7 @@ function dotnetBin(config) {
 // end the match early) and C# 11 raw string literals ("""..."""). Both must be protected
 // before the generic quoted-string pass runs, the same ordering principle as cpp.js's
 // raw-string handling.
-const stripComments = makeCommentStripper({
+const COMMENT_GRAMMAR = {
     blockComment: /\/\*[\s\S]*?\*\//g,
     lineComment: /\/\/[^\n]*/g,
     protectPatterns: [
@@ -40,7 +40,9 @@ const stripComments = makeCommentStripper({
         /[$@]{1,2}"(?:""|[^"])*"/g,                             // verbatim / interpolated-verbatim strings
         /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g,          // ordinary strings and char literals
     ],
-});
+};
+const stripComments = makeCommentStripper(COMMENT_GRAMMAR);
+const extractComments = makeCommentExtractor(COMMENT_GRAMMAR);
 
 // ---------- File collection ----------
 // bin/ and obj/ (MSBuild output dirs) are excluded by path SEGMENT, not substring — see
@@ -198,6 +200,7 @@ export default {
     language: 'csharp',
     sourceExtensions: ['.cs'],
     stripComments,
+    extractComments,
     checkManifest: null,        // NuGet package validation not implemented — .csproj/PackageReference parsing is a future extension
     extractUsedPackages: null,
     lint,

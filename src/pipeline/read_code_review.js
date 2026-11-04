@@ -145,6 +145,9 @@ function extractRows(tableHtml) {
     return rows;
 }
 
+// The production column's header. CS233JS forms say "Prod."; several CS212 forms say "Release".
+const PROD_HEADER_RE = /prod|release|final/i;
+
 // True if any table OTHER than `primaryHtml` has an explicit "prod" header column with at
 // least one filled cell. Requiring a Prod header skips non-score tables (e.g. the metadata
 // table, whose date cells like "6/5/2026" would otherwise look like fractions). This lets
@@ -156,7 +159,7 @@ function anyOtherProdTableFilled(html, primaryHtml) {
         if (tableMatch[0] === primaryHtml) continue;
         const rows = extractRows(tableMatch[0]);
         if (rows.length < 2) continue;
-        const prodCol = rows[0].findIndex(h => /prod/i.test(h));
+        const prodCol = rows[0].findIndex(h => PROD_HEADER_RE.test(h));
         if (prodCol < 0) continue;
         for (let r = 1; r < rows.length; r++) {
             if (parseCellValue(rows[r][prodCol] || '').filled) return true;
@@ -189,7 +192,7 @@ function parseTableScores(html) {
     for (let i = 0; i < header.length; i++) {
         const h = header[i].toLowerCase();
         if (h.includes('beta')) betaCol = i;
-        if (h.includes('prod')) prodCol = i;
+        else if (PROD_HEADER_RE.test(h)) prodCol = i;
     }
 
     // If headers aren't identifiable, assume last two columns are beta, prod
@@ -213,6 +216,9 @@ function parseTableScores(html) {
         if (prodCell.filled) anyProdFilled = true;
 
         items.push({
+            // Criterion text (first cell; empty for a form's spacer/"list errors" rows) — lets
+            // a manual mapping select its row by label (map.reviewRow) instead of position.
+            label: row[0] || '',
             betaScore,
             prodScore: prodCell.score,
             prodFilled: prodCell.filled,

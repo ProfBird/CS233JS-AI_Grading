@@ -38,6 +38,9 @@
  * @property {string} language
  * @property {string[]} sourceExtensions             - drives feature-detection file filtering everywhere
  * @property {(code: string) => string} stripComments - language comment/string-literal-aware stripping
+ * @property {((code: string) => string) | null} [extractComments] - the inverse: only the comment
+ *           text (docstrings included for Python), built from the same grammar as stripComments.
+ *           Optional; analysis falls back to raw content when absent.
  * @property {((dir: string, packageCheckConfig: Object) => {found: boolean, passed: boolean, issues: string[]}) | null} checkManifest
  *           - validates the language's dependency manifest(s) against config.packageCheck; null for
  *             languages with no manifest concept (C++). Deliberately NOT a generic "read the manifest"

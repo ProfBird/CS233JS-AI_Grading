@@ -398,6 +398,7 @@ const MAPPING_TYPE_SCHEMA = {
         fields: [
             { key: 'maxScore', prompt: '  Max score [0]: ',  type: 'int', default: 0 },
             { key: 'msg',      prompt: '  Comment message [NEEDS MANUAL CHECK]: ', default: 'NEEDS MANUAL CHECK' },
+            { key: 'reviewRow', prompt: '  Code review row to score from (text from the criterion, blank = none): ', optional: true },
         ],
     },
     lint: {

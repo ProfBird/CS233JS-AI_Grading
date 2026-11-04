@@ -13,7 +13,7 @@ import util from 'util';
 const execAsync = util.promisify(exec);
 import { walk, getAllFiles } from '../lib/file_walker.js';
 import { killProcessTree } from '../lib/sandbox.js';
-import { makeCommentStripper } from '../lib/comment_stripper.js';
+import { makeCommentStripper, makeCommentExtractor } from '../lib/comment_stripper.js';
 import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 
 // ---------- Comment stripping (moved from analyze_code.js) ----------
@@ -22,11 +22,13 @@ import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 // Preserves string/template literal contents to avoid stripping // inside URLs, etc.
 // NOTE: block comments are stripped first to prevent apostrophes in JSDoc comments
 // (e.g. "user's") from being mistakenly treated as the start of a string literal.
-const stripComments = makeCommentStripper({
+const COMMENT_GRAMMAR = {
     blockComment: /\/\*[\s\S]*?\*\//g,
     lineComment: /\/\/[^\n]*/g,
     protectPatterns: [/(['"`])((?:\\[\s\S]|(?!\1)[^\\])*?)\1/g],
-});
+};
+const stripComments = makeCommentStripper(COMMENT_GRAMMAR);
+const extractComments = makeCommentExtractor(COMMENT_GRAMMAR);
 
 const DEFAULT_EXCLUSIONS = ['node_modules', 'dist', '.git'];
 
@@ -381,6 +383,7 @@ export default {
     language: 'javascript',
     sourceExtensions: ['.js', '.mjs'],
     stripComments,
+    extractComments,
     checkManifest,
     extractUsedPackages,
     lint,

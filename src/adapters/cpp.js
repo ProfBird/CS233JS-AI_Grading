@@ -19,7 +19,7 @@ import { execFile } from 'child_process';
 import util from 'util';
 const execFileAsync = util.promisify(execFile);
 import { getAllFiles as sharedGetAllFiles } from '../lib/file_walker.js';
-import { makeCommentStripper } from '../lib/comment_stripper.js';
+import { makeCommentStripper, makeCommentExtractor } from '../lib/comment_stripper.js';
 import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 
 const SOURCE_EXTENSIONS = ['.cpp', '.cc', '.cxx', '.c++'];
@@ -43,14 +43,16 @@ function exeName(base) {
 // adapter. Raw string literals (R"delim(...)delim" — delim is 0-16 chars, excluding
 // whitespace/parens/backslash per the C++11 grammar) are protected before ordinary
 // single/double-quoted strings and char literals.
-const stripComments = makeCommentStripper({
+const COMMENT_GRAMMAR = {
     blockComment: /\/\*[\s\S]*?\*\//g,
     lineComment: /\/\/[^\n]*/g,
     protectPatterns: [
         /R"([^\s()\\]{0,16})\(([\s\S]*?)\)\1"/g,
         /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g,
     ],
-});
+};
+const stripComments = makeCommentStripper(COMMENT_GRAMMAR);
+const extractComments = makeCommentExtractor(COMMENT_GRAMMAR);
 
 // ---------- File collection ----------
 // Matches exclusions against whole path SEGMENTS ("build" as a directory component), not
@@ -233,6 +235,7 @@ export default {
     language: 'cpp',
     sourceExtensions: [...SOURCE_EXTENSIONS, ...HEADER_EXTENSIONS],
     stripComments,
+    extractComments,
     checkManifest: null,        // no dependency-manifest concept for these submissions
     extractUsedPackages: null,  // no package ecosystem to check usage against
     lint,

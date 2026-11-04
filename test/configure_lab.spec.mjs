@@ -658,7 +658,7 @@ describe('buildMappingEntry', () => {
     });
 
     it('builds a manual mapping entry', async () => {
-        const rl = mockDriver(['10', 'Needs review']);
+        const rl = mockDriver(['10', 'Needs review', '']);
         const result = await buildMappingEntry(rl, 'manual', rubricRow);
 
         expect(result).toEqual({
@@ -670,8 +670,20 @@ describe('buildMappingEntry', () => {
         });
     });
 
+    it('manual records an optional reviewRow when one is given', async () => {
+        const rl = mockDriver(['5', 'Check it', 'interactive']);
+        const result = await buildMappingEntry(rl, 'manual', rubricRow);
+        expect(result.reviewRow).toBe('interactive');
+    });
+
+    it('manual omits reviewRow when left blank', async () => {
+        const rl = mockDriver(['5', 'Check it', '']);
+        const result = await buildMappingEntry(rl, 'manual', rubricRow);
+        expect(result).not.toHaveProperty('reviewRow');
+    });
+
     it('manual uses default message on empty', async () => {
-        const rl = mockDriver(['5', '']);
+        const rl = mockDriver(['5', '', '']);
         const result = await buildMappingEntry(rl, 'manual', rubricRow);
         expect(result.msg).toBe('NEEDS MANUAL CHECK');
     });

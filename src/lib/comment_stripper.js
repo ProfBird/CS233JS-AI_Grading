@@ -47,4 +47,38 @@ function makeCommentStripper({ blockComment = null, lineComment = null, protectP
     };
 }
 
-export { makeCommentStripper };
+/**
+ * The inverse of makeCommentStripper: returns only the comment text (joined by newlines),
+ * using the same grammar options and the same ordering, so "what counts as a comment" is
+ * identical in both directions. Used by checks that must look at comments only — e.g. the
+ * developer name/date check, which must not be satisfied by code like `name = input()`.
+ *
+ * @param {Object} opts - same as makeCommentStripper, plus:
+ * @param {RegExp[]} [opts.docPatterns] - literal grammars whose text also counts as comment
+ *        text (global flag) — e.g. Python's triple-quoted docstrings, where file-header
+ *        "Author: ..." blocks conventionally live. Collected before protectPatterns run.
+ * @returns {(code: string) => string}
+ */
+function makeCommentExtractor({ blockComment = null, lineComment = null, protectPatterns = [], docPatterns = [] } = {}) {
+    return function extractComments(code) {
+        const comments = [];
+        if (blockComment) code = code.replace(blockComment, m => { comments.push(m); return ''; });
+        for (const re of docPatterns) {
+            for (const m of code.matchAll(re)) comments.push(m[0]);
+        }
+        const strings = [];
+        for (const re of protectPatterns) {
+            code = protect(code, re, strings);
+        }
+        if (lineComment) {
+            // A quoted phrase inside a line comment (# by "Jo") was placeholder-swapped by
+            // the protect pass above; restore it so the comment text is complete.
+            for (const m of code.matchAll(lineComment)) {
+                comments.push(m[0].replace(/\x00(\d+)\x00/g, (_, i) => strings[+i]));
+            }
+        }
+        return comments.join('\n');
+    };
+}
+
+export { makeCommentStripper, makeCommentExtractor };

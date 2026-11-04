@@ -9,7 +9,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import * as fs from 'fs';
 import xlsx from 'xlsx';
-import analyzeCode, { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer, countFeatures, readGameNamesFromRubric } from '../src/pipeline/analyze_code.js';
+import analyzeCode, { stripComments, normalizeDirName, detectPartsPresent, applyCustomAnalyzer, countFeatures, readGameNamesFromRubric, checkDeveloperComments } from '../src/pipeline/analyze_code.js';
+import { resolveAdapter } from '../src/adapters/index.js';
 
 // The xlsx ESM build does not auto-wire Node's fs; writeFile needs set_fs() first.
 xlsx.set_fs(fs);
@@ -247,6 +248,56 @@ describe('hasDeveloperComments', () => {
 
     it('returns false when no name is present in .mjs file', async () => {
         expect(await runAnalysis(tmpDir, 'app.mjs', 'export function foo() {}')).toBe(false);
+    });
+
+    it('is not fooled by name/date assignments in code (only comments count)', async () => {
+        expect(await runAnalysis(tmpDir, 'app.js', 'const name = prompt("Name?");\nconst obj = { date: new Date() };')).toBe(false);
+    });
+
+    it('scans a source file under a path containing "dist" as a substring (distance.js)', async () => {
+        expect(await runAnalysis(tmpDir, 'distance.js', '// Zoey McKee, 2026')).toBe(true);
+    });
+});
+
+describe('checkDeveloperComments', () => {
+    let dir;
+    beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'devc-')); });
+    afterEach(() => { rmSync(dir, { recursive: true }); });
+
+    const py = resolveAdapter({ language: 'python' });
+    const write = (name, content) => { const p = join(dir, name); writeFileSync(p, content); return p; };
+
+    it('Python: ignores `name = input()` and dict keys in code', () => {
+        const f = write('main.py', 'name = input("Name: ")\nrecord = {"date": today, "author": me}\n');
+        expect(checkDeveloperComments([f], 'Ana Ruiz', py, dir)).toEqual({ filesChecked: 1, filesWith: 0, missing: ['main.py'] });
+    });
+
+    it('Python: accepts a # comment header or a module docstring', () => {
+        const a = write('a.py', '# Ana Ruiz, 1/12/2026\nx = 1\n');
+        const b = write('b.py', '"""Rule loader.\nAuthor: Ana Ruiz\n"""\nimport csv\n');
+        expect(checkDeveloperComments([a, b], 'Ana Ruiz', py, dir).filesWith).toBe(2);
+    });
+
+    it('matches the student name as a whole word only', () => {
+        const f = write('c.py', '# Helper algorithm module\n');
+        expect(checkDeveloperComments([f], 'Al Smith', py, dir).filesWith).toBe(0);
+    });
+
+    it('reports per-file results and skips empty files', () => {
+        const ok = write('engine.py', '# Author: Ana Ruiz\n');
+        const bad = write('tests.py', 'def test_x():\n    assert True\n');
+        const empty = write('__init__.py', '');
+        expect(checkDeveloperComments([ok, bad, empty], 'Ana Ruiz', py, dir))
+            .toEqual({ filesChecked: 2, filesWith: 1, missing: ['tests.py'] });
+    });
+
+    it('excludes a submitted .venv from analysis', async () => {
+        mkdirSync(join(dir, '.venv', 'lib'), { recursive: true });
+        writeFileSync(join(dir, '.venv', 'lib', 'six.py'), 'x = 1\n');
+        write('main.py', '# Ana Ruiz\n');
+        const students = [{ name: 'Ana Ruiz', extractedDir: dir, urls: {} }];
+        await analyzeStudents(students, { language: 'python', analysis: { features: [] } }, dir);
+        expect(students[0].analysis.developerComments).toEqual({ filesChecked: 1, filesWith: 1, missing: [] });
     });
 });
 

@@ -747,6 +747,28 @@ describe('developer_comments handler', () => {
     it('handles missing analysis', () => {
         expect(getHandler('developer_comments')({ maxScore: 1 }, {})).toEqual({ score: 0, comment: 'Missing name/date comments' });
     });
+
+    describe('scope: "each"', () => {
+        const map = { maxScore: 2, scope: 'each' };
+
+        it('gives full credit only when every file has a header comment', () => {
+            const analysis = { hasDeveloperComments: true, developerComments: { filesChecked: 3, filesWith: 3, missing: [] } };
+            expect(handler(map, { analysis })).toEqual({ score: 2, comment: 'Yes' });
+        });
+
+        it('scores 0 and names the files missing one (kept through stock comments)', () => {
+            const analysis = { hasDeveloperComments: true, developerComments: { filesChecked: 3, filesWith: 1, missing: ['rules.py', 'tests.py'] } };
+            expect(handler(map, { analysis })).toEqual({
+                score: 0,
+                comment: 'Missing name/date comments in 2 of 3 files: rules.py, tests.py',
+                keepComment: true,
+            });
+        });
+
+        it('scores 0 when there were no source files to check', () => {
+            expect(handler(map, { analysis: {} })).toEqual({ score: 0, comment: 'Missing name/date comments' });
+        });
+    });
 });
 
 // ── code_review handler ────────────────────────────────────────────────────
@@ -1054,6 +1076,33 @@ describe('manual handler', () => {
         const map = { maxScore: 5, msg: 'Check feature', _reviewIndex: 0 };
         const student = { codeReview: { found: true, items: [{ betaScore: 3, prodScore: null, prodFilled: true, prodAffirmative: false }] } };
         expect(handler(map, student)).toEqual({ score: 0, comment: 'Check feature [Production: No]' });
+    });
+
+    describe('reviewRow (select the review criterion by label, not position)', () => {
+        // A form with a blank spacer row, as CS212/CS233JS forms have under "list errors".
+        const student = { codeReview: { found: true, items: [
+            { label: 'Does it run without errors?', betaScore: null, prodScore: null, prodFilled: true, prodAffirmative: true },
+            { label: '', betaScore: null, prodScore: null, prodFilled: false, prodAffirmative: null },
+            { label: 'Is the app interactive?', betaScore: null, prodScore: null, prodFilled: true, prodAffirmative: false },
+        ] } };
+
+        it('scores from the row whose label contains reviewRow (case-insensitive), ignoring position', () => {
+            const map = { maxScore: 5, msg: 'Interactive', reviewRow: 'INTERACTIVE', _reviewIndex: 0 };
+            expect(handler(map, student)).toEqual({ score: 0, comment: 'Interactive [Production: No]' });
+        });
+
+        it('flags for manual review (placeholder maxScore) when reviewRow matches no criterion', () => {
+            const map = { maxScore: 5, msg: 'Check', reviewRow: 'unit tests' };
+            expect(handler(map, student)).toEqual({
+                score: 5,
+                comment: 'Check [review row "unit tests" not found on code review form]',
+            });
+        });
+
+        it('falls back to the plain placeholder when there is no code review at all', () => {
+            const map = { maxScore: 5, msg: 'Check', reviewRow: 'interactive' };
+            expect(handler(map, {})).toEqual({ score: 5, comment: 'Check' });
+        });
     });
 });
 

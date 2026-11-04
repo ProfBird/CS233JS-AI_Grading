@@ -121,6 +121,30 @@ describe('parseTableScores — <td> cells (still supported)', () => {
     });
 });
 
+describe('parseTableScores — "Release" production header (CS212 forms)', () => {
+    it('treats a "Release" column as the production column', () => {
+        const html = thTable(
+            thRow('Criteria', 'Beta', 'Release', ''),
+            thRow('Is the app interactive?', 'yes', 'yes', ''),
+            thRow('Do all of the features work?', 'no', 'yes', ''),
+        );
+        const result = parseTableScores(html);
+        expect(result.productionCompleted).toBe(true);
+        expect(result.items[1]).toMatchObject({ prodFilled: true, prodAffirmative: true });
+    });
+
+    it('labels each item with its criterion text (blank for spacer rows)', () => {
+        const html = thTable(
+            thRow('Criteria', 'Beta', 'Prod.'),
+            thRow('Does it run without errors?', 'y', 'y'),
+            `<tr>${th('')}${th('')}${th('')}</tr>`,   // "list errors" spacer row
+            thRow('Is the app interactive?', 'y', 'n'),
+        );
+        const { items } = parseTableScores(html);
+        expect(items.map(i => i.label)).toEqual(['Does it run without errors?', '', 'Is the app interactive?']);
+    });
+});
+
 describe('parseGroupFromTable', () => {
     it('reads the lab version letter from the cell to the right (works with <th>)', () => {
         const html = thTable(thRow("Developer's lab version", 'B'));

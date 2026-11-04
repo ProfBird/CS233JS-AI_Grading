@@ -14,7 +14,7 @@ import { execFile } from 'child_process';
 import util from 'util';
 const execFileAsync = util.promisify(execFile);
 import { getAllFiles as sharedGetAllFiles } from '../lib/file_walker.js';
-import { makeCommentStripper } from '../lib/comment_stripper.js';
+import { makeCommentStripper, makeCommentExtractor } from '../lib/comment_stripper.js';
 import { aggregateDiagnostics } from '../lib/diagnostics_aggregator.js';
 
 const DEFAULT_EXCLUSIONS = ['__pycache__', '.venv', 'venv', '.git'];
@@ -30,13 +30,16 @@ function pythonBin(config) {
 // Python has no block-comment syntax; triple-quoted strings are just string literals
 // (sometimes used as docstrings) that must be protected before stripping "#" comments,
 // the same way JS's stripComments protects string/template literals before stripping "//".
-const stripComments = makeCommentStripper({
+const COMMENT_GRAMMAR = {
     lineComment: /#[^\n]*/g,
     protectPatterns: [
         /("""[\s\S]*?"""|'''[\s\S]*?''')/g,           // triple-quoted first (may span lines, contain # or quotes)
         /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g, // then single-line quoted strings
     ],
-});
+};
+const stripComments = makeCommentStripper(COMMENT_GRAMMAR);
+// Docstrings count as comment text for comments-only checks (file-header "Author:" blocks).
+const extractComments = makeCommentExtractor({ ...COMMENT_GRAMMAR, docPatterns: [COMMENT_GRAMMAR.protectPatterns[0]] });
 
 // ---------- File collection ----------
 function getAllFiles(dirPath, exclusions = DEFAULT_EXCLUSIONS) {
@@ -267,6 +270,7 @@ export default {
     language: 'python',
     sourceExtensions: ['.py'],
     stripComments,
+    extractComments,
     checkManifest,
     extractUsedPackages,
     lint,

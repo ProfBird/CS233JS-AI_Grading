@@ -108,8 +108,22 @@ registerHandler('apps_in_repo', (map, student) => {
     return { score: 0, comment: 'GitHub URL provided but repo could not be cloned' };
 });
 
+// Default scope "any": full credit when at least one source file has a developer header
+// comment. scope "each" requires every (non-empty) source file to have one — for rubrics that
+// say "name and date in each file" — and lists the files missing it.
 registerHandler('developer_comments', (map, student) => {
     const a = student.analysis || {};
+    if (map.scope === 'each') {
+        const dc = a.developerComments;
+        if (!dc || dc.filesChecked === 0) return { score: 0, comment: 'Missing name/date comments' };
+        if (dc.missing.length === 0) return { score: map.maxScore, comment: 'Yes' };
+        const shown = dc.missing.slice(0, 5).join(', ') + (dc.missing.length > 5 ? `, +${dc.missing.length - 5} more` : '');
+        return {
+            score: 0,
+            comment: `Missing name/date comments in ${dc.missing.length} of ${dc.filesChecked} files: ${shown}`,
+            keepComment: true,
+        };
+    }
     if (a.hasDeveloperComments) {
         return { score: map.maxScore, comment: 'Yes' };
     }
@@ -415,10 +429,33 @@ registerHandler('run_check', (map, student) => {
     return { score: 0, comment: errors.length ? errors.join('; ') : 'Program check failed', keepComment: true };
 });
 
+// Selects the code-review row a manual mapping reads. map.reviewRow (a case-insensitive
+// substring of the criterion text) is preferred: positional _reviewIndex counts every table
+// row, including the blank "list errors" spacer rows most review forms have, so it rarely
+// lines up with the intended criterion. Returns { item } or { missing: true } when a
+// configured reviewRow matches nothing.
+function findReviewItem(map, cr) {
+    if (!(cr && cr.found && cr.items)) return {};
+    if (map.reviewRow) {
+        const needle = String(map.reviewRow).toLowerCase();
+        const item = cr.items.find(it => it.label && it.label.toLowerCase().includes(needle));
+        return item ? { item } : { missing: true };
+    }
+    if (map._reviewIndex !== undefined && map._reviewIndex < cr.items.length) {
+        return { item: cr.items[map._reviewIndex] };
+    }
+    return {};
+}
+
 registerHandler('manual', (map, student) => {
-    const cr = student.codeReview;
-    if (cr && cr.found && cr.items && map._reviewIndex !== undefined && map._reviewIndex < cr.items.length) {
-        const item = cr.items[map._reviewIndex];
+    const { item, missing } = findReviewItem(map, student.codeReview);
+    if (missing) {
+        return {
+            score: map.maxScore ?? 0,
+            comment: `${map.msg || 'NEEDS MANUAL CHECK'} [review row "${map.reviewRow}" not found on code review form]`,
+        };
+    }
+    if (item) {
         // Production score as a fraction (e.g. "4/5")
         if (item.prodScore !== null) {
             const score = Math.min(item.prodScore, map.maxScore || Infinity);

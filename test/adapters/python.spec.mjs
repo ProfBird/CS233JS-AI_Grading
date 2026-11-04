@@ -241,3 +241,26 @@ describe('python adapter — runTests() via pytest', () => {
         }
     }, 30000);
 });
+
+describe('extractComments (inverse of stripComments)', () => {
+    it('returns # comments and docstrings, never code', () => {
+        const out = pyAdapter.extractComments('"""Author: Ana"""\nname = input("x")  # by "Ana" here\n');
+        expect(out).toContain('Author: Ana');
+        expect(out).toContain('# by "Ana" here');      // quoted text inside a comment is restored
+        expect(out).not.toContain('input');
+    });
+
+    it('does not treat a # inside a string literal as a comment', () => {
+        expect(pyAdapter.extractComments('url = "http://x/#frag"\n')).toBe('');
+    });
+});
+
+describe('extractComments exists on every comment-capable adapter', () => {
+    it.each(['javascript', 'typescript', 'python', 'cpp', 'csharp'])('%s', lang => {
+        const adapter = resolveAdapter({ language: lang });
+        expect(typeof adapter.extractComments).toBe('function');
+        if (lang !== 'python') {
+            expect(adapter.extractComments('int name = 1; // Ana\n/* date: x */')).toBe('/* date: x */\n// Ana');
+        }
+    });
+});

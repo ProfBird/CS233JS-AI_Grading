@@ -10,7 +10,7 @@ It was originally built for JavaScript labs, but language-specific mechanics (li
 
 The pipeline is designed for a workflow where some rubric items are auto-graded (code features, lint results, build/runtime success, HTML/CSS validation, file naming, etc.) and others are left for manual instructor review (code quality, design decisions, and the like).
 
-## Documentation
+## Other Documentation
 
 - **[User Guide](USER_GUIDE.md)** — installation, directory setup, configuring and running labs, the `cs233-grade` / `cs233-configure-lab` / `cs233-rubric-to-md` commands, and the rubric mapping types.
 - **[Developer Guide](DEVELOPER_GUIDE.md)** — architecture, module dependency diagram, pipeline phases, the language adapter interface, and how to extend the grader (new mapping types, new adapters, new check strategies).

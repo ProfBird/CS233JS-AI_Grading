@@ -115,6 +115,7 @@ graph TD
     analyze --> file_walker
     analyze --> variation_detect
     runtime --> sandbox
+    adapter_py -->|runTests through the chokepoint| sandbox
     configure_lab --> tui
     configure_lab --> lab_config
     configure_lab --> llm_client
@@ -213,10 +214,15 @@ sequenceDiagram
     grade->>grade: scan configs/{Course}/ subdirs for matching {assignmentname}_config.json
 
     alt no assignment name arg
+        alt course has no assignment configs yet
+            grade-->>User: SetupError — "has no assignments configured yet; run configure-lab.js"
+        end
         User->>grade: select assignment from menu
     end
 
     grade->>config: read lab config
+    grade->>grade: applyCourseDefaults(config, course_config.json) — course "defaults" under the lab config (lab wins; in memory only)
+    grade->>grade: merge local-config toolchains, loadHandlerModules(), validateConfig()
     grade->>grade: repoClonePath = codeRoot/courseName/labName
 
     alt labDir has no direct Moodle submissions
@@ -252,7 +258,7 @@ sequenceDiagram
     else normal grading
         grade->>pipeline: runPipeline(students, config, dirs, options)
         pipeline->>adapter: resolveAdapter(config).preflight(config)
-        adapter-->>pipeline: { available, hint } — logged as a WARNING if unavailable, not a hard stop
+        adapter-->>pipeline: { available, hint, warning? } — logged as a WARNING if unavailable or warning set (e.g. uv missing), not a hard stop
         pipeline->>pipeline: filterAlreadyGraded() — skip students whose grade file already exists (unless --regrade)
         loop each phase in PHASES, where phase.when(config) is true
             pipeline->>pipeline: await phase.run(toGrade, config, dirs)
@@ -278,16 +284,18 @@ sequenceDiagram
     extract->>extract: getStudents() — scan Moodle submission dirs
     par for each student
         extract->>extract: extractUrls() — categorize URLs per config.urlPatterns (default: github, citstudent)
-        alt has .zip file
-            extract->>extract: unzip to submissionsDir/Student/extracted_code/
-        else has GitHub URL
-            extract->>extract: git clone --depth 1 to submissionsDir/Student/repo/
+        alt has GitHub URL
+            extract->>extract: git clone --depth 1 to submissionsDir/Student/repo/ (zip only as fallback if the clone fails)
+        else has .zip file
+            extract->>extract: unzip to submissionsDir/Student/extracted_code/, then merge loose uploaded files (zip wins name collisions)
+        else only loose files uploaded
+            extract->>extract: copyLooseFiles() — top-level files minus hidden/.zip/.doc(x) into extracted_code/
         end
     end
     extract-->>grade: return students[] array
 
     Note over pipeline: === Phase: Runtime Check (registerCheckStrategy) ===
-    pipeline->>runtime: runtimeCheck(students, config, artifactsDir)
+    pipeline->>runtime: runtimeCheck(students, config, artifactsDir, labConfigDir)
     runtime->>runtime: strategy = getCheckStrategy(config.runtimeCheck || "build")
     alt strategy == "build"
         runtime->>adapter: detectProject(dir, config) → Project[]
@@ -300,7 +308,10 @@ sequenceDiagram
         runtime->>runtime: then browser phase on the built dist/
         runtime->>runtime: store buildSuccess + browserSuccess separately
     else "run_check"
-        runtime->>adapter: build (if needed), then execute the artifact
+        runtime->>adapter: detectProject() — entryError fails the check
+        runtime->>adapter: install(project, config) — e.g. Python uv env (cached); sets project.runCommand's interpreter
+        runtime->>adapter: build (if no runCommand), then execute the artifact
+        runtime->>runtime: execOptionsFor() — execution.cwd "copy" → cwdSource = project.dir; supportFiles resolved against labConfigDir
         runtime->>runtime: (sandbox) runStudentArtifact() — see sandbox.js below
         runtime->>runtime: match stdout against config.runCheck.expectPatterns
     end
@@ -309,7 +320,7 @@ sequenceDiagram
         runtime-->>pipeline: attaches student.scriptsCheck
     end
     alt test_check mappings present
-        runtime->>adapter: runTests(project, config) — pytest/dotnet test/CTest, per language
+        runtime->>adapter: install(project, config), then runTests(project, config, execOptions) — through the sandbox (Python: pytest or testCheck.mode "script"; C#: dotnet test)
         runtime-->>pipeline: attaches student.testCheck
     end
     runtime-->>pipeline: (attaches to student.runtimeCheck)
@@ -317,9 +328,9 @@ sequenceDiagram
 
 ### `src/lib/sandbox.js` — Native Code Execution Isolation
 
-The `run_check` strategy never spawns the student artifact directly — it calls
-`runStudentArtifact(argv, execConfig)`, the single isolation chokepoint every current and
-future build/run/test strategy must go through.
+The `run_check` strategy and the Python adapter's `runTests` never spawn student code
+directly — they call `runStudentArtifact(argv, execConfig)`, the single isolation chokepoint
+every current and future build/run/test strategy must go through.
 
 - **`"direct"` mode** (implemented, the default): spawns the artifact from a **fresh,
   throwaway temp working directory** (so relative-path file writes/deletes the student
@@ -333,8 +344,23 @@ future build/run/test strategy must go through.
   to `"direct"`. `"container"` (Docker/Podman) is the real second isolation tier for when
   genuine confinement is actually needed; implement it if a future course involves
   less-trusted submissions.
-- Configured via `config.execution: { mode, timeoutMs }`; the file's own header comment is
-  the canonical isolation-tier documentation.
+- **Run directory contents:** empty by default. With `execConfig.cwdSource` (set by
+  `runtime_check.js` when `config.execution.cwd === "copy"`, and always for Python tests) it
+  starts as a copy of the student's project folder — `fs.cpSync` skipping `COPY_SKIP_DIRS`
+  (`.venv`, `venv`, `.git`, `__pycache__`, `node_modules`, `.pytest_cache`) and all symlinks —
+  so a program that opens `Data/x.csv` relative to its project folder works. `runtime_check`
+  rewrites argv paths inside the project to be relative to the copy (`argvForCopy`).
+  `execConfig.supportFiles` (`[{ from: absolute, to: relative }]`, from
+  `config.runCheck.supportFiles` resolved against the lab's config folder) are then added
+  **only where the student has no file** at that path; a missing source returns
+  `{ setupError: true }` instead of running.
+- **Environment:** the child gets `scrubEnv(process.env)` — the grader's environment minus
+  anything matching `/(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|CREDENTIALS?)$/i` or
+  starting `CANVAS_` — plus `execConfig.env`. Student code can't read the grader's Canvas
+  token or LLM keys.
+- Configured via `config.execution: { mode, timeoutMs, cwd }` (plus `envCacheDir` /
+  `installTimeoutMs`, used by the Python adapter's uv install); the file's own header comment
+  is the canonical isolation-tier documentation.
 
 ## Pipeline Phases 3–6: Analysis, Validation & Grading
 
@@ -357,7 +383,7 @@ sequenceDiagram
     pipeline->>code_review: readCodeReview(students, config)
     code_review->>code_review: find .docx review forms in student dirs
     code_review->>code_review: mammoth → HTML table parse
-    code_review->>code_review: extract betaScore, prodScore per item, group letter
+    code_review->>code_review: items[] from every Beta/Prod(/Release/Final)-headed table, each with its criterion label; group letter
     code_review-->>pipeline: (attaches student.codeReview)
 
     Note over pipeline: === Phase: Analysis ===
@@ -369,16 +395,16 @@ sequenceDiagram
         analyze->>analyze: findPartDir() — match subdirectories to game names
         analyze->>analyze: per-part feature counts
     end
-    analyze->>analyze: check for developer comments (adapter.sourceExtensions-filtered), code review docs
+    analyze->>analyze: checkDeveloperComments() — per-file name/date/AI-use flags from adapter.extractComments (comments only), honoring developer_comments.ignoreCommentsBy; code review docs
     analyze->>analyze: detectPartsPresent() — iterate config.parts
     analyze->>adapter: checkManifest() / extractUsedPackages() (nullable — e.g. null for C++)
     analyze->>analyze: write analysis_report.json
     analyze-->>pipeline: (attaches to student.analysis)
 
     Note over pipeline: === Phase: Linting ===
-    pipeline->>lint: lintCode(students, config, artifactsDir)
+    pipeline->>lint: lintCode(students, config, artifactsDir, labName, stepName, courseName)
     lint->>adapter: resolveAdapter(config)
-    lint->>adapter: lintConfigCandidates(configsDir, labName, parentName) — step/lab override, else the adapter's shipped default
+    lint->>adapter: lintConfigCandidates(configsDir, labName, parentName, courseName) — step > lab > course-wide (configs/{Course}/eslint.config.mjs or ruff.toml) > shipped default
     lint->>adapter: lint(sourceFiles, cwd, configOverride, config) → normalized diagnostics
     Note right of adapter: JS: ESLint.lintFiles(). Python: ruff --output-format json.<br/>C++/C#: compiler SARIF/MSBuild output classified error/warning.
     lint->>lint: write lint_report.json
@@ -476,6 +502,7 @@ unhandled error used to exit 0).
 - `--regrade` without `--reclone` runs `git pull` on each student's existing repo before re-grading
 - When `labDir` has no direct Moodle submissions but contains subdirs that do (e.g. separate Beta/Production groups), prompts the user to pick which group to grade
 - **Pre-course-tier fallbacks** (ease the one-time upgrade, no forced reorganization): if `<labRoot>/<courseName>/<labName>` doesn't exist but the old flat `<labRoot>/<labName>` does, that's used instead (Moodle downloads are Google-Drive-external, out of this tool's control). If `<codeRoot>/<courseName>/<labName>` doesn't exist yet but a flat `<codeRoot>/<labName>` with prior graded output does, the user is offered a one-time interactive move into the nested location — otherwise `--regrade` would treat every already-graded student as new and orphan any manual post-grading edits.
+- Merges the course's `course_config.json` `defaults` under the lab config (`applyCourseDefaults()`, in memory only), then local-config `toolchains`, before anything else reads the config. A course with no assignment configs yet throws a `SetupError` pointing at `configure-lab.js` instead of showing an empty assignment picker
 - Calls `loadHandlerModules(config, labConfigDir)` (external mapping-type handler modules) **before** validating the config — a mapping type registered by one of those modules must already be recognized as valid when `validateConfig()` checks every mapping's `type` against `VALID_MAPPING_TYPES`. This ordering fixed a real bug where handler modules were previously loaded too late (inside `generate_grades.js`, after validation had already run). Both functions live in `../src/lib/config_validation.js`, not in `bin/grade.js` itself — extracted so they're unit-testable without stubbing `process.exit` (`validateConfig` throws instead; `grade_setup.js` catches it and re-throws as a `SetupError`, letting `main()` control the exit).
 - Validates config on startup via `validateConfig()` — checks required keys, known mapping types (`VALID_MAPPING_TYPES`, sourced from `../lib/handler_registry.js`), runtime-check mode (`VALID_RUNTIME_MODES`, sourced from `runtime_check.js`'s check-strategy registry — new strategies don't require editing the validator), cell reference format, part structure, feature definitions
 - Calls `extractCode(labDir, submissionsDir, config)` directly — or, when `usingCanvas` (`--canvas` passed, or `config.canvas.assignmentId` already set), `importFromCanvas({ courseId, assignmentId, submissionsDir, canvasConfig, urlPatterns })` instead. `usingCanvas` also skips the Moodle-only `labDir`-existence/step-descend/`hasMoodleSubmissions` blocks entirely (see `extract_code_canvas.js` below); everything else — `--reclone`'s clearing loop, `--regrade`'s `git pull` loop, `runPipeline` — operates generically on `submissionsDir` and needs no source-specific branching. For `config.extractOnly` labs, writes the extraction-only log summary and returns without calling `run_pipeline.js` at all
@@ -494,12 +521,13 @@ Handles extracting student code from submissions.
 | `extractUrls(textDir, urlPatterns)` | Parse `onlinetext.html` for URLs matching each configured category (default `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }`, overridable via `config.urlPatterns`) |
 | `extractStudentCode()` | Unzip or git clone per student; sets `student.extractedDir` |
 | `matchUrlCategories(text, urlPatterns)` | Exported — the URL-category regex matching `extractUrls()` applies to `onlinetext.html`, factored out so it can run against any raw text/URL string. Used by `extract_code_canvas.js` on a Canvas submission's body or URL. |
-| `acquireCode(student, codeDir, urls)` | Exported — the shared clone-with-fallback/unzip mechanics (idempotent skip, prefer-repo-over-zip, git clone with timeout). `extractStudentCode()` resolves `codeDir` from the Moodle layout and calls this; `extract_code_canvas.js` resolves it from the Canvas layout and calls the same function. |
+| `acquireCode(student, codeDir, urls)` | Exported — the shared clone-with-fallback/unzip mechanics (idempotent skip, prefer-repo-over-zip, git clone with timeout). After a zip extracts, loose files uploaded next to it are merged in (`mergeLooseFilesAfterZip`; the zip's copy wins a name collision); if the zip won't extract, or there's no zip or repo at all, the loose files are used alone. `extractStudentCode()` resolves `codeDir` from the Moodle layout and calls this; `extract_code_canvas.js` resolves it from the Canvas layout and calls the same function. |
+| `copyLooseFiles(student, codeDir)` | Copies `student.filesDir`'s top-level regular files into `codeDir`, skipping hidden files and `LOOSE_FILE_SKIP_RE` (`.zip`, `.doc`, `.docx` — the review form stays where `read_code_review.js` looks for it, and its usually space-laden name doesn't trip `name_check`). Never overwrites a file already there. Returns `{ copied, skipped[] }`. Covers submissions of bare `.py`/`.csv` files (CS212). |
 | `applyGithubSubdir(student, urls)` | Exported — adjusts `student.extractedDir` for a GitHub tree URL pointing at a subdirectory. Shared by both acquisition sources for the same reason as `acquireCode`. |
 
 **Directory naming:**
 - GitHub clones → `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/repo/`
-- ZIP extractions → `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/extracted_code/`
+- ZIP extractions and loose uploaded files → `<codeRoot>/<labName>/SubmissionsAndAssessment/StudentName/extracted_code/`
 
 **Git clone safety:**
 - 60-second timeout with SIGKILL to prevent hangs
@@ -519,7 +547,7 @@ instead of scanning a Moodle-downloaded `labRoot` folder. Used when a lab's conf
 
 | Function | Purpose |
 |---|---|
-| `importOneSubmission(submission, submissionsDir, urlPatterns)` | Maps one Canvas submission into a `student` object. `online_upload` → downloads attachments into `<Student>/canvas_files/` and, if any is a `.zip`, extracts it via `acquireCode()`. `online_text_entry`/`online_url` → runs the submission body/URL through `matchUrlCategories()` and clones a GitHub link the same way Moodle does. Any other `submission_type` (media recording, quiz, discussion) is recorded as `student.error`, not downloaded. Idempotent like the Moodle path — re-running skips a submission whose `extracted_code/` already has content, without re-hitting the network. |
+| `importOneSubmission(submission, submissionsDir, urlPatterns)` | Maps one Canvas submission into a `student` object. `online_upload` → downloads attachments into `<Student>/canvas_files/` and hands them to `acquireCode()`: a `.zip` is extracted (plus any loose attachments merged in), and with no zip the loose non-Word attachments themselves become `extracted_code/`. `online_text_entry`/`online_url` → runs the submission body/URL through `matchUrlCategories()` and clones a GitHub link the same way Moodle does. Any other `submission_type` (media recording, quiz, discussion) is recorded as `student.error`, not downloaded. Idempotent like the Moodle path — re-running skips a submission whose `extracted_code/` already has content, without re-hitting the network. |
 | `importFromCanvas({ courseId, assignmentId, submissionsDir, canvasConfig, urlPatterns })` (default export) | Lists the assignment's submissions (`canvasClient.listSubmissions`, paginated) and calls `importOneSubmission()` for each. Returns `students[]` in the exact same shape `extract_code.js`'s default export produces, so every downstream phase is agnostic to which acquisition source ran. |
 
 **Directory naming:** identical to the Moodle path —
@@ -570,8 +598,10 @@ register, so a new strategy doesn't require editing the validator.
 - Use `build_check`, `browser_check`, or `build_and_browser_check` mapping types to score each sub-result
 
 **`"run_check"` strategy:**
-- Builds first (if the adapter has a build step and the project has no static `runCommand` — interpreted languages like Python skip straight to running)
-- Executes the produced artifact via `../lib/sandbox.js`'s `runStudentArtifact()` chokepoint (see that section above) — this strategy never spawns the artifact itself
+- Fails early with the adapter's `project.entryError` (e.g. a configured `runCheck.entry` that doesn't exist)
+- Installs dependencies via `adapter.install(project, config)` when the adapter has one (`installIfNeeded`) — for a Python uv project this builds or reuses the cached environment and points `project.runCommand` at its interpreter
+- Builds next (if the adapter has a build step and the project has no static `runCommand` — interpreted languages like Python skip straight to running)
+- Executes the produced artifact via `../lib/sandbox.js`'s `runStudentArtifact()` chokepoint (see that section above) — this strategy never spawns the artifact itself. `execOptionsFor(project, config, ctx)` builds the sandbox options shared with the test sub-phase: `cwdSource: project.dir` when `config.execution.cwd === "copy"`, and `supportFiles` from `config.runCheck.supportFiles` resolved against `ctx.configDir` (the lab's config folder, passed in by `run_pipeline.js` as `runtimeCheck()`'s 4th argument)
 - Matches combined stdout against `config.runCheck.expectPatterns` (all must match); `config.runCheck.stdin` is fed to the program; `config.runCheck.timeoutMs` (default 10000) is the kill-tree timeout
 - Intended for non-web languages whose runtime signal is "did the program run and produce the right output," not a browser check — score with the `run_check` mapping type
 
@@ -583,7 +613,7 @@ register, so a new strategy doesn't require editing the validator.
 
 **Test check sub-phase:**
 - Automatically runs when any `test_check` mapping is present in the config
-- Delegates to `adapter.runTests(project, config)` (nullable — implemented for Python via `pytest`, and C# via `dotnet test`; `null` for JS/C++ — no test-runner integration for those yet)
+- Installs dependencies first (same `installIfNeeded` — free after `run_check` thanks to the environment cache), then delegates to `adapter.runTests(project, config, execOptions)` (nullable — implemented for Python and C#; `null` for JS/C++ — no test-runner integration for those yet). Python runs through the sandbox in a copy of the project: `config.testCheck.mode` `"pytest"` (pytest is added to a uv environment on first use) or `"script"` (runs the student's own test script `testCheck.entry`, counting `PASS`/`FAIL` lines; a crash, traceback or timeout adds one failure)
 - Returns `{ total, passed, failures[] }`; results stored in `student.testCheck`, scored proportionally by the `test_check` mapping type
 
 ### `read_code_review.js` — Code Review Reader
@@ -591,9 +621,11 @@ register, so a new strategy doesn't require editing the validator.
 Runs **before** `analyze_code.js` so the group letter is available during analysis.
 
 - Finds `.docx` code review forms in each student's submission folder
-- Uses `mammoth` to convert the docx to HTML, then parses the table
-- Extracts per-item beta and production scores, `productionCompleted` flag, and group letter (`A`/`B`/`C`)
-- Attaches `student.codeReview` with `{ found, items[{betaScore, prodScore}], productionCompleted, group }`
+- Uses `mammoth` to convert the docx to HTML, then parses the tables
+- `items[]` comes from **every** table whose header names a Beta or production column, in document order (forms often split criteria across tables — "General", "Part 1", "Part 2"); each item carries its criterion `label` (empty for the blank "list errors" spacer rows). The production column is the header matching `/prod|release|final/i` — CS233JS forms say "Prod.", several CS212 forms say "Release". A form with no recognizable headers falls back to the densest table's last two columns.
+- `productionCompleted` — anything filled in the primary (densest) table's production column, or in any other production-headed table
+- Attaches `student.codeReview` with `{ found, items[{label, betaScore, prodScore, prodFilled, prodAffirmative}], productionCompleted, group }`
+- `manual` mappings find their row by label (`reviewRow`, see `generate_grades.js`) — there is no positional matching
 
 ### `analyze_code.js` — Feature Detection
 
@@ -604,7 +636,8 @@ Regex-based analysis of student source files, driven by the resolved language ad
 - `getAllFiles()` — recursive directory walk (skips symlinks to prevent infinite loops from circular references)
 - `countFeatures(files, features, adapter)` — counts regex matches per feature. Each feature is filtered to matching files via its `fileRegex` field, defaulting to the resolved adapter's `sourceExtensions` (`.js`/`.mjs` for JS, `.py` for Python, etc. — no longer hardcoded to `.js`). Source files (per `sourceExtensions`) have comments stripped via `adapter.stripComments()` before matching; other file types are searched as-is. The `adapter` parameter defaults to the JS adapter, so existing 2-arg callers (and tests) are unaffected.
 - `findPartDir()` — multi-pass search for part subdirectories (game name matching, folder pattern fallback)
-- Checks for developer comments (name/date markers in files), filtered to the adapter's `sourceExtensions` — checks for a specific 2-extension list
+- `checkDeveloperComments(files, studentName, adapter, baseDir, { ignoreCommentsBy })` — for each non-empty source file (per `sourceExtensions`), reads **comment text only** via `adapter.extractComments` (Python docstrings count) and records `{ path, name, date, ai }`: `name` = an author/name keyword or the student's first/last name as a whole word; `date` = a date keyword or an actual date (`1/5/2026`, `2026-01-05`, `Jan 5`, `Fall 2025`); `ai` = an AI-use disclosure in the file's first 40 lines. Comment lines containing an `ignoreCommentsBy` string (collected from the lab's `developer_comments` mappings) are dropped unless they also name the student. Stored as `analysis.developerComments` (`{ filesChecked, filesWith, missing[], files[] }`); `analysis.hasDeveloperComments` = any file with a name or date.
+- Excludes `.venv`/`venv`/`__pycache__` (as well as `node_modules`/`dist`/`.git`) from analysis by path segment
 - Checks for code review documents
 - `detectPartsPresent()` — scans extracted directory for part subdirectories; auto-detects `part1`, `part2`, etc. even without explicit `parts` config. Results stored in `analysis.partPresence`
 - `config.packageCheck` validation and `analysis.npmPackages` population both delegate to `adapter.checkManifest()` / `adapter.extractUsedPackages()` — both nullable (e.g. `null` for C++, which has no manifest/package concept); when null, `analysis.npmPackages` is simply `[]` and no manifest check runs
@@ -615,7 +648,7 @@ Regex-based analysis of student source files, driven by the resolved language ad
 
 Runs ESLint v9+ with flat config.
 
-- Delegates the actual linting to the resolved language adapter (`src/adapters/`, default `javascript`), which resolves the ruleset (a `configs/{Lab}/eslint.config.mjs` override if present, else the shipped `eslint/student.eslint.config.mjs` for the JS adapter) and copies it into the lab folder for editor consistency. The JS adapter uses ESLint's Node API (`new ESLint().lintFiles()`), not a shelled-out CLI.
+- Delegates the actual linting to the resolved language adapter (`src/adapters/`, default `javascript`), which resolves the ruleset — the first that exists of a step override (`configs/{Course}/{Lab}/{Step}/eslint.config.mjs`), a lab override (`configs/{Course}/{Lab}/eslint.config.mjs`), a course-wide ruleset (`configs/{Course}/eslint.config.mjs`), then the shipped `eslint/student.eslint.config.mjs` (Python: the same levels with `ruff.toml`, shipped default `python/student.ruff.toml`) — and copies it into the lab folder for editor consistency. The JS adapter uses ESLint's Node API (`new ESLint().lintFiles()`), not a shelled-out CLI.
 - Collects source files recursively per the adapter's `sourceExtensions` (`.js`/`.mjs` for JS), respecting per-lab exclusions (e.g., `node_modules`, `dist`, `part1`)
 - Outputs human-readable rule descriptions (42 rules mapped, for the JS adapter)
 - Writes `lint_report.json`
@@ -712,9 +745,16 @@ tool (`lint`, `install`, `build`, `runTests`, `preflight`) accept an optional tr
 |---|---|---|---|---|---|
 | `javascript.js` (default) | `package.json` (dependencies/devDependencies split) | ESLint (Node API) | `npm install` + `npm run build` | — (`runTests: null`) | The original implementation, extracted verbatim — behavior for existing JS labs is unchanged |
 | `typescript.js` | `package.json` (reuses the JS adapter's logic) | ESLint with `@typescript-eslint/parser` | `tsc --noEmit`, via the grader's own `node_modules/.bin/tsc` (not the student's) | — | Extends the JS adapter (`{ ...jsAdapter, ... }`) rather than reimplementing it |
-| `python.js` | `requirements.txt` (flat — no dependencies/devDependencies split) | `ruff check --output-format json`, classified: pyflakes (`F`)/syntax errors (`E9`) = errors, else warnings | `py_compile` per file (syntax-only — Python has no separate compile step) | `pytest` (text-summary parsed, no JSON-report plugin dependency) | `runScript: null` — no npm-style named-script concept for plain submissions |
+| `python.js` | `pyproject.toml` `[project].dependencies` (dev groups/extras count as declared but needn't be imported; a small TOML reader, not a full parser), else `requirements.txt`; distribution→import names via `IMPORT_ALIASES` + `packageCheck.importAliases` | `ruff check --output-format json`, classified: pyflakes (`F`)/syntax errors (`E9`) = errors, else warnings | `py_compile` per file (syntax-only — Python has no separate compile step). `install()`: for a uv project, `uv sync --no-install-project` in a scratch folder holding only `pyproject.toml`/`uv.lock`/`.python-version`, into a cached env at `<execution.envCacheDir>/<hash of those files>` (default `<tmp>/grader-python-envs`; a `.grader-env-ready` marker means reuse); `requirements.txt` → pip | Through the sandbox in a project copy: `pytest` (added to the uv env on first use; text summary parsed) or `testCheck.mode: "script"` (counts `PASS`/`FAIL` lines; `parseScriptTestOutput`) | `detectProject`: the shallowest folder with `pyproject.toml` is the project (`type: "python-uv"`), else the entry's folder; entry = `runCheck.entry`, else `main.py` (exact name), else the only/shallowest `.py` (`resolveEntry`). After `install()`, programs run with the env's own Python (`envPython()`: `bin/python`, or `Scripts\python.exe` on Windows). `preflight` warns when uv is missing for a lab that runs/tests code. `runScript: null` |
 | `cpp.js` | none (`checkManifest: null`) | Compiler warnings via `-fdiagnostics-format=sarif-stderr` (GCC) or `=sarif` (clang, incl. macOS `g++`) — SARIF output, flag spelling probed via `--version`; same mechanism as `build()`, so `lint` re-runs the compile | Prefers CMakeLists.txt, then a Makefile, then compiles loose `.cpp`/`.cc`/`.cxx` files directly (only the "loose" path gets structured diagnostics) | not implemented (`runTests: null` — CTest/GoogleTest integration is a documented future step) | `stripComments` protects C++11 raw string literals (`R"(...)"`) before the generic string pass; header files (`.h`/`.hpp`) are scanned for features/lint but never independently compiled |
 | `csharp.js` | none in this adapter (NuGet `PackageReference` validation not implemented) | MSBuild plain-text diagnostics from `dotnet build` (regex-parsed — no binlog/XML dependency) | `dotnet build` | `dotnet test` (console-summary line parsed, e.g. `Failed: 1, Passed: 2, ...`) | `detectProject` parses a `.sln`/`.slnx` (supports both the classic text format and the newer XML format the .NET SDK now defaults to) for multi-project references, or a loose `.csproj`; `stripComments` protects verbatim (`@"..."`) and C# 11 raw string literals |
+
+Every adapter also exports `extractComments` — the inverse of `stripComments`, built from
+the same grammar options (`src/lib/comment_stripper.js`'s `makeCommentExtractor`; Python
+also counts docstrings) — so comment-only checks like `developer_comments` see exactly what
+stripping removes. `runTests(project, config, execOptions)` receives the sandbox options
+`runtime_check.js` uses for `run_check`; an adapter that executes student code should pass
+them to `runStudentArtifact`.
 
 **Adding a new adapter:** implement the `Adapter` interface from `base.js`, register it in
 `src/adapters/index.js`'s `ADAPTERS` map (or call `registerAdapter(language, adapter)`),
@@ -746,8 +786,8 @@ noticing).
 | `part1_completed` | Yes | Score if Part 1 files exist (reads `analysis.partPresence.part1`) |
 | `part_completed` | Yes | Generic version — checks `analysis.partPresence[partId]` |
 | `apps_in_repo` | Yes | Score if all parts found in GitHub repo |
-| `developer_comments` | Yes | Score if name/date markers found |
-| `code_review` | Yes | Full/half/zero based on review found + production column complete |
+| `developer_comments` | Yes | Scores `analysis.developerComments` (per-file `name`/`date`/`ai` from comments only). Default: full credit when any file has a name or date. `scope: "each"` requires every file; `require: ["name","date","ai"]` replaces the name-or-date rule; `requireAiDisclosure: true` adds the AI-use check (`devHeaderChecks()` combines them); `ignoreCommentsBy` is read by `analyze_code.js`. Failing comments list files and what each lacks (`keepComment: true`). |
+| `code_review` | Yes | Full/half/zero based on review found + production column (Prod./Release/Final) complete |
 | `url_check` | Partial | Writes URL for manual verification; score left blank |
 | `deploy_check` | Partial | Fetches the `urlType` URL (default `citstudent`); scores reachability + bundling (opt out via `checkBundling: false`); flags transient failures for manual review |
 | `lint` | Yes | Score based on the resolved adapter's diagnostic issue count (ESLint for JS/TS, ruff for Python, compiler warnings for C++/C#). Optional `severity: "errors"` (binary pass/fail) or `"warnings"` (graduated). Default uses combined total. Writes the actual findings (top issues by frequency) to the comment cell and sets `keepComment: true`, so `stockComments` is ignored for this type. |
@@ -758,9 +798,9 @@ noticing).
 | `browser_check` | Yes | Score based on browser console errors (from `"browser"` or `"both"` mode) |
 | `build_and_browser_check` | Yes | Full/half/zero based on both build and browser results combined |
 | `run_check` | Yes | Score based on the `"run_check"` runtime strategy's result — full credit if the program ran and matched `config.runCheck.expectPatterns`, else 0 with the failure detail preserved |
-| `test_check` | Yes | Proportional score against `student.testCheck` (`{ total, passed, failures[] }` from the adapter's `runTests` — pytest/dotnet test); comment lists up to 5 failing test names |
+| `test_check` | Yes | Proportional score against `student.testCheck` (`{ total, passed, failures[] }` from the adapter's `runTests` — pytest, a PASS/FAIL test script, dotnet test); comment lists up to 5 failing test names |
 | `scripts_check` | Yes | Proportional score: how many of the specified named scripts pass (adapter-delegated; nullable for languages with no such concept) |
-| `manual` | No | Reads production/beta score from code review form; falls back to "NEEDS MANUAL CHECK" |
+| `manual` | No | Without `reviewRow`: a placeholder (`maxScore` + `msg`, default "NEEDS MANUAL CHECK"). With `reviewRow` (case-insensitive substring of a review criterion, or an array of them; `reviewRowOccurrence` picks a repeated question): pre-scored from the review form's production answer (fraction / Yes / No), else a beta fraction; for an array every row must be answerable and the lowest score wins. An unmatched `reviewRow` keeps the placeholder score with a `[review row "…" not found on code review form]` note (`findReviewItems()` / `reviewVerdict()`). |
 | `part_feature` | Yes | Per-part feature check — reads `analysis.partFeatures[partId][featureId]` |
 | `repo_hygiene` | Yes | Score if no excluded folders (e.g. `node_modules`, `dist`) are committed to the repo |
 | `github_repo` | Yes | Score if a GitHub URL was provided and the repo was successfully cloned |
@@ -859,9 +899,12 @@ yet), since these are both best-effort convenience lookups, not critical path.
 | `readRubricRows(path, labelOrLayout?)` | `lab_config.js` | Reads the Grade sheet from a rubric via xlsx, returns structured row objects |
 | `buildConfig(labName, responses)` | `lab_config.js` | Assembles a `{assignmentname}_config.json` object from wizard responses |
 | `getExistingCourses(configsDir?)` | `lab_config.js` | Discovers course directories under `configs/` — has `course_config.json`, or (pre-migration tolerance) at least one assignment with a config |
-| `readCourseConfig(coursePath)` / `writeCourseConfig(coursePath, obj)` | `lab_config.js` | Read/write `course_config.json`, tolerant of a missing file |
+| `readCourseConfig(coursePath)` / `writeCourseConfig(coursePath, obj)` | `lab_config.js` | Read/write `course_config.json`, tolerant of a missing file. `writeCourseConfig` merges `obj` into what's already there, so fields it isn't given (`defaults`, `canvasCourseId`, hand-added keys) are kept |
+| `applyCourseDefaults(labConfig, courseConfig)` | `lab_config.js` | Merges the course's `defaults` block under a lab config (see the `course_config.json` schema below); used by `grade_setup.js`, not the wizard — the wizard always reads and writes the lab's own file |
 | `buildMappingEntry(driver, type, rubricRow)` | `config_prompts.js` | Creates a single mapping entry with type-specific fields |
 | `copyRubric(driver, labName, rubricPrefix?)` | `config_prompts.js` | Prompts for a rubric file path, suggests a `{rubricPrefix}_{labName}_Rubric{ext}` name (prefix defaults to `"CS233JS"` for backward compatibility), returns `{ rubricPath, rubricName, ext }` |
+
+**Type-specific fields:** `MAPPING_TYPE_SCHEMA` (`lab_config.js`) drives the per-type prompts; `promptFields()` supports `int`, `options`, text (optionally `optional: true` — a blank answer omits the key) and `boolean` (`driver.askBoolean`) fields. `manual` asks for an optional `reviewRow`; `developer_comments` asks `requireAiDisclosure` (yes/no, default no). The AI-draft path (`configure-lab.js`) lists boolean fields as `key (true|false)` and coerces a `"true"`/`"false"` string from the model to a boolean.
 
 **Input mechanism:** Uses a `driver` abstraction (`{ ask, askBoolean, askInt, askOptions, print, exit }`) so the wizard logic is testable independently of the TUI. The TUI implementation lives in `configure_lab.js`; tests use a `mockDriver` factory in `test/configure_lab.spec.mjs`.
 
@@ -884,6 +927,7 @@ Tests live in `test/configure_lab.spec.mjs`.
   },
   "toolchains": {
     "python": "py",
+    "uv": "uv",
     "cpp": { "compiler": "C:\\...\\mingw64\\bin\\g++.exe" },
     "csharp": { "dotnet": "dotnet" }
   },
@@ -903,7 +947,7 @@ rather than overwriting the file, so setting one field (e.g. `terms`) never clob
 | Field | Description |
 |---|---|
 | `terms` | Map of term id → `{ label, labRoot, codeRoot }`. A **term** (e.g. id `"2026Spring"`, label `"Spring 2026"`) is what actually determines `labRoot`/`codeRoot` for a run — orthogonal to course, which is still layered underneath a term's roots (`<term.labRoot>/{Course}/{Assignment}/…`, see "Courses" below). `bin/grade.js`'s plain interactive menu always shows a term picker (with "Add new term"), even with one entry; a shortcut invocation (`node bin/grade.js Lab03`) auto-selects a single term silently. With zero terms, one must be created inline — this is where the old unconditional first-run "enter your lab root / code storage root" prompts now live (`createTerm()` in `bin/grade.js`). A pre-terms install is migrated automatically on first run (see `migrateLocalConfigTerms()` below) — its flat `labRoot`/`codeRoot` become a single `"2026Spring"` term, and the flat keys are removed from the file. |
-| `toolchains` | Optional. Compiler/interpreter commands or full paths, for when they're not on the default PATH — e.g. a WinGet-installed MinGW g++ lives under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\...`, not PATH, on this project's own dev machine. `bin/grade.js` merges this into `config.toolchains` for every grading run (a lab config can override individual entries). Only relevant for the `python`/`cpp`/`csharp` language adapters — the JS/TS adapters use Node/npm, always resolvable. |
+| `toolchains` | Optional. Compiler/interpreter commands or full paths, for when they're not on the default PATH — e.g. a WinGet-installed MinGW g++ lives under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\...`, not PATH, on this project's own dev machine. `bin/grade.js` merges this into `config.toolchains` for every grading run (a lab config can override individual entries). Only relevant for the `python`/`cpp`/`csharp` language adapters — the JS/TS adapters use Node/npm, always resolvable. `uv` (command or full path, default `uv` on PATH) is used by the Python adapter for uv projects. |
 | `canvas` | Optional. `{ url, token }` — the Canvas instance URL and API token, resolved after `CANVAS_URL`/`CANVAS_TOKEN` env vars (same env-then-local-config precedence `llm.apiKey` uses). Prompted and saved on first `--canvas` use. The Canvas **course ID** is *not* stored here — it lives on the course itself (`configs/{Course}/course_config.json`'s `canvasCourseId`, see below), since it's shared by every lab in that course. |
 
 **`migrateLocalConfigTerms(localConfig)`** (`bin/grade.js`) — if `terms` is already present and
@@ -920,7 +964,8 @@ term. Idempotent: a second call against an already-migrated file is a no-op.
   "courseName": "CS233JS",
   "courseCode": "CS233JS",
   "rubricPrefix": "CS233JS",
-  "canvasCourseId": 680
+  "canvasCourseId": 680,
+  "defaults": { "language": "python", "execution": { "cwd": "copy" } }
 }
 ```
 
@@ -934,7 +979,17 @@ which case every field below defaults to the directory name.
 | `courseName` | Display name shown in `bin/grade.js`'s course-selection menu and assignment-list header |
 | `courseCode` | Shown in the interactive banner title (`{courseCode} AI Grader v1.0`) |
 | `rubricPrefix` | Used when suggesting or auto-generating a rubric filename (`{rubricPrefix}_{Lab}_Rubric.xlsm`) — `copyRubric()` (`lib/config_prompts.js`) and `bin/configure-lab.js`'s auto-copy path both take it as a parameter now, replacing what used to be a hardcoded `"CS233JS_"` literal |
-| `canvasCourseId` | The course's Canvas course ID, resolved once via `--canvas`'s interactive setup (`getCourse` + name confirmation) and written here by `writeCourseConfig()` so every lab in the course reuses it without re-prompting; an individual lab's config only stores its own `canvas.assignmentId` |
+| `canvasCourseId` | The course's Canvas course ID, resolved once via `--canvas`'s interactive setup (`getCourse` + name confirmation) and written here by `writeCourseConfig()` so every lab in the course reuses it without re-prompting; an individual lab's config only stores its own `canvas.assignmentId`. `writeCourseConfig()` merges into the existing file, so this write keeps `defaults` and any other fields |
+| `defaults` | Course-wide lab-config settings — `applyCourseDefaults(labConfig, courseConfig)` (`lab_config.js`), called by `grade_setup.js` right after reading a lab/step config and before toolchain merging, handler-module loading and validation. Settings the lab config doesn't set come from here; the lab wins where both do; nested plain objects merge recursively (`mergeConfig`), arrays and scalars from the lab replace the course's. In memory only — every write-back to a lab config (`canvas.assignmentId`, `rubricName`) re-reads the file from disk. May not contain `COURSE_DEFAULTS_FORBIDDEN_KEYS` (`mappings`, `rubricName`, `canvas`, `handlerModules`) — `applyCourseDefaults` throws, surfaced as a `SetupError`. CS212 sets `language` and `execution.cwd` here |
+
+A course can also carry a course-wide lint ruleset next to `course_config.json` —
+`configs/{Course}/eslint.config.mjs` (JS/TS) or `configs/{Course}/ruff.toml` (Python). The
+adapters' `lintConfigCandidates(configsDir, labName, parentName, courseName)` list it after the
+step and lab overrides and before the shipped default (only when a course name is given, so a
+course-less call never picks up a stray `configs/eslint.config.mjs`). `configs/CS212/ruff.toml`
+is a standalone copy of the shipped rules plus `N` (pep8-naming) and `I` (isort) — standalone
+rather than `extend`, because `lint_code.js` copies the resolved file next to graded labs where
+a relative `extend` path wouldn't resolve.
 
 ### `configs/{Course}/{AssignmentName}/{assignmentname}_config.json` schema
 
@@ -950,10 +1005,22 @@ which case every field below defaults to the directory name.
   "runCheck": {
     "stdin": "3\n4\n",
     "expectPatterns": ["sum:\\s*7"],
-    "timeoutMs": 10000
+    "timeoutMs": 10000,
+    "entry": "main.py",
+    "supportFiles": ["Data", { "from": "GroupA-Data", "to": "Data" }]
+  },
+  "testCheck": {
+    "mode": "script",
+    "entry": "test_scheduler.py",
+    "passPattern": "^\\s*PASS\\b",
+    "failPattern": "^\\s*FAIL\\b",
+    "timeoutMs": 60000
   },
   "execution": {
-    "mode": "direct"
+    "mode": "direct",
+    "cwd": "copy",
+    "envCacheDir": "/path/to/grader-python-envs",
+    "installTimeoutMs": 600000
   },
   "urlPatterns": {
     "github": "github.com",
@@ -985,7 +1052,8 @@ which case every field below defaults to the directory name.
   "packageCheck": {
     "dependencies": ["vite"],
     "devDependencies": [],
-    "allowedExtras": ["eslint"]
+    "allowedExtras": ["eslint"],
+    "importAliases": { "my-dist": "mymod" }
   },
   "analysis": {
     "features": [
@@ -1047,8 +1115,9 @@ which case every field below defaults to the directory name.
 | `summaryCell` | No | Cell for AI-generated or manual summary comment |
 | `graderCell` | No | Cell written with "Computer"; triggers versioned copy on regrade if changed |
 | `runtimeCheck` | Yes | `"none"`, `"build"`, `"browser"`, `"both"`, `"run_check"`, or any name registered via `registerCheckStrategy` in `runtime_check.js`. `"none"` is a no-op for labs with nothing to run (static markup labs) |
-| `runCheck` | No | Used only when `runtimeCheck: "run_check"`. `stdin` fed to the program; `expectPatterns` (all must match combined stdout); `timeoutMs` (default 10000) is the kill-tree timeout |
-| `execution` | No | Isolation tier for `run_check`'s artifact execution — `mode`: `"direct"` (default, implemented) \| `"restricted-user"` \| `"container"` (both documented, loud-failing stubs) |
+| `runCheck` | No | Used when `runtimeCheck: "run_check"` (`supportFiles` also applies to tests). `stdin` fed to the program; `expectPatterns` (all must match combined stdout); `timeoutMs` (default 10000) is the kill-tree timeout. `entry` — the program to run (Python: bare filename or project-relative path; default `main.py`). `supportFiles` — instructor files/folders (paths relative to the lab's config folder, or `{ from, to }`) added to the run directory where the student has none |
+| `testCheck` | No | How `test_check` runs Python tests: `mode` `"pytest"` (default) \| `"script"` (run `entry`, count lines matching `passPattern`/`failPattern`, default `^\s*PASS\b` / `^\s*FAIL\b`); `timeoutMs` (default `execution.timeoutMs`, else 60000). `script` mode requires `entry` |
+| `execution` | No | `mode` — isolation tier: `"direct"` (default, implemented) \| `"restricted-user"` \| `"container"` (both documented, loud-failing stubs). `cwd` — `"scratch"` (default, empty run directory) \| `"copy"` (copy of the project folder). `envCacheDir` / `installTimeoutMs` — Python uv environment cache (default `<tmp>/grader-python-envs`) and install timeout (default 10 min). `timeoutMs` — fallback run/test timeout |
 | `urlPatterns` | No | Overrides/extends the URL categories `extract_code.js` looks for. Default `{ github: "github.com", citstudent: "citstudent.lanecc.edu" }`. `github` is structurally special (clone vs. zip); other keys are just `url_check`/`deploy_check` `urlType` labels |
 | `canvas` | No | `{ assignmentId }` — when set, `bin/grade.js` acquires this lab's code from Canvas (`extract_code_canvas.js`) instead of scanning a Moodle folder. Set once via `bin/grade.js <Lab> --canvas`'s interactive setup (prompts for the course ID, confirms the course name, lets you pick the assignment) or by hand. The course ID itself lives on the course, not here — see `configs/{Course}/course_config.json`'s `canvasCourseId` above. |
 | `handlerModules` | No | Paths (relative to the lab's config dir) to JS modules that call `registerHandler()` on import, so a lab can add mapping types without editing `generate_grades.js`. Loaded before config validation runs. |
@@ -1059,7 +1128,7 @@ which case every field below defaults to the directory name.
 | `validate.htmlRules` | No | Per-rule overrides for html-validate |
 | `nameCheck.extraAllowed` | No | Extra characters allowed in file/folder names |
 | `repoHygiene.excludedFromRepo` | No | Folder names that should not be committed to the repo |
-| `packageCheck` | No | Expected dependency-manifest sections; `allowedExtras` whitelists student-added packages. Only meaningful for adapters with a `checkManifest` (JS/TS via `package.json`, Python via `requirements.txt` — flat, no dependencies/devDependencies split; `null`/no-op for C++/C#) |
+| `packageCheck` | No | Expected dependency-manifest sections; `allowedExtras` whitelists student-added packages; `importAliases` (Python) maps extra distribution names to import names. Only meaningful for adapters with a `checkManifest` (JS/TS via `package.json`; Python via `pyproject.toml`, else `requirements.txt` — `dependencies` only, dev groups count as declared; `null`/no-op for C++/C#) |
 | `analysis.features` | Yes | Array of features to detect. Each is counted (`regex`) or boolean (`match`: nested `allOf`/`anyOf`/`regex`). File filtering defaults to the resolved adapter's `sourceExtensions`, not hardcoded `.js` |
 | `analysis.customAnalyzer` | No | **DEPRECATED** (use a `match` feature instead). Filename in `src/analyzers/` of a last-resort custom module; none currently exist |
 | `parts` | No | Multi-part lab configuration |
@@ -1166,6 +1235,12 @@ on some OSes in the matrix. This is intentional graceful degradation, not a gap 
 by force-installing a compiler on every runner — see `src/adapters/base.js`'s
 `preflight()` capability, which exists for exactly this "toolchain might not be here"
 scenario.
+
+The same applies to **uv**: CI doesn't install it, so the tests that run a real `uv sync`
+(the uv-environment tests in `test/adapters/python.spec.mjs` and the end-to-end
+`test/python_run_integration.spec.mjs`) skip there and run only on a machine with uv. When
+they do run, they're offline — dependency-free fixture projects with `UV_OFFLINE=1` and
+`UV_PYTHON_DOWNLOADS=never` — so they never download packages or interpreters.
 
 A green merge to `main` therefore means: tests pass (or gracefully skip toolchain-dependent
 cases) on all three OSes **and** `eslint .` is clean.

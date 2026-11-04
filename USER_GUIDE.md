@@ -1,18 +1,16 @@
-# CS233JS AI Grader — User Guide
+<h1>CS233JS AI Grader — User Guide</h1>
 
 
 
 [TOC]
-
-
 
 ## Overview
 
 The AI Grader automates grading of student lab submissions for CS233JS. It was built
 for JavaScript but also grades TypeScript, Python, C++, and C# assignments — pick the
 language per-lab (see [Choosing a language](#choosing-a-language) below); JavaScript is
-the default, so existing labs need no changes. It handles both ZIP uploads and GitHub
-repository submissions, runs analysis/lint/runtime/validation checks, and fills in
+the default, so existing labs need no changes. It handles ZIP uploads, loose uploaded files, and
+GitHub repository submissions, runs analysis/lint/runtime/validation checks, and fills in
 rubric spreadsheets with scores and comments.
 
 The pipeline is designed for a workflow where some items are auto-graded and others require manual instructor review.
@@ -34,7 +32,10 @@ The pipeline is designed for a workflow where some items are auto-graded and oth
 
 **Only if grading Python/C++/C# labs** — these toolchains aren't npm packages and must
 already be installed on the grading machine:
-- **Python** — a Python 3 interpreter, plus `pip install ruff pytest`
+- **Python** — a Python 3 interpreter, plus `pip install ruff pytest`. For labs that run
+  or test students' **uv projects** (a `pyproject.toml` — every CS 212 lab), also install
+  [uv](https://docs.astral.sh/uv/getting-started/installation/); the grader uses it to
+  install each project's dependencies (see [Python labs](#python-labs-uv-projects)).
 - **C++** — a compiler (g++ or clang)
 - **C#** — the .NET SDK
 
@@ -45,6 +46,7 @@ If a toolchain isn't on your PATH (e.g. a manually-installed MinGW g++), point a
   "terms": { "2026Spring": { "label": "Spring 2026", "labRoot": "...", "codeRoot": "..." } },
   "toolchains": {
     "python": "py",
+    "uv": "C:\\Users\\me\\.local\\bin\\uv.exe",
     "cpp": { "compiler": "C:\\path\\to\\mingw64\\bin\\g++.exe" },
     "csharp": { "dotnet": "dotnet" }
   }
@@ -87,7 +89,7 @@ Pick a lab's language in the wizard's assignment-settings step, or by adding
 |---|---|---|
 | JavaScript (default) | `javascript` | ESLint, `npm install`/`npm run build`, headless-Chrome console check |
 | TypeScript | `typescript` | typescript-eslint, `tsc --noEmit` for type errors |
-| Python | `python` | `ruff` for style/correctness, `py_compile` for syntax, `pytest` for tests |
+| Python | `python` | `ruff` for style/correctness, `py_compile` for syntax, uv for dependencies, `pytest` or the student's own PASS/FAIL test script for tests |
 | C++ | `cpp` | Compiler warnings/errors (g++/clang), direct compile-and-run |
 | C# | `csharp` | `dotnet build`/`dotnet test` |
 
@@ -98,8 +100,61 @@ For non-web languages (Python/C++/C#), consider `runtimeCheck: "run_check"` inst
 feeding it `runCheck.stdin` and checking its output against `runCheck.expectPatterns`
 (a list of regexes) — this suits a console-program assignment far better than a
 browser-based check. Score it with the `run_check` mapping type. A `test_check` mapping
-type is also available for labs that grade automated tests (pytest/dotnet test), scoring
-proportionally to how many pass.
+type is also available for labs that grade automated tests (pytest, a student's own
+PASS/FAIL test script, or dotnet test), scoring proportionally to how many pass.
+
+### Python labs (uv projects)
+
+CS 212 students build each lab as a **uv project** (`uv init`, `uv add …`, run with
+`uv run main.py` from the project folder). The grader handles that layout directly:
+
+- **Project folder** — the folder holding `pyproject.toml` (students often zip a parent
+  folder around it; that's fine). Programs run *from* this folder, so relative paths like
+  `Data/instructors.csv` work the way they do for the student.
+- **Dependencies** — installed with `uv sync` into an environment the grader keeps in a
+  cache folder, never inside the student's submission. Students whose `pyproject.toml`,
+  `uv.lock` and `.python-version` are identical share one environment, so a class that kept
+  your starter `pyproject.toml` installs once. The **first** install of a dependency set can
+  take minutes (TensorFlow especially); later runs reuse it.
+- **Which program runs** — `runCheck.entry` (a filename like `"scheduler.py"` or a path like
+  `"src/main.py"`), else `main.py`, else the only `.py` file.
+- **Instructor data** — `runCheck.supportFiles` lists files/folders (relative to the lab's
+  config folder) to put next to the program, for labs where students don't submit the data.
+  Each is added only where the student has no file of their own, so a student who edited
+  the data keeps their version.
+- **Tests** — `testCheck.mode: "script"` runs the student's own test script (`testCheck.entry`)
+  and counts its `PASS:` / `FAIL:` lines — the plain-`assert` driver format CS 212's Lab02
+  teaches. A crash partway through counts as one more failure. The default mode,
+  `"pytest"`, runs pytest (installed into the environment automatically).
+
+Example — a CS 212 Lab02 config (CS 212's course defaults already set `"language": "python"`
+and `"execution": { "cwd": "copy" }`, so the lab doesn't repeat them):
+
+```json
+{
+  "rubricName": "CS212_Lab02_Rubric.xlsm",
+  "runtimeCheck": "run_check",
+  "runCheck": {
+    "entry": "main.py",
+    "supportFiles": ["Data"],
+    "expectPatterns": ["S01", "Conflicting rules"],
+    "timeoutMs": 60000
+  },
+  "testCheck": { "mode": "script", "entry": "test_scheduler.py" },
+  "packageCheck": { "dependencies": ["z3-solver"] },
+  "mappings": [
+    { "type": "run_check",  "cell": "C8",  "commentCell": "E8",  "maxScore": 3 },
+    { "type": "test_check", "cell": "C9",  "commentCell": "E9",  "maxScore": 8 },
+    { "type": "package_check", "cell": "C10", "commentCell": "E10", "maxScore": 1 }
+  ]
+}
+```
+
+Other settings (all optional): `execution.envCacheDir` (where environments are cached;
+default your system temp folder), `execution.installTimeoutMs` (default 10 minutes), and
+`testCheck.passPattern` / `failPattern` for a test script that prints something other than
+`PASS`/`FAIL`. Per-group (A/B/C) data and labs with several programs to run aren't
+supported yet.
 
 ### Available checks (rubric mapping types)
 
@@ -118,7 +173,7 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
 - `browser_check` — app loads in headless Chrome with no console errors (JS/TS web labs only).
 - `build_and_browser_check` — both; half credit if only one passes.
 - `run_check` — (needs `runtimeCheck: "run_check"`) the program runs and its output matches `runCheck.expectPatterns` — the console-program equivalent of `browser_check`, for Python/C++/C# labs.
-- `test_check` — (needs a `test_check`-supporting lab, e.g. Python/C#) proportional credit for how many automated tests (pytest/dotnet test) pass.
+- `test_check` — (needs a `test_check`-supporting lab, e.g. Python/C#) proportional credit for how many automated tests pass: pytest, dotnet test, or — with `testCheck.mode: "script"` — the student's own test script, counted by its `PASS`/`FAIL` lines (see [Python labs](#python-labs-uv-projects)).
 - `scripts_check` — the named npm scripts (e.g. `dev,build,preview`) are defined and run. JS/TS only — other languages have no npm-style named-script concept.
 
 > **Pick the right `runtimeCheck` mode:** `"browser"` serves the submission's *source* and only suits plain static sites. A Vite/bundled project has bare module imports the browser can't resolve unbuilt, so `"browser"` reports false load failures for it — set `runtimeCheck` to `"build"` (or `"both"` to also browser-check the built `dist/`) for any project with a build step.
@@ -131,7 +186,7 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
 - `apps_in_repo` — the app (or all app subfolders) exist in the cloned repo.
 
 **Files & packages:**
-- `package_check` (alias `manifest_check`) — the dependency manifest (`package.json` for JS/TS, `requirements.txt` for Python) has the required (and not the forbidden) dependencies.
+- `package_check` (alias `manifest_check`) — the dependency manifest (`package.json` for JS/TS; `pyproject.toml`, else `requirements.txt`, for Python) has the required packages (`packageCheck.dependencies` / `devDependencies` — JS also checks each is in the right section), and every declared package is actually imported somewhere, unless listed in `packageCheck.allowedExtras`. For Python, the grader knows that `scikit-learn` is imported as `sklearn`, `z3-solver` as `z3`, and so on; add others with `packageCheck.importAliases` (e.g. `{ "my-dist": "mymod" }`). Packages in `pyproject.toml`'s dev groups (pytest, ruff) count as declared but needn't be imported.
 - `npm_package` (alias `package_usage`) — a specific package/module is imported in the code. Use `package_usage` if it reads better for a non-JS lab — same check either way.
 - `env_file_check` — a `.env` file with at least one `KEY=VALUE` was submitted (flags for manual review if absent — normal when gitignored).
 - `path_exists` — any file whose path matches `pathPattern` exists (a "required file was created" check).
@@ -148,9 +203,13 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
 - `url_check` — fetches a submitted URL; full credit on HTTP 200.
 
 **Review & manual:**
-- `code_review` — peer code review submitted and the production column filled.
-- `developer_comments` — code files contain developer name/date/header comments.
-- `manual` — no automation; pulls the score from the student's peer code-review form, otherwise flagged `NEEDS MANUAL CHECK` for you to grade.
+- `code_review` — peer code review submitted and its production column filled in. The production column is whichever is headed "Prod.", "Release" or "Final" (CS 233JS forms say "Prod.", several CS 212 forms say "Release").
+- `developer_comments` — source files have a developer header comment. Only **comments** count (Python docstrings included), so code like `name = input("Name: ")` doesn't. A file "has" a header when its comments contain a name (an `Author:`/`Written by`-style keyword, or the student's own first or last name) or a date (a `Date:` keyword or an actual date like `1/5/2026`, `Jan 5`, `Fall 2025`). Options:
+  - `scope: "each"` — every non-empty source file needs a header (default `"any"`: one file is enough). The comment lists each file that's missing one and what it lacks.
+  - `requireAiDisclosure: true` — also require an AI-use disclosure ("AI used: Copilot for …", "No AI was used", any mention of ChatGPT/Copilot/Claude/Gemini/LLM, …) in the file's first 40 lines. CS 233JS Lab01–Lab04 turn this on, because their review forms ask for "description of any AI used (and how)"; later labs set it to `false`.
+  - `require: ["name", "date", "ai"]` — require specific parts instead of "name or date".
+  - `ignoreCommentsBy: ["Brian Bird"]` — ignore comment lines that mention these names, so your own header on starter files ("By Brian Bird, winter term 2026, using GitHub Copilot") doesn't count as the student's. A line that also names the student still counts ("Andy Still, Jan 2026, based on code by Brian Bird").
+- `manual` — a row for you to grade by hand: it's written with `maxScore` and the `msg` comment (default `NEEDS MANUAL CHECK`) for you to confirm or change. Add `reviewRow` to pre-score it from the student's peer code-review form instead: text from the review question (e.g. `"game work correctly"`), matched case-insensitively. The production answer is used — Yes → full credit, No → 0, a fraction like `4/5` → that score — falling back to a beta-column fraction. For a rubric row that covers two review questions, give a list (`["repository private", "collaborators"]`): every answer must be Yes for full credit. When a form repeats a question (e.g. CS 233JS Lab03 asks "Does the game work correctly?" for Part 1 and Part 2), `reviewRowOccurrence: 2` picks the second one. If the review is missing or the question isn't answered, the row stays a placeholder.
 
 Any mapping may also carry `stockComments: { full, partial, zero }` to write a short canned comment per score tier instead of the verbose auto-generated one. A few checks keep their own diagnostic comment regardless — `lint` (writes the actual findings), and `deploy_check` when it flags a row for manual review — so `stockComments` is ignored on those rows.
 
@@ -162,7 +221,8 @@ AI_Grading/                   ← this tool (git repo)
   └── configs/
       ├── local-config.json   ← machine-specific paths, per term (auto-created, gitignored)
       └── {Course}/            ← e.g. CS233JS — see "Courses & terms" below
-          ├── course_config.json  ← courseName/courseCode/rubricPrefix (optional; defaults to dir name)
+          ├── course_config.json  ← courseName/courseCode/rubricPrefix/defaults (optional; names default to dir name)
+          ├── ruff.toml / eslint.config.mjs  ← optional course-wide lint rules (e.g. configs/CS212/ruff.toml)
           └── {AssignmentName}/
               ├── {assignmentname}_config.json     ← rubric config (flat lab)
               ├── CS233JS_{AssignmentName}_Rubric.xlsx  ← rubric template
@@ -241,7 +301,7 @@ resolved per named **term** (e.g. `"Spring 2026"`) rather than one fixed pair �
 keep grading past semesters' data around without it colliding with the current one, and (down
 the road) grade more than one course.
 
-- **Course** — a subdirectory of `configs/` with its own assignments (`configs/{Course}/{Lab}/…`), optionally described by a `configs/{Course}/course_config.json` (display name, banner code, rubric-filename prefix).
+- **Course** — a subdirectory of `configs/` with its own assignments (`configs/{Course}/{Lab}/…`), optionally described by a `configs/{Course}/course_config.json` (display name, banner code, rubric-filename prefix, Canvas course ID, and shared lab settings — see below).
 - **Term** — a named `{ label, labRoot, codeRoot }` entry, e.g. `"Spring 2026"` / id `2026Spring`, stored in `configs/local-config.json`'s `terms` map. This is what used to be the single flat `labRoot`/`codeRoot` pair.
 
 Running `node bin/grade.js` with **no arguments** always shows a course picker and then a term
@@ -261,6 +321,44 @@ app (see `docs/CIS195_INTEGRATION.md` for what was converted and how). These are
 ```bash
 node bin/grade.js CIS195 Lab02
 ```
+
+**CS 212 (AI Programming 1)** is set up as a third course: `configs/CS212/` has its course
+config (Python by default) and course lint rules, but **no lab configs yet** — add them with
+`node bin/configure-lab.js`. Until then, picking CS212 in the grader's menu stops with a
+message telling you to do that. See [Python labs](#python-labs-uv-projects) for how its uv
+projects are run and tested.
+
+#### Settings shared by every lab in a course
+
+A `defaults` block in `course_config.json` holds settings every lab in the course should
+have, so they aren't repeated in each lab config. CS 212's:
+
+```json
+{
+  "courseName": "CS212",
+  "courseCode": "CS212",
+  "rubricPrefix": "CS212",
+  "defaults": {
+    "language": "python",
+    "execution": { "cwd": "copy" }
+  }
+}
+```
+
+- A lab's own config wins wherever it sets the same thing. Nested settings such as
+  `execution` or `codeReview` merge key by key (a lab can change just `execution.timeoutMs`);
+  lists such as `lint.exclude` replace the course's list rather than adding to it.
+- The merge happens each time you grade; the course settings are never copied into your lab
+  config files.
+- Settings that only make sense per assignment — `mappings`, `rubricName`, `canvas`,
+  `handlerModules` — can't go in `defaults`; the grader stops with an error naming the one
+  that's there.
+
+A course can also have its own lint rules: `configs/{Course}/ruff.toml` for Python or
+`configs/{Course}/eslint.config.mjs` for JavaScript/TypeScript. The grader uses the first it
+finds of: the step's file, the lab's file, the course's file, then the shipped default.
+CS 212's `ruff.toml` adds the naming-convention (`N`) and import-order (`I`) checks its style
+checklist grades.
 
 ### First-time setup
 
@@ -347,9 +445,9 @@ For each student, the grader runs these phases in order. Steps 2, 4, and 5 use w
 language's tooling the lab is configured for (JavaScript by default) — see
 [Choosing a language](#choosing-a-language).
 
-1. **Code Acquisition** — unzips `.zip` files or clones GitHub repos
-2. **Runtime Check** — depending on the lab config: builds (`npm run build` / `tsc` / a Python syntax check / compiling / `dotnet build`), opens the app in headless Chrome, does both, or (`run_check`) builds and then actually runs the program, checking its output. Also verifies that specified npm scripts (dev/build/preview) run without errors when the config includes a `scripts_check` mapping, and runs the language's test suite (pytest/dotnet test) when it includes a `test_check` mapping.
-3. **Code Review Reading** — reads the student's `.docx` peer review form to extract per-item scores and the lab group letter (A/B/C)
+1. **Code Acquisition** — clones the student's GitHub repo if they linked one; otherwise unzips their `.zip`, adding any loose files they uploaded next to it (the zip's copy wins if both have the same file name). A submission of only loose files — e.g. CS 212's bare `.py` and `.csv` uploads — uses those files. Word documents (the review form) and hidden files are never treated as code.
+2. **Runtime Check** — depending on the lab config: builds (`npm run build` / `tsc` / a Python syntax check / compiling / `dotnet build`), opens the app in headless Chrome, does both, or (`run_check`) installs the program's dependencies (for a Python uv project, a cached environment built with `uv sync`), builds it if needed, then actually runs it and checks its output — in an empty temporary folder, or with `execution.cwd: "copy"` in a temporary copy of the student's project folder plus any `runCheck.supportFiles`. Also verifies that specified npm scripts (dev/build/preview) run without errors when the config includes a `scripts_check` mapping, and runs the lab's tests (pytest, dotnet test, or the student's own PASS/FAIL test script) when it includes a `test_check` mapping.
+3. **Code Review Reading** — reads the student's `.docx` peer review form: the beta and production answers for every question in every table headed Beta / Prod. (or Release), and the lab group letter (A/B/C)
 4. **Analysis** — scans the lab's source files for required features using regex patterns
 5. **Linting** — runs the language's linter/analyzer (ESLint for JS/TS, `ruff` for Python, compiler warnings for C++/C#) to flag code quality issues
 6. **HTML Validation** — checks `.html`/`.htm` files for validity using `html-validate` (offline)
@@ -384,6 +482,10 @@ The pipeline leaves some items for you to review manually:
 | `NEEDS MANUAL CHECK` | Score cell was left blank or pre-filled — inspect the student's work and enter the grade |
 | `NEEDS CHECK: <url>` | The student provided a URL — visit it and verify the submission |
 | `NEEDS MANUAL CHECK: … — verify deployment manually` | The deploy check couldn't reach the URL (network error, timeout) — check the site yourself before changing the score |
+| `… [Production: Yes]` / `[Production: No]` / `[Production score: 4]` / `[Beta score: 3]` | A `manual` row pre-scored from the student's review form (its `reviewRow`) — check the work agrees before keeping the score |
+| `… [review row "…" not found on code review form]` | A `manual` row's `reviewRow` text didn't match any question on this student's form (an older form, or edited questions) — grade it yourself |
+| `Missing name/date comments in 2 of 5 files: rules.py (name/date); …` | A `developer_comments` row (with `scope: "each"` or `require`) — the listed files lack the listed parts of the header |
+| `No AI use found in any file's header comments` | A `developer_comments` row with `requireAiDisclosure` — no file's header says whether/how AI was used |
 | `Pending manual checks for full verification.` | The summary cell — replace with your own comment (or use `--ai-comments`) |
 
 Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or LibreOffice, review the flagged items, fill in scores, and the formulas will auto-calculate the total.
@@ -404,7 +506,13 @@ Open each student's `StudentName_Grade.xlsx` (or `.xlsm`) file in Excel or Libre
 
 **Python/C++/C# toolchain not found:** The grader prints a warning with an actionable hint at the start of that lab's run (e.g. "Install a compiler ... and set config.toolchains.cpp.compiler"). See [Prerequisites](#prerequisites) for what to install, and point `configs/local-config.json`'s `toolchains` section at it if it's not on your PATH.
 
-**`run_check` executes student code directly on this machine:** unlike the browser check (sandboxed by Chrome) or `npm run build` (no arbitrary execution), `run_check` compiles/interprets and then *runs* the student's program with your machine's permissions. This is appropriate for grading known students in a classroom setting, not for anonymous or adversarial submissions — see `src/lib/sandbox.js`'s documentation if you need to understand the isolation model in more depth.
+**`uv not found` warning:** a Python lab that runs or tests programs needs [uv](https://docs.astral.sh/uv/) for students' uv projects (anything with a `pyproject.toml`). Install it, or set `toolchains.uv` in `configs/local-config.json` to its full path. Loose `.py` submissions without a `pyproject.toml` still run without it.
+
+**The first Python run is slow:** the first student with a given set of dependencies triggers a full `uv sync` (minutes for TensorFlow or scikit-learn); everyone after them with the same `pyproject.toml` reuses that environment. Environments are cached in your system temp folder by default — set `execution.envCacheDir` (e.g. in the course's `defaults`) to keep them somewhere permanent, and `execution.installTimeoutMs` if a large install needs more than the default 10 minutes. A failed install shows up as `uv sync failed: …` on the `run_check`/`test_check` row.
+
+**A Python program can't find its data files:** CS 212 programs open files like `Data/instructors.csv` relative to their project folder. Make sure the lab runs with `execution.cwd: "copy"` (CS 212's course default), and if students don't submit the data, list it in `runCheck.supportFiles`.
+
+**`run_check` executes student code directly on this machine:** unlike the browser check (sandboxed by Chrome) or `npm run build` (no arbitrary execution), `run_check` (and `test_check`) compiles/interprets and then *runs* the student's program with your machine's permissions. It runs in a temporary folder (a copy of the project with `execution.cwd: "copy"`), so files it writes there never touch the submission, and it can't see the grader's own secrets — environment variables like `CANVAS_TOKEN` or API keys are removed before it starts. That's protection against accidents, not against a deliberately malicious program: this is appropriate for grading known students in a classroom setting, not for anonymous or adversarial submissions — see `src/lib/sandbox.js`'s documentation if you need to understand the isolation model in more depth.
 
 **Rubric not found:** If the rubric spreadsheet isn't in `configs/{Course}/{AssignmentName}/`, the grader will prompt you to provide one or automatically switch to `--text-report` mode (generates `.txt` files instead).
 

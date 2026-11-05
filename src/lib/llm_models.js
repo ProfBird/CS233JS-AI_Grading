@@ -115,6 +115,12 @@ async function askKey(helpers, type) {
     return (await helpers.ask(`API key${hint}`)).trim() || null;
 }
 
+/** Masked form of a stored key for use as a prompt default, e.g. "sk-t…f3a9". */
+function maskKey(key) {
+    if (!key) return '';
+    return key.length <= 10 ? '••••' : `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
 /** Create an endpoint (prompts for name/type/URL/key), save it, return its name. */
 async function addEndpoint(helpers, file) {
     let cfg = readStore(file);
@@ -136,14 +142,15 @@ async function addEndpoint(helpers, file) {
 }
 
 /** "Which API is this model on?" — existing APIs first, then "New API…". Returns an endpoint name. */
-async function pickEndpoint(helpers, file) {
+async function pickEndpoint(helpers, file, current = null) {
     const cfg = readStore(file);
     const eps = Object.values(getEndpoints(cfg));
     const opts = [
         ...eps.map(ep => ({ label: ep.name, value: ep.name, status: keyStatus(cfg, ep), desc: `${ep.type} — ${ep.baseUrl}` })),
         { label: 'Another API (new)…', value: NEW_ENDPOINT, color: 'green', desc: 'Enter a new endpoint URL and API key' },
     ];
-    const choice = await helpers.askOptions('Is this model on an API you already entered?', opts, 0);
+    const defIdx = Math.max(0, eps.findIndex(ep => ep.name === current));
+    const choice = await helpers.askOptions('Is this model on an API you already entered?', opts, defIdx);
     return choice === NEW_ENDPOINT ? addEndpoint(helpers, file) : choice;
 }
 
@@ -171,11 +178,14 @@ async function editModel(helpers, file) {
     if (!m) { console.log('  (Built-in models can be removed but not edited; add a model of your own to customize.)'); return; }
     const model = await askRequired(helpers, 'Model name as the API expects it', m.model);
     const label = (await helpers.ask('Name to show in the list', m.label)).trim() || model;
-    const endpoint = await pickEndpoint(helpers, file);
+    const endpoint = await pickEndpoint(helpers, file, m.endpoint);
     const cfg = readStore(file);
     cfg.llmModels = (cfg.llmModels || []).map(x => (x.model === m.model && x.endpoint === m.endpoint) ? { label, model, endpoint } : x);
     writeLocalConfigFile(file, cfg);
     console.log(`  Updated "${label}".`);
+    if (await helpers.askBoolean(`Also change the API "${endpoint}" (rename it, key or URL)?`, false)) {
+        await editEndpoint(helpers, file, endpoint);
+    }
 }
 
 async function removeModel(helpers, file) {
@@ -187,6 +197,54 @@ async function removeModel(helpers, file) {
     else cfg.llmModels = (cfg.llmModels || []).filter(x => !(x.model === m.model && x.endpoint === m.endpoint));
     writeLocalConfigFile(file, cfg);
     console.log(`  Removed "${m.label}".${m.builtin ? ' (Restore it any time from the manager.)' : ''}`);
+}
+
+/** One round of editing a single API: change key/URL, rename, or remove. */
+async function editEndpoint(helpers, file, name) {
+    const ep = getEndpoints(readStore(file))[name];
+    const action = await helpers.askOptions(`${ep.name}`, [
+        { label: 'Change API key', value: 'key' },
+        { label: 'Change endpoint URL', value: 'url' },
+        ...(ep.builtin ? [] : [{ label: 'Rename this API', value: 'rename' }]),
+        ...(ep.builtin ? [] : [{ label: 'Remove this API', value: 'remove' }]),
+        { label: 'Back', value: null },
+    ], 0);
+    if (!action) return;
+    const fresh = readStore(file);
+    fresh.llmEndpoints = { ...(fresh.llmEndpoints || {}) };
+    const cur = { ...(fresh.llmEndpoints[ep.name] || { type: ep.type, baseUrl: ep.baseUrl }) };
+    if (action === 'key') {
+        const have = resolveApiKey(fresh, { ...ep, ...cur });
+        const k = (await helpers.ask(
+            have ? 'New API key (blank keeps the current one)' : 'API key (blank for none)',
+            have ? maskKey(have) : ''
+        )).trim();
+        if (k && k !== maskKey(have)) cur.apiKey = k;
+        fresh.llmEndpoints[ep.name] = cur;
+    } else if (action === 'url') {
+        cur.baseUrl = (await askRequired(helpers, 'Endpoint URL', ep.baseUrl)).replace(/\/+$/, '');
+        fresh.llmEndpoints[ep.name] = cur;
+    } else if (action === 'rename') {
+        const all = getEndpoints(fresh);
+        let name;
+        while (true) {
+            name = (await askRequired(helpers, 'API name', ep.name));
+            if (name === ep.name) break;
+            if (all[name]) { console.log(`  "${name}" already exists — pick another name.`); return; }
+            break;
+        }
+        if (name === ep.name) return;
+        fresh.llmEndpoints[name] = cur;
+        delete fresh.llmEndpoints[ep.name];
+        fresh.llmModels = (fresh.llmModels || []).map(m => m.endpoint === ep.name ? { ...m, endpoint: name } : m);
+    } else if (action === 'remove') {
+        const users = (fresh.llmModels || []).filter(m => m.endpoint === ep.name);
+        if (users.length) { console.log(`  Can't remove "${ep.name}" — ${users.length} model(s) use it. Remove or edit those first.`); return; }
+        if (!await helpers.askBoolean(`Remove the API "${ep.name}" and its saved key?`, false)) return;
+        delete fresh.llmEndpoints[ep.name];
+    }
+    writeLocalConfigFile(file, fresh);
+    console.log('  Saved.');
 }
 
 async function manageEndpoints(helpers, file) {
@@ -202,32 +260,7 @@ async function manageEndpoints(helpers, file) {
         if (choice === null) return;
         if (choice === NEW_ENDPOINT) { await addEndpoint(helpers, file); continue; }
 
-        const ep = eps.find(e => e.name === choice);
-        const action = await helpers.askOptions(`${ep.name}`, [
-            { label: 'Change API key', value: 'key' },
-            { label: 'Change endpoint URL', value: 'url' },
-            ...(ep.builtin ? [] : [{ label: 'Remove this API', value: 'remove' }]),
-            { label: 'Back', value: null },
-        ], 0);
-        if (!action) continue;
-        const fresh = readStore(file);
-        fresh.llmEndpoints = { ...(fresh.llmEndpoints || {}) };
-        const cur = { ...(fresh.llmEndpoints[ep.name] || { type: ep.type, baseUrl: ep.baseUrl }) };
-        if (action === 'key') {
-            const k = await askKey(helpers, ep.type);
-            if (k) cur.apiKey = k; else delete cur.apiKey;
-            fresh.llmEndpoints[ep.name] = cur;
-        } else if (action === 'url') {
-            cur.baseUrl = (await askRequired(helpers, 'Endpoint URL', ep.baseUrl)).replace(/\/+$/, '');
-            fresh.llmEndpoints[ep.name] = cur;
-        } else if (action === 'remove') {
-            const users = (fresh.llmModels || []).filter(m => m.endpoint === ep.name);
-            if (users.length) { console.log(`  Can't remove "${ep.name}" — ${users.length} model(s) use it. Remove or edit those first.`); continue; }
-            if (!await helpers.askBoolean(`Remove the API "${ep.name}" and its saved key?`, false)) continue;
-            delete fresh.llmEndpoints[ep.name];
-        }
-        writeLocalConfigFile(file, fresh);
-        console.log('  Saved.');
+        await editEndpoint(helpers, file, choice);
     }
 }
 

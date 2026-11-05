@@ -73,6 +73,45 @@ describe('manageModels', () => {
     });
 });
 
+describe('editing shows current values as defaults', () => {
+    const seed = {
+        llmEndpoints: { Groq: { type: 'openai', baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'gsk_secret_abcdef' } },
+        llmModels: [{ label: 'Llama fast', model: 'llama-3.1-8b', endpoint: 'Groq' }],
+    };
+
+    it('edit model: model name, label and API start at the existing values', async () => {
+        fs.writeFileSync(file, JSON.stringify(seed));
+        // model list: 4 built-ins then the custom one = option 5; accept every default
+        const { d, h } = helpersFor(['edit', '5', '', '', '', 'n', 'done']);
+        await manageModels(h, file);
+        const asks = d.calls.filter(c => c.method === 'ask');
+        expect(asks.map(c => c.def)).toEqual(['llama-3.1-8b', 'Llama fast']);
+        const apiPick = d.calls.find(c => c.method === 'askOptions' && /already entered/.test(c.prompt));
+        expect(apiPick.opts[apiPick.defIdx].value).toBe('Groq');
+        expect(read().llmModels).toEqual(seed.llmModels);   // unchanged
+    });
+
+    it('edit model offers a shortcut to rename the API it runs on', async () => {
+        fs.writeFileSync(file, JSON.stringify(seed));
+        const { h } = helpersFor(['edit', '5', '', '', '', 'y', 'rename', 'Groq Cloud', 'done']);
+        await manageModels(h, file);
+        expect(read().llmModels[0].endpoint).toBe('Groq Cloud');
+        expect(read().llmEndpoints['Groq Cloud'].apiKey).toBe('gsk_secret_abcdef');
+    });
+
+    it('renames an API and re-points its models; blank key keeps the current one', async () => {
+        fs.writeFileSync(file, JSON.stringify(seed));
+        const names = Object.keys(getEndpoints(seed));
+        const groq = String(names.indexOf('Groq') + 1);
+        const { h } = helpersFor(['endpoints', groq, 'rename', 'Groq Cloud', '6', 'endpoints', '4', 'key', '', '6', 'done']);
+        await manageModels(h, file);
+        const cfg = read();
+        expect(cfg.llmEndpoints['Groq Cloud']).toEqual(seed.llmEndpoints.Groq);
+        expect(cfg.llmEndpoints.Groq).toBeUndefined();
+        expect(cfg.llmModels[0].endpoint).toBe('Groq Cloud');
+    });
+});
+
 describe('selectModel', () => {
     it('can open the manager from the list, then pick the model it just added', async () => {
         // list -> manage; manager: add model on new API, done; list again -> pick the new model (index 5)

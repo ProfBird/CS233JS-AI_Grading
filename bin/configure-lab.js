@@ -42,7 +42,7 @@ function firstTermRoots() {
 
 function makeHelpers(tui) {
     return {
-        ask:        (prompt)                => tui.ask(prompt),
+        ask:        (prompt, def)           => tui.ask(prompt, def),
         askBoolean: (q, def)               => tui.askBoolean(q, def),
         askOptions: (prompt, opts, defIdx) => tui.askOptions(prompt, opts, defIdx ?? 0),
     };

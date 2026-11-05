@@ -54,3 +54,9 @@ committed and not covered here. Full raw transcript:
 3. `df5a74d` `llm_check`: student names replaced by `[STUDENT]` for cloud models (`redactNames`); answers cached in `<student folder>/.llm_check_cache.json` (unchanged regrade 113 s -> 9 s; delete the file or set `llmCheck.cache:false` to force new AI answers).
 4. Last commit: `bin/sync-drivers.js` (+ `cs233-sync-drivers`) copies/compares the drivers between the course-materials repo and `configs/CS212/Lab01/drivers`; ruff-fallback and sync tests; drivers got a strict mode (`LAB_STRICT=1`: only the function named in the `_draft` instructions is called). Also fixed `check_rooms.py`: "Reservation Denied" is now an acceptable answer for 0 or negative attendees (it was counted as recommending a room); no Fall 2026 grade changed.
 All sheets were regraded after each change (Test Student is skipped now; its old sheet is still on disk).
+
+## Follow-up batch (same night)
+- `testCheck.strict` / `testCheck.env` (strict mode reachable from config; NOT turned on for Fall 2026 — students had no fixed names; turn it on per group entry next term).
+- Redaction also hides e-mail addresses, GitHub/GitLab account names and `llmCheck.redactTerms` (this changed the prompts, so the next regrade re-asks the AI once; the cache then refills).
+- `configure-lab.js` now asks for the AI-check provider/address (when the lab has `llm_check` rows) and for students to skip.
+- USER_GUIDE / DEVELOPER_GUIDE / CLAUDE.md document all of the above. Lint now checked before every commit (the hook only runs tests; one missing import in configure-lab.js was caught by lint and fixed in 5ce02a1).

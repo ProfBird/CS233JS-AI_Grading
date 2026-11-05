@@ -381,7 +381,7 @@ Each rubric row in the config is a *mapping* with a `type` that tells the grader
   - `ignoreCommentsBy: ["Brian Bird"]` — ignore comment lines that mention these names, so your own header on starter files ("By Brian Bird, winter term 2026, using GitHub Copilot") doesn't count as the student's. A line that also names the student still counts ("Andy Still, Jan 2026, based on code by Brian Bird").
 - `manual` — a row for you to grade by hand: it's written with `maxScore` and the `msg` comment (default `NEEDS MANUAL CHECK`) for you to confirm or change. Add `reviewRow` to pre-score it from the student's peer code-review form instead: text from the review question (e.g. `"game work correctly"`), matched case-insensitively. The production answer is used — Yes → full credit, No → 0, a fraction like `4/5` → that score — falling back to a beta-column fraction. For a rubric row that covers two review questions, give a list (`["repository private", "collaborators"]`): every answer must be Yes for full credit. When a form repeats a question (e.g. CS 233JS Lab03 asks "Does the game work correctly?" for Part 1 and Part 2), `reviewRowOccurrence: 2` picks the second one. If the review is missing or the question isn't answered, the row stays a placeholder.
 - `llm_check` *(config-only or wizard)* — for qualitative rows a pattern can't judge ("rule design", "moderately complex", "explanations in comments"): an AI model reads the student's code and **suggests** a score for one `criterion` (the rubric row as a question), optionally guided by `guidance` (what full / partial / no credit look like). The comment always starts `NEEDS REVIEW (AI suggestion, <model>)` with the model's reason — check each one before you rely on it. Example: `{ "type": "llm_check", "criterion": "Is input/output separated from the inference code?", "guidance": "Full: no input()/print() in the inference module", "cell": "C11", "commentCell": "E11", "maxScore": 2 }`. Add `"files": "\\.(py|csv)$"` to let it read files other than the code (e.g. a rule file).
-  - **Where student code goes:** by default a **local Ollama** model on this computer (install Ollama and a model, e.g. `ollama pull qwen3-coder`), so student work never leaves the machine. A lab or course can set `"llmCheck": { "provider": "anthropic" }` (or `"openrouter"`) to use a cloud model — that sends student code, including the names in its header comments, to that company, so only do it where your college's student-privacy rules allow. Other `llmCheck` settings: `model`, `maxChars` (how much code it reads, default 40,000 characters), `timeoutMs`.
+  - **Where student code goes:** by default a **local Ollama** model on this computer (install Ollama and a model, e.g. `ollama pull qwen3-coder`), so student work never leaves the machine. A lab or course can set `"llmCheck"` to use a cloud model instead: `"provider": "anthropic"`, `"openrouter"`, or `"openai"` for any OpenAI-compatible service such as DeepSeek (`{ "provider": "openai", "baseUrl": "https://api.deepseek.com", "model": "…" }`). That sends student code to that company, so only do it where your college's student-privacy rules allow. The student's name (and e-mail addresses, GitHub account names, and any extra words you list in `redactTerms`) is replaced with `[STUDENT]` etc. before sending (`"redactNames": false` turns this off). The API key comes from the `LLM_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` environment variable, or from `configs/local-config.json`. Other settings: `model`, `maxChars` (how much code it reads, default 40,000 characters), `timeoutMs`, `concurrency` (requests at once, default 4 — all students' rows are requested up front, so a regrade takes minutes, not hours), and `cache` (default on: each answer is saved in the student's folder as `.llm_check_cache.json`, so a regrade of unchanged code makes no AI calls and gives the same suggestion; delete that file or set `"cache": false` to ask again). `node bin/configure-lab.js` asks for the provider and address when a lab has `llm_check` rows.
   - Each row is one model request per student, so a local model may take a while for a whole class.
 
 Any mapping may also carry `stockComments: { full, partial, zero }` to write a short canned comment per score tier instead of the verbose auto-generated one. A few checks keep their own diagnostic comment regardless — `lint` (writes the actual findings), and `deploy_check` when it flags a row for manual review — so `stockComments` is ignored on those rows.
@@ -574,6 +574,21 @@ Grading modes:
 1. **Normal** — grade new submissions (skips students who already have a grade spreadsheet)
 2. **Regrade** — re-run all grading phases but keep existing cloned/extracted code; automatically runs `git pull` on each student's repo to pick up any updates
 3. **Reclone** — delete all extracted code, re-clone/unzip from scratch, then re-grade
+
+### Leaving students out
+
+Add `"skipStudents": ["Test Student"]` to a lab's config (the lab wizard asks) to leave placeholder or withdrawn students out of grading entirely.
+
+### Instructor check scripts ("drivers")
+
+When students were not given unit tests, give each lab group a folder of check scripts that print one `PASS`/`FAIL` line per case, and score them with `test_check`. The master copies live in the course-materials repo (students get them too); the grader keeps a copy in the lab's config folder so the config needs no path into another repo. Refresh the copy, or just compare, with:
+
+```bash
+node bin/sync-drivers.js <course-materials lab folder holding Group<X>/drivers> configs/CS212/Lab01
+node bin/sync-drivers.js <same folder> configs/CS212/Lab01 --check
+```
+
+Set `"strict": true` on a `testCheck` entry (or `"env": { "LAB_STRICT": "1" }`) once the lab instructions fix the function names, so the scripts call only those functions and guess nothing.
 
 ### Viewing a rubric as Markdown
 

@@ -304,6 +304,8 @@ describe('redactNames and the answer cache', () => {
     it('replaces the full name and each name part, case-insensitively', () => {
         expect(redactNames('# Josha Chapman-Dodson, Fall\n# by chapman\nx = dodson', 'Josha Chapman-Dodson'))
             .toBe('# [STUDENT], Fall\n# by [STUDENT]\nx = [STUDENT]');
+        expect(redactNames('# me: ana@lanecc.edu see https://github.com/ana-l-99/repo, with Bobby', 'Ana Lopez', ['bobby']))
+            .toBe('# me: [EMAIL] see https://github.com/[USER]/repo, with [STUDENT]');
         expect(redactNames('print("hi")', 'Al Bo')).toBe('print("hi")');   // too-short parts are left alone
     });
 

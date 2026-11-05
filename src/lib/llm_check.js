@@ -19,7 +19,7 @@
  *     guidance  — what full / partial / no credit look like (optional, improves consistency)
  *     files     — regex on the file's project-relative path choosing what the model reads
  *                 (default: the language's source files, notebooks included)
- *   lab: llmCheck: { provider, model, baseUrl, maxChars, timeoutMs, concurrency, redactNames, cache }
+ *   lab: llmCheck: { provider, model, baseUrl, maxChars, timeoutMs, concurrency, redactNames, redactTerms, cache }
  */
 
 import fs from 'fs';
@@ -104,8 +104,8 @@ function parseVerdict(text, maxScore) {
 
 // ---------- privacy and caching ----------
 
-/** The text with the student's full name and each name part (3+ letters) replaced by [STUDENT]. */
-function redactNames(text, name) {
+/** The text with the student's full name and each name part (3+ letters) replaced by [STUDENT]; also e-mail addresses ([EMAIL]), the account in a GitHub/GitLab URL ([USER]) and any extra terms. */
+function redactNames(text, name, extraTerms = []) {
     const escape = v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const parts = String(name || '').split(/[\s,]+/).filter(p => p.replace(/[^A-Za-z]/g, '').length >= 3);
     const patterns = [];
@@ -114,7 +114,12 @@ function redactNames(text, name) {
         patterns.push(escape(p));
         for (const q of p.split(/[-']/)) if (q.length >= 3 && q !== p) patterns.push(escape(q));
     }
-    let out = text;
+    // Anything else that identifies a person: e-mail addresses, the account in a GitHub/GitLab URL,
+    // and any names the instructor lists in llmCheck.redactTerms (a lab partner, a nickname).
+    for (const t of extraTerms) if (String(t).trim()) patterns.push(escape(String(t).trim()));
+    let out = text
+        .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]')
+        .replace(/\b((?:github|gitlab)\.com\/)[A-Za-z0-9-]+/gi, '$1[USER]');
     for (const pat of patterns.sort((x, y) => y.length - x.length)) {
         out = out.replace(new RegExp(`\\b${pat}\\b`, 'gi'), '[STUDENT]');
     }
@@ -222,7 +227,7 @@ async function runLLMCheckNow(map, student, config, opts = {}) {
 
     // Cloud models never see the student's name (header comments often hold it).
     const redact = settings.redactNames !== undefined ? settings.redactNames !== false : (settings.provider || 'ollama') !== 'ollama';
-    if (redact) code.text = redactNames(code.text, student.name);
+    if (redact) code.text = redactNames(code.text, student.name, settings.redactTerms);
 
     const prompt = buildPrompt(map, code);
     const cacheFile = settings.cache === false || !student.gradeDir ? null : path.join(student.gradeDir, CACHE_FILE);

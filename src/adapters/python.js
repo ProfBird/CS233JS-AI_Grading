@@ -592,6 +592,9 @@ async function runTests(project, config = {}, execOptions = {}) {
         ...execOptions,
         cwdSource: project.dir,
         timeoutMs: testCheck.timeoutMs || (config.execution && config.execution.timeoutMs) || 60000,
+        // testCheck.env: extra environment variables for the test run; strict: true is shorthand for
+        // LAB_STRICT=1 (instructor check scripts then call only the function the lab names).
+        env: { ...(execOptions.env || {}), ...(testCheck.env || {}), ...(testCheck.strict ? { LAB_STRICT: '1' } : {}) },
     };
 
     if (testCheck.mode === 'script') {

@@ -36,4 +36,19 @@ describe.skipIf(!hasPython)('python runTests with an instructor-supplied checker
             expect(r.error).toMatch(/NEEDS MANUAL CHECK/);
         } finally { rmSync(root, { recursive: true, force: true }); }
     });
+
+    it('passes testCheck.strict and testCheck.env to the checker as environment variables', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'checker-'));
+        try {
+            const project = join(root, 'project');
+            mkdirSync(join(project, 'grader_checks'), { recursive: true });
+            writeFileSync(join(project, 'grader_checks', 'check.py'),
+                'import os\nprint("PASS strict" if os.environ.get("LAB_STRICT") == "1" else "FAIL strict")\nprint("PASS extra" if os.environ.get("EXTRA") == "x" else "FAIL extra")\n');
+            const base = { mode: 'script', entry: 'grader_checks/check.py' };
+            const run = testCheck => python.runTests({ dir: project, python: 'python3' }, { language: 'python', testCheck },
+                { supportFiles: [{ from: root, to: 'grader_checks' }] });
+            expect((await run({ ...base, strict: true, env: { EXTRA: 'x' } })).passed).toBe(2);
+            expect((await run(base)).passed).toBe(0);
+        } finally { rmSync(root, { recursive: true, force: true }); }
+    });
 });

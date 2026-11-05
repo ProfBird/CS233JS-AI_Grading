@@ -91,6 +91,10 @@ function testEntryErrors(tc, label) {
         if (tc[k] !== undefined && (typeof tc[k] !== 'string' || !isRegex(tc[k]))) errors.push(`${label}.${k}: must be a valid regular expression`);
     }
     if (tc.timeoutMs !== undefined && !isPosInt(tc.timeoutMs)) errors.push(`${label}.timeoutMs: must be a positive whole number of milliseconds`);
+    if (tc.strict !== undefined && typeof tc.strict !== 'boolean') errors.push(`${label}.strict: must be true or false`);
+    if (tc.env !== undefined && !(tc.env && typeof tc.env === 'object' && !Array.isArray(tc.env) && Object.values(tc.env).every(v => typeof v === 'string'))) {
+        errors.push(`${label}.env: must be an object of text values`);
+    }
     if (tc.supportFiles !== undefined) errors.push(...runEntryErrors({ supportFiles: tc.supportFiles }, label));
     return errors;
 }
@@ -292,6 +296,8 @@ function configErrors(config) {
         else {
             if (lc.provider !== undefined && !LLM_PROVIDERS.includes(lc.provider)) errors.push(`llmCheck.provider: "${lc.provider}" must be one of ${LLM_PROVIDERS.join(', ')}`);
             for (const k of ['model', 'baseUrl']) if (lc[k] !== undefined && !isNonEmptyString(lc[k])) errors.push(`llmCheck.${k}: must be text`);
+            if (lc.redactTerms !== undefined && !(Array.isArray(lc.redactTerms) && lc.redactTerms.every(isNonEmptyString))) errors.push('llmCheck.redactTerms: must be an array of text');
+            for (const k of ['redactNames', 'cache']) if (lc[k] !== undefined && typeof lc[k] !== 'boolean') errors.push(`llmCheck.${k}: must be true or false`);
             for (const k of ['maxChars', 'timeoutMs', 'concurrency']) if (lc[k] !== undefined && !isPosInt(lc[k])) errors.push(`llmCheck.${k}: must be a positive whole number`);
         }
     }

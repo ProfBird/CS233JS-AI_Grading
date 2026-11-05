@@ -640,6 +640,11 @@ function assembleConfig(existingConfig, responses) {
     // surviving group's hand-edited `overrides`).
     if (responses.variations === null) delete config.variations;
     else if (responses.variations) config.variations = responses.variations;
+    // llmCheck / skipStudents: same convention (undefined = leave as is, null = remove).
+    for (const key of ['llmCheck', 'skipStudents']) {
+        if (responses[key] === null) delete config[key];
+        else if (responses[key] !== undefined) config[key] = responses[key];
+    }
 
     return config;
 }

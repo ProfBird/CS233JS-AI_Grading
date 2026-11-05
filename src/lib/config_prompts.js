@@ -316,4 +316,41 @@ async function promptVariations(driver, existing) {
     return result;
 }
 
-export { promptVariations, promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry, buildFeatureEntry, extensionsToFileRegex };
+/**
+ * AI-check settings, asked only when the lab has llm_check rows. Returns the new `llmCheck`
+ * object, null to remove it (back to the local-Ollama default), or undefined to leave it alone.
+ * Only the provider-level choices are asked; model, maxChars, concurrency, redactTerms and the
+ * rest stay hand-edited (and are kept when the provider is unchanged).
+ */
+async function promptAiCheckSettings(driver, existing, hasLlmRows) {
+    if (!hasLlmRows) return undefined;
+    const current = (existing && existing.provider) || 'ollama';
+    const options = [
+        { label: 'ollama',     value: 'ollama',     desc: 'A model on this computer — student code never leaves it (default)' },
+        { label: 'openai',     value: 'openai',     desc: 'Any OpenAI-compatible API (e.g. DeepSeek); you give its address. Sends code to that service' },
+        { label: 'openrouter', value: 'openrouter', desc: 'OpenRouter. Sends code to that service' },
+        { label: 'anthropic',  value: 'anthropic',  desc: 'Anthropic API. Sends code to that service' },
+    ];
+    const idx = Math.max(0, options.findIndex(o => o.value === current));
+    const provider = await driver.askOptions('Which AI model scores the llm_check rows?', options, idx);
+    if (provider === 'ollama') return existing && existing.provider ? null : undefined;
+    const result = provider === current ? { ...existing } : { provider };
+    if (provider === 'openai') {
+        result.baseUrl = (await driver.ask('API address (e.g. https://api.deepseek.com)', (existing && existing.baseUrl) || '')).trim();
+        const model = (await driver.ask('Model name (blank = the one saved in local-config.json)', (existing && existing.model) || '')).trim();
+        if (model) result.model = model; else delete result.model;
+    }
+    driver.print('  NOTE: student code is sent to that service; student names are replaced with [STUDENT] first. Add the API key to the environment or local-config.json.');
+    return result;
+}
+
+/** Student names to leave out of grading (a placeholder "Test Student", a withdrawn student). */
+async function promptSkipStudents(driver, existing) {
+    const current = Array.isArray(existing) ? existing.join(', ') : '';
+    const answer = (await driver.ask('Students to skip, separated by commas (blank for none)', current)).trim();
+    const names = answer.split(',').map(n => n.trim()).filter(Boolean);
+    if (names.length === 0) return current ? null : undefined;
+    return names;
+}
+
+export { promptAiCheckSettings, promptSkipStudents, promptVariations, promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry, buildFeatureEntry, extensionsToFileRegex };

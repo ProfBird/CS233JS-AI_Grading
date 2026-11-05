@@ -1342,3 +1342,49 @@ describe('file picker integration', () => {
         });
     });
 });
+
+// ── promptAiCheckSettings / promptSkipStudents / assembleConfig ──────────
+
+import { promptAiCheckSettings, promptSkipStudents } from '../src/lib/config_prompts.js';
+import { assembleConfig as _assemble } from '../src/lib/lab_config.js';
+
+describe('promptAiCheckSettings', () => {
+    it('asks nothing when the lab has no llm_check rows', async () => {
+        const d = _variationDriver([], { strict: true });
+        expect(await promptAiCheckSettings(d, undefined, false)).toBeUndefined();
+        expect(d.calls).toHaveLength(0);
+    });
+
+    it('builds an OpenAI-compatible setting from the address and model', async () => {
+        const d = _variationDriver(['openai', 'https://api.deepseek.com', 'deepseek-flash'], { strict: true });
+        expect(await promptAiCheckSettings(d, undefined, true)).toEqual({
+            provider: 'openai', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash',
+        });
+    });
+
+    it('keeps the hand-edited keys when the provider stays the same, and removes the block for Ollama', async () => {
+        const existing = { provider: 'openai', baseUrl: 'https://x.example', model: 'm', concurrency: 8, redactTerms: ['bob'] };
+        const kept = await promptAiCheckSettings(_variationDriver(['openai', '', ''], { strict: true }), existing, true);
+        expect(kept).toMatchObject({ provider: 'openai', baseUrl: 'https://x.example', model: 'm', concurrency: 8, redactTerms: ['bob'] });
+        expect(await promptAiCheckSettings(_variationDriver(['ollama'], { strict: true }), existing, true)).toBeNull();
+        expect(await promptAiCheckSettings(_variationDriver(['ollama'], { strict: true }), undefined, true)).toBeUndefined();
+    });
+});
+
+describe('promptSkipStudents and assembleConfig', () => {
+    it('splits a comma list, and treats blank as none', async () => {
+        expect(await promptSkipStudents(_variationDriver(['Test Student, Ann Lee'], { strict: true }), undefined)).toEqual(['Test Student', 'Ann Lee']);
+        expect(await promptSkipStudents(_variationDriver([' '], { strict: true }), undefined)).toBeUndefined();
+        expect(await promptSkipStudents(_variationDriver([' '], { strict: true }), ['Old'])).toBeNull();
+    });
+
+    it('assembleConfig sets, removes or leaves llmCheck and skipStudents', () => {
+        const base = { rubricName: 'R', runtimeCheck: 'build', mappings: [] };
+        const existing = { llmCheck: { provider: 'openai' }, skipStudents: ['A'] };
+        expect(_assemble(existing, base)).toMatchObject(existing);
+        const gone = _assemble(existing, { ...base, llmCheck: null, skipStudents: null });
+        expect(gone.llmCheck).toBeUndefined();
+        expect(gone.skipStudents).toBeUndefined();
+        expect(_assemble({}, { ...base, skipStudents: ['B'] }).skipStudents).toEqual(['B']);
+    });
+});

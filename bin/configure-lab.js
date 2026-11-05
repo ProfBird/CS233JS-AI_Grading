@@ -654,6 +654,8 @@ async function main() {
         const graderCell   = await tui.ask('Grader cell (e.g. E1, or blank)',  ex.graderCell  || '');
         const titleCell    = await tui.ask('Title cell (e.g. A1, or blank)',   ex.titleCell   || '');
         const variations   = await promptVariations(tui, ex.variations);
+        const llmCheck     = await promptAiCheckSettings(tui, ex.llmCheck, draft.some(e => !e._skip && e.type === 'llm_check'));
+        const skipStudents = await promptSkipStudents(tui, ex.skipStudents);
 
         // 9. Build and write
         // Feature mappings carry a `_featureDef` (their analysis.features[] definition);
@@ -677,6 +679,8 @@ async function main() {
             mappings,
             optional: { titleCell, summaryCell, graderCell },
             variations,
+            llmCheck,
+            skipStudents,
         });
         // Merge any feature definitions the user built (creates analysis.features if needed,
         // replaces same-id entries, preserves the rest).

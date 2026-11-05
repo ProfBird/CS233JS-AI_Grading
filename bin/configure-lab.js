@@ -16,7 +16,7 @@ import {
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
 } from '../src/lib/lab_config.js';
 
-import { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry, promptVariations }
+import { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry, promptVariations, promptAiCheckSettings, promptSkipStudents }
     from '../src/lib/config_prompts.js';
 
 import { selectModel } from '../src/lib/llm_models.js';

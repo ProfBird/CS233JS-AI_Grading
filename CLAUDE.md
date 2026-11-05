@@ -20,6 +20,7 @@ node bin/grade.js CS233JS Lab03           # explicit course — only needed once
 
 node bin/rubric-to-md.js path/to/Rubric.xlsm [-o out.md]  # dump Grade sheet as Markdown (or: cs233-rubric-to-md); header row found by detectRubricLayout (Possible/Points/Pts/Max)
 node bin/configure-lab.js [AssignmentName]    # lab config wizard + copy rubric; asks about versions (lab groups) and writes `variations` letters/appNames — per-group `overrides` are hand-edited (or: cs233-configure-lab)
+node bin/sync-drivers.js <materials Lab folder with Group<X>/drivers> <lab config folder> [--check]  # copy instructor check scripts into the lab's config folder (cs233-sync-drivers)
 ```
 
 ```bash

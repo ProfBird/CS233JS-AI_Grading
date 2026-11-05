@@ -7,7 +7,8 @@
   "bin": {
     "cs233-grade": "bin/grade.js",
     "cs233-configure-lab": "bin/configure-lab.js",
-    "cs233-rubric-to-md": "bin/rubric-to-md.js"
+    "cs233-rubric-to-md": "bin/rubric-to-md.js",
+    "cs233-sync-drivers": "bin/sync-drivers.js"
   },
   "files": [
     "bin/",

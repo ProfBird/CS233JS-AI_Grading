@@ -4,6 +4,10 @@
 // popup option lists with arrow-key navigation, and a full-screen review table.
 
 import blessed from 'neo-blessed';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 class TUI {
     constructor(title = 'Configure Lab') {
@@ -60,6 +64,40 @@ class TUI {
     }
 
     exit(code = 0) { this.destroy(); process.exit(code); }
+
+    /**
+     * File/folder picker (inquirer-file-selector — arrow keys, → opens a folder, ← goes up,
+     * Esc cancels). It needs the whole terminal, so blessed hands the screen to a child
+     * process (screen.spawn) and takes it back afterwards. Resolves to the chosen absolute
+     * path, or '' when cancelled or the picker could not run.
+     * @param {{ kind?: 'file'|'dir', start?: string, extensions?: string[], message?: string }} opts
+     */
+    pickPath({ kind = 'file', start, extensions, message } = {}) {
+        return new Promise(resolve => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pick-'));
+            const outFile = path.join(dir, 'result.json');
+            const args = [
+                fileURLToPath(new URL('./file_picker_cli.mjs', import.meta.url)),
+                '--out', outFile,
+                '--type', kind === 'dir' ? 'directory' : 'file',
+                '--message', `${message || (kind === 'dir' ? 'Choose a folder' : 'Choose a file')} (Enter: choose, →: open folder, ←: up, Esc: cancel)`,
+            ];
+            if (start) args.push('--start', start);
+            if (extensions?.length) args.push('--ext', extensions.join(','));
+            const done = () => {
+                let result = '';
+                try { result = JSON.parse(fs.readFileSync(outFile, 'utf8')).path || ''; } catch { /* cancelled / failed */ }
+                try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+                this.screen.render();
+                resolve(result);
+            };
+            try {
+                const child = this.screen.spawn(process.execPath, args, { stdio: 'inherit' });
+                child.on('exit', done);
+                child.on('error', done);
+            } catch { done(); }
+        });
+    }
 
     print(line = '') {
         this._log.log(String(line ?? ''));

@@ -214,6 +214,11 @@ function createTuiDriver(title) {
             const t = await ensureTui();
             t.setTitle(text);
         },
+        // Arrow-key file/folder picker (tui.js TUI.pickPath) — only the TUI backend has one.
+        async pickPath(opts) {
+            const t = await ensureTui();
+            return t.pickPath(opts);
+        },
     };
 }
 

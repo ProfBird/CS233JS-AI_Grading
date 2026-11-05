@@ -12,6 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import XLSX from './xlsx.js';
+import { askPath } from './path_browser.js';
 
 import {
     colLetter, colLetterToIndex,
@@ -98,7 +99,10 @@ async function copyRubric(driver, labName, rubricPrefix = 'Rubric') {
 
     let rubricPath;
     for (let attempt = 0; attempt < 3; attempt++) {
-        const raw = await driver.ask('Path to rubric file', '');
+        // With the full-screen TUI, browse for the file; Esc falls back to typing a path.
+        const raw = typeof driver.pickPath === 'function'
+            ? await askPath(driver, { prompt: 'Choose the rubric file', kind: 'file', extensions: ['.xlsx', '.xlsm'] })
+            : await driver.ask('Path to rubric file', '');
         const candidate = raw.replace(/^["']|["']$/g, '').trim();
         if (!candidate) continue;
         if (!fs.existsSync(candidate)) { driver.print(`  File not found: ${candidate}`); continue; }

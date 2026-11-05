@@ -18,8 +18,40 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { writeLocalConfigFile } from './local_config_file.js';
 
 const MAX_ENTRIES = 300; // per folder — beyond this, type the rest of the path
+const MAX_RECENT = 8;    // recently chosen paths remembered per prompt
+
+// Recently chosen paths live in local-config.json's `recentPaths` ({ key: [path, ...] }, most
+// recent first). Off until an entry point calls setRecentPathsFile(), so tests never touch it.
+let recentFile = null;
+function setRecentPathsFile(file) { recentFile = file || null; }
+
+function readConfig() {
+    try { return JSON.parse(fs.readFileSync(recentFile, 'utf8')); } catch (e) { return {}; }
+}
+
+// Remembered paths for `key` that still exist and are the right kind, most recent first.
+function getRecentPaths(key, kind) {
+    if (!recentFile) return [];
+    const list = readConfig().recentPaths?.[key];
+    if (!Array.isArray(list)) return [];
+    return list.filter(p => {
+        if (typeof p !== 'string') return false;
+        try { const st = fs.statSync(p); return kind === 'file' ? st.isFile() : st.isDirectory(); } catch (e) { return false; }
+    });
+}
+
+function addRecentPath(key, chosen) {
+    if (!recentFile || !chosen) return;
+    try {
+        const cfg = readConfig();
+        const old = Array.isArray(cfg.recentPaths?.[key]) ? cfg.recentPaths[key] : [];
+        cfg.recentPaths = { ...cfg.recentPaths, [key]: [chosen, ...old.filter(p => p !== chosen)].slice(0, MAX_RECENT) };
+        writeLocalConfigFile(recentFile, cfg);
+    } catch (e) { /* remembering is best effort */ }
+}
 
 // "~/x" -> home-relative, like a shell would (typed paths only).
 function expandHome(p) {
@@ -88,7 +120,47 @@ function listFolder(dir, { kind, extensions }) {
  * @param {string} [opts.baseDir] - a typed relative path is resolved against this (default: cwd)
  * @returns {Promise<string>} the chosen absolute path, or '' when cancelled / nothing typed
  */
-async function askPath(driver, { prompt, kind = 'dir', start, extensions, baseDir } = {}) {
+async function askPath(driver, opts = {}) {
+    const { prompt, kind = 'dir' } = opts;
+    const key = opts.recentKey || prompt;
+    for (;;) {
+        const recent = getRecentPaths(key, kind);
+        if (recent.length === 0) {
+            const chosen = await browsePath(driver, opts);
+            addRecentPath(key, chosen);
+            return chosen;
+        }
+        const what = kind === 'file' ? 'file' : 'folder';
+        const choice = await driver.askOptions(`${prompt} — recent ${what}s`, [
+            ...recent.map(p => ({ label: p, value: { use: p }, match: [p, path.basename(p)] })),
+            { label: `[Browse for another ${what}...]`, value: { browse: true }, desc: 'Pick one with the file browser' },
+            { label: '[Cancel]', value: { cancel: true }, desc: 'Go back without choosing' },
+        ], 0);
+        if (!choice || choice.cancel) return '';
+        let chosen = choice.use;
+        if (!chosen) {
+            chosen = await browsePath(driver, opts);
+            if (!chosen) continue;   // cancelled in the browser: back to the recent list
+        }
+        addRecentPath(key, chosen);
+        return chosen;
+    }
+}
+
+async function browsePath(driver, { prompt, kind = 'dir', start, extensions, baseDir } = {}) {
+    // The real TUI has the arrow-key file picker (driver.pickPath); Esc there falls back to
+    // typing a path, which also allows a folder that doesn't exist yet. Other drivers (the
+    // readline fallback, tests) use the menu-based browser below.
+    if (typeof driver.pickPath === 'function') {
+        const picked = await driver.pickPath({
+            kind, extensions, message: prompt,
+            start: nearestExistingDir(start ? expandHome(start) : os.homedir()),
+        });
+        if (picked) return picked;
+        const typed = (await driver.ask(`${prompt} (type a full path, or leave blank to cancel)`, '')).trim();
+        if (!typed) return '';
+        return path.resolve(baseDir || process.cwd(), expandHome(typed));
+    }
     let current = nearestExistingDir(start ? expandHome(start) : os.homedir());
     const what = kind === 'file' ? 'file' : 'folder';
     for (;;) {
@@ -143,4 +215,4 @@ async function askPath(driver, { prompt, kind = 'dir', start, extensions, baseDi
     }
 }
 
-export { askPath, listFolder, places, nearestExistingDir, expandHome, MAX_ENTRIES };
+export { askPath, setRecentPathsFile, getRecentPaths, addRecentPath, listFolder, places, nearestExistingDir, expandHome, MAX_ENTRIES };

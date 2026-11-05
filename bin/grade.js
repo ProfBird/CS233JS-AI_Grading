@@ -23,6 +23,7 @@ import importFromCanvas from '../src/pipeline/extract_code_canvas.js';
 import { runPipeline } from '../src/pipeline/run_pipeline.js';
 import { resolveGradeSetup, SetupError } from '../src/lib/grade_setup.js';
 import { createDriver } from '../src/lib/prompt_driver.js';
+import { setRecentPathsFile } from '../src/lib/path_browser.js';
 
 const LOG_FILE = 'grading_log.txt';
 
@@ -99,6 +100,7 @@ EXAMPLES
 // --- Main ---
 
 async function main() {
+    setRecentPathsFile(path.join(import.meta.dirname, '..', 'configs', 'local-config.json'));
     const args = process.argv.slice(2);
 
     if (args.includes('--help') || args.includes('-h')) {

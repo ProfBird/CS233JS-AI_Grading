@@ -21,6 +21,7 @@ import { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry, 
 
 import { selectModel } from '../src/lib/llm_models.js';
 import { TUI } from '../src/lib/tui.js';
+import { setRecentPathsFile } from '../src/lib/path_browser.js';
 
 const CONFIGS_DIR       = path.join(import.meta.dirname, '..', 'configs');
 const LOCAL_CONFIG_PATH = path.join(CONFIGS_DIR, 'local-config.json');
@@ -351,6 +352,7 @@ async function reviewDraft(tui, draft, rubricRows) {
 // ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
+    setRecentPathsFile(LOCAL_CONFIG_PATH);
     if (process.argv.includes('--help') || process.argv.includes('-h')) {
         process.stdout.write('Usage: node bin/configure_lab.js [AssignmentName]\n');
         process.stdout.write('LLM-assisted rubric → config wizard.\n');

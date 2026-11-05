@@ -18,7 +18,14 @@
       "commentCell": "E9",
       "type": "developer_comments",
       "maxScore": 1,
-      "requireAiDisclosure": false
+      "require": [
+        "name",
+        "date"
+      ],
+      "scope": "each",
+      "ignoreCommentsBy": [
+        "Brian Bird"
+      ]
     },
     {
       "cell": "C10",
@@ -33,13 +40,16 @@
       "type": "llm_check",
       "maxScore": 4,
       "criterion": "Comprehensive test program",
-      "guidance": "Review test files for meaningful coverage of main functionality and suggest a score up to 4."
+      "guidance": "A test program may be a separate test file, or code in the program file that calls the functions with chosen inputs and compares or prints the expected and actual results. Full credit: covers every row of the decision table and the boundary values, with expected results stated. Partial credit: some rows or no boundaries. 0: no tests of the student's own. Suggest a score up to 4."
     },
     {
       "cell": "C12",
       "commentCell": "E12",
-      "type": "browser_check",
-      "maxScore": 3
+      "type": "build_check",
+      "maxScore": 3,
+      "stockComments": {
+        "full": "No syntax errors (every file compiles; the functionality checks also run the program)"
+      }
     },
     {
       "cell": "C13",
@@ -61,7 +71,14 @@
       "commentCell": "E17",
       "type": "developer_comments",
       "maxScore": 1,
-      "requireAiDisclosure": false
+      "require": [
+        "name",
+        "date"
+      ],
+      "scope": "each",
+      "ignoreCommentsBy": [
+        "Brian Bird"
+      ]
     },
     {
       "cell": "C18",
@@ -76,13 +93,16 @@
       "type": "llm_check",
       "maxScore": 8,
       "criterion": "Comprehensive test program",
-      "guidance": "Review test files for meaningful coverage of main functionality and suggest a score up to 8."
+      "guidance": "A test program may be a separate test file, or code in the program file that calls the functions with chosen inputs and compares or prints the expected and actual results. Full credit: covers every row of the decision table and the boundary values, with expected results stated. Partial credit: some rows or no boundaries. 0: no tests of the student's own. Suggest a score up to 8."
     },
     {
       "cell": "C20",
       "commentCell": "E20",
-      "type": "browser_check",
-      "maxScore": 3
+      "type": "build_check",
+      "maxScore": 3,
+      "stockComments": {
+        "full": "No syntax errors (every file compiles; the functionality checks also run the program)"
+      }
     },
     {
       "cell": "C21",
@@ -219,9 +239,11 @@
       "entry": "grader_checks/driver_part2.py"
     }
   ],
-  "_note": "The 'Has all functionality' rows (C10, C18) run each group's drivers from the drivers/ folder next to this file (copies of CS212-CourseMaterials' Lab01-Python/Group<X>/drivers, which are the master copies; re-copy them here when they change). The base testCheck entries are placeholders for a group with no drivers (NEEDS MANUAL CHECK). llm_check rows use DeepSeek through the OpenAI-compatible API (llmCheck): the API key and model come from LLM_API_KEY or this machine's configs/local-config.json (llmEndpoints / llm). This sends student code, including names in header comments, to DeepSeek.",
+  "_note": "The 'Has all functionality' rows (C10, C18) run each group's drivers from the drivers/ folder next to this file (copies of CS212-CourseMaterials' Lab01-Python/Group<X>/drivers, which are the master copies; re-copy them here when they change). The base testCheck entries are placeholders for a group with no drivers (NEEDS MANUAL CHECK). llm_check rows use DeepSeek through the OpenAI-compatible API (llmCheck): the API key and model come from LLM_API_KEY or this machine's configs/local-config.json (llmEndpoints / llm). This sends student code, including names in header comments, to DeepSeek. The 'No run-time errors' rows (C12, C20) are build_check: for Python that is a syntax check only; crashes show up as failures in the functionality rows. developer_comments rows require a name and a date in EACH file (scope each); 'Brian Bird' header lines (starter files) are ignored. llmCheck.model is pinned so the config does not depend on a machine's local-config.",
   "llmCheck": {
     "provider": "openai",
-    "baseUrl": "https://api.deepseek.com"
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-flash",
+    "concurrency": 4
   }
 }

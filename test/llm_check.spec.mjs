@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-    runLLMCheck, prefetchLLMChecks, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory, defaultClientFactory, SYSTEM_PROMPT,
+    runLLMCheck, prefetchLLMChecks, redactNames, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory, defaultClientFactory, SYSTEM_PROMPT,
 } from '../src/lib/llm_check.js';
 import { computeResults, getHandler } from '../src/pipeline/generate_grades.js';
 import { validateConfig } from '../src/lib/config_validation.js';
@@ -297,5 +297,32 @@ describe('prefetchLLMChecks', () => {
         const r = await runLLMCheck(config.mappings[0], students[0], config);
         expect(r.score).toBe(1);
         expect(calls).toBe(8);
+    });
+});
+
+describe('redactNames and the answer cache', () => {
+    it('replaces the full name and each name part, case-insensitively', () => {
+        expect(redactNames('# Josha Chapman-Dodson, Fall\n# by chapman\nx = dodson', 'Josha Chapman-Dodson'))
+            .toBe('# [STUDENT], Fall\n# by [STUDENT]\nx = [STUDENT]');
+        expect(redactNames('print("hi")', 'Al Bo')).toBe('print("hi")');   // too-short parts are left alone
+    });
+
+    it('sends no student name to a cloud model, and asks again only when something changed', async () => {
+        const gradeDir = join(dir, 'grade'); mkdirSync(gradeDir, { recursive: true });
+        write(dir, 'code/a.py', '# Ana Lopez\nx = 1\n');
+        const student = { name: 'Ana Lopez', extractedDir: join(dir, 'code'), gradeDir };
+        const prompts = [];
+        setLLMCheckClientFactory(async () => ({ label: 'fake', client: { chat: async (_s, u) => { prompts.push(u); return '{"score": 2, "reason": "fine"}'; } } }));
+        const config = () => ({ language: 'python', llmCheck: { provider: 'openai', baseUrl: 'http://x' } });
+        const first = await runLLMCheck(rulesMap(), student, config());
+        expect(prompts).toHaveLength(1);
+        expect(prompts[0]).not.toMatch(/Ana|Lopez/);
+        expect(prompts[0]).toContain('[STUDENT]');
+        const again = await runLLMCheck(rulesMap(), student, config());
+        expect(prompts).toHaveLength(1);                  // answered from the cache
+        expect(again).toEqual(first);
+        write(dir, 'code/a.py', '# Ana Lopez\nx = 2\n');
+        await runLLMCheck(rulesMap(), student, config());
+        expect(prompts).toHaveLength(2);                  // code changed -> asked again
     });
 });

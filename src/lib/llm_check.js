@@ -19,11 +19,12 @@
  *     guidance  — what full / partial / no credit look like (optional, improves consistency)
  *     files     — regex on the file's project-relative path choosing what the model reads
  *                 (default: the language's source files, notebooks included)
- *   lab: llmCheck: { provider, model, baseUrl, maxChars, timeoutMs, concurrency }
+ *   lab: llmCheck: { provider, model, baseUrl, maxChars, timeoutMs, concurrency, redactNames, cache }
  */
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { LLMClient, detectOllamaModel } from './llm_client.js';
 import { getAllFiles, toPosix } from './file_walker.js';
 import { readSourceFile } from './notebook.js';
@@ -99,6 +100,40 @@ function parseVerdict(text, maxScore) {
     const score = Math.round(Math.min(max, Math.max(0, raw)) * 2) / 2;
     const reason = String(obj.reason || '').replace(/\s+/g, ' ').trim().slice(0, 400);
     return { score, reason };
+}
+
+// ---------- privacy and caching ----------
+
+/** The text with the student's full name and each name part (3+ letters) replaced by [STUDENT]. */
+function redactNames(text, name) {
+    const escape = v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const parts = String(name || '').split(/[\s,]+/).filter(p => p.replace(/[^A-Za-z]/g, '').length >= 3);
+    const patterns = [];
+    if (parts.length > 1) patterns.push(parts.map(escape).join('\\s+'));
+    for (const p of parts) {
+        patterns.push(escape(p));
+        for (const q of p.split(/[-']/)) if (q.length >= 3 && q !== p) patterns.push(escape(q));
+    }
+    let out = text;
+    for (const pat of patterns.sort((x, y) => y.length - x.length)) {
+        out = out.replace(new RegExp(`\\b${pat}\\b`, 'gi'), '[STUDENT]');
+    }
+    return out;
+}
+
+// Answers are kept per student, keyed by a hash of (model, instructions, criterion, code), so a
+// regrade with unchanged code costs nothing and gives the same suggestion; any change re-asks.
+const CACHE_FILE = '.llm_check_cache.json';
+function readCache(file) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch (e) { return {}; }
+}
+function writeCache(file, key, verdict) {
+    try {
+        const cache = readCache(file);
+        cache[key] = verdict;
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(cache, null, 1));
+    } catch (e) { /* a cache that can't be written just means asking again next time */ }
 }
 
 // ---------- the model client ----------
@@ -185,10 +220,21 @@ async function runLLMCheckNow(map, student, config, opts = {}) {
     const { client, label, error } = await clientFor(config, opts);
     if (error) return unavailable(error);
 
-    const reply = await client.chat(SYSTEM_PROMPT, buildPrompt(map, code));
-    if (reply === null) return unavailable(`${label} did not respond`);
-    const verdict = parseVerdict(reply, map.maxScore);
-    if (!verdict) return unavailable(`${label} gave no usable score`);
+    // Cloud models never see the student's name (header comments often hold it).
+    const redact = settings.redactNames !== undefined ? settings.redactNames !== false : (settings.provider || 'ollama') !== 'ollama';
+    if (redact) code.text = redactNames(code.text, student.name);
+
+    const prompt = buildPrompt(map, code);
+    const cacheFile = settings.cache === false || !student.gradeDir ? null : path.join(student.gradeDir, CACHE_FILE);
+    const key = crypto.createHash('sha256').update(`${label}\n${SYSTEM_PROMPT}\n${prompt}`).digest('hex');
+    let verdict = cacheFile ? readCache(cacheFile)[key] : null;
+    if (!verdict) {
+        const reply = await client.chat(SYSTEM_PROMPT, prompt);
+        if (reply === null) return unavailable(`${label} did not respond`);
+        verdict = parseVerdict(reply, map.maxScore);
+        if (!verdict) return unavailable(`${label} gave no usable score`);
+        if (cacheFile) writeCache(cacheFile, key, verdict);
+    }
 
     const partial = code.truncated ? ` [reviewed ${code.fileCount} of ${code.totalFiles} files]` : '';
     return {
@@ -243,7 +289,7 @@ async function prefetchLLMChecks(students, config, opts = {}) {
 }
 
 export {
-    prefetchLLMChecks,
+    redactNames, prefetchLLMChecks,
     runLLMCheck, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory,
     defaultClientFactory, PROVIDERS, SYSTEM_PROMPT, DEFAULT_MAX_CHARS,
 };

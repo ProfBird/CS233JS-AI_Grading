@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-    runLLMCheck, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory, SYSTEM_PROMPT,
+    runLLMCheck, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory, defaultClientFactory, SYSTEM_PROMPT,
 } from '../src/lib/llm_check.js';
 import { computeResults, getHandler } from '../src/pipeline/generate_grades.js';
 import { validateConfig } from '../src/lib/config_validation.js';
@@ -224,7 +224,8 @@ describe('llm_check validation', () => {
     it('checks the llmCheck block', () => {
         const ok = { criterion: 'x' };
         expect(() => validateConfig(cfg(ok, { llmCheck: { provider: 'ollama', model: 'qwen3-coder', maxChars: 30000, timeoutMs: 90000 } }), 'x')).not.toThrow();
-        expect(() => validateConfig(cfg(ok, { llmCheck: { provider: 'openai' } }), 'x')).toThrow(/llmCheck\.provider: "openai" must be one of ollama, openrouter, anthropic/);
+        expect(() => validateConfig(cfg(ok, { llmCheck: { provider: 'gemini' } }), 'x')).toThrow(/llmCheck\.provider: "gemini" must be one of ollama, openrouter, anthropic, openai/);
+        expect(() => validateConfig(cfg(ok, { llmCheck: { provider: 'openai', baseUrl: 'https://api.deepseek.com' } }), 'x')).not.toThrow();
         expect(() => validateConfig(cfg(ok, { llmCheck: { maxChars: 0 } }), 'x')).toThrow(/llmCheck\.maxChars/);
         expect(() => validateConfig(cfg(ok, { llmCheck: 'ollama' }), 'x')).toThrow(/llmCheck: must be an object/);
     });
@@ -246,5 +247,37 @@ describe('llm_check in the lab wizard', () => {
         expect(await buildMappingEntry(mockDriver(['10', 'Is it complex?', ''], { strict: true }), 'llm_check', rubricRow))
             .not.toHaveProperty('guidance');
         expect(await buildMappingEntry(mockDriver(['10', ''], { strict: true }), 'llm_check', rubricRow)).toBeNull();
+    });
+});
+
+describe('openai-compatible provider (e.g. DeepSeek)', () => {
+    const localCfg = () => {
+        const d = mkdtempSync(join(tmpdir(), 'llmcfg-'));
+        const p = join(d, 'local-config.json');
+        writeFileSync(p, JSON.stringify({
+            llm: { provider: 'openai', model: 'ds-model', baseUrl: 'https://api.example.com/', apiKey: 'k-llm' },
+            llmEndpoints: { x: { type: 'openai', baseUrl: 'https://other.example.com', apiKey: 'k-other' } },
+        }));
+        return p;
+    };
+    const saved = process.env.LLM_API_KEY;
+    afterEach(() => { if (saved === undefined) delete process.env.LLM_API_KEY; else process.env.LLM_API_KEY = saved; });
+
+    it('takes the key and model from the machine config entry for the same baseUrl', async () => {
+        delete process.env.LLM_API_KEY;
+        const r = await defaultClientFactory({ llmCheck: { provider: 'openai', baseUrl: 'https://api.example.com' } }, { localConfigPath: localCfg() });
+        expect(r.client.apiKey).toBe('k-llm');
+        expect(r.client.model).toBe('ds-model');
+        expect(r.client.baseUrl).toBe('https://api.example.com');
+    });
+
+    it('prefers the endpoint entry, then reports a missing key, model or baseUrl', async () => {
+        delete process.env.LLM_API_KEY;
+        const p = localCfg();
+        const r = await defaultClientFactory({ llmCheck: { provider: 'openai', baseUrl: 'https://other.example.com', model: 'm' } }, { localConfigPath: p });
+        expect(r.client.apiKey).toBe('k-other');
+        expect((await defaultClientFactory({ llmCheck: { provider: 'openai', baseUrl: 'https://nope.example.com', model: 'm' } }, { localConfigPath: p })).error).toMatch(/no API key/);
+        expect((await defaultClientFactory({ llmCheck: { provider: 'openai', baseUrl: 'https://other.example.com' } }, { localConfigPath: p })).error).toMatch(/no model/);
+        expect((await defaultClientFactory({ llmCheck: { provider: 'openai' } }, { localConfigPath: p })).error).toMatch(/baseUrl is required/);
     });
 });

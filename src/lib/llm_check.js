@@ -19,7 +19,7 @@
  *     guidance  — what full / partial / no credit look like (optional, improves consistency)
  *     files     — regex on the file's project-relative path choosing what the model reads
  *                 (default: the language's source files, notebooks included)
- *   lab: llmCheck: { provider, model, maxChars, timeoutMs }
+ *   lab: llmCheck: { provider, model, baseUrl, maxChars, timeoutMs }
  */
 
 import fs from 'fs';
@@ -32,8 +32,8 @@ import { resolveAdapter } from '../adapters/index.js';
 const DEFAULT_MAX_CHARS = 40000;
 const DEFAULT_TIMEOUT_MS = 120000;
 const SKIP_DIRS = ['node_modules', 'dist', 'build', '.git', '.venv', 'venv', '__pycache__', '.pytest_cache'];
-const PROVIDERS = ['ollama', 'openrouter', 'anthropic'];
-const API_KEY_ENV = { openrouter: 'OPENROUTER_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
+const PROVIDERS = ['ollama', 'openrouter', 'anthropic', 'openai'];
+const API_KEY_ENV = { openrouter: 'OPENROUTER_API_KEY', anthropic: 'ANTHROPIC_API_KEY', openai: 'LLM_API_KEY' };
 
 const SYSTEM_PROMPT = `You are a careful teaching assistant helping an instructor grade a student's programming lab.
 You suggest a score for ONE rubric criterion; the instructor reviews every suggestion and makes the final decision.
@@ -103,9 +103,12 @@ function parseVerdict(text, maxScore) {
 
 // ---------- the model client ----------
 
-function readLocalLlmSettings(localConfigPath) {
-    try { return JSON.parse(fs.readFileSync(localConfigPath, 'utf8')).llm || {}; } catch (e) { return {}; }
+function readLocalConfig(localConfigPath) {
+    try { return JSON.parse(fs.readFileSync(localConfigPath, 'utf8')) || {}; } catch (e) { return {}; }
 }
+function readLocalLlmSettings(localConfigPath) { return readLocalConfig(localConfigPath).llm || {}; }
+
+const sameUrl = (a, b) => !!a && !!b && String(a).replace(/\/+$/, '') === String(b).replace(/\/+$/, '');
 
 /**
  * The client for a lab's llm_check rows, or { error } when no model is available.
@@ -123,6 +126,22 @@ async function defaultClientFactory(config, { localConfigPath = DEFAULT_LOCAL_CO
         const model = settings.model || await detectOllamaModel(settings.baseUrl);
         if (!model) return { error: 'no local Ollama model found (is "ollama serve" running with a model installed?)' };
         return { client: new LLMClient({ provider, model, baseUrl: settings.baseUrl, timeout, quiet: true }), label: `ollama/${model}` };
+    }
+    if (provider === 'openai') {
+        // Any OpenAI-compatible API (DeepSeek, a campus server, …): llmCheck.baseUrl names it.
+        // The key and default model come from the environment (LLM_API_KEY) or from the machine's
+        // local-config.json: the matching `llmEndpoints` entry, else its `llm` block when that
+        // block is for the same baseUrl.
+        if (!settings.baseUrl) return { error: 'llmCheck.baseUrl is required for provider "openai"' };
+        const cfg = localConfigPath ? readLocalConfig(localConfigPath) : {};
+        const llm = cfg.llm || {};
+        const endpoint = Object.values(cfg.llmEndpoints || {}).find(e => sameUrl(e && e.baseUrl, settings.baseUrl));
+        const llmMatches = sameUrl(llm.baseUrl, settings.baseUrl);
+        const apiKey = process.env[API_KEY_ENV.openai] || (endpoint && endpoint.apiKey) || (llmMatches ? llm.apiKey : null);
+        if (!apiKey) return { error: `no API key for ${settings.baseUrl} (set ${API_KEY_ENV.openai}, or add the endpoint in local-config.json)` };
+        const model = settings.model || (llmMatches ? llm.model : undefined);
+        if (!model) return { error: 'no model set (llmCheck.model)' };
+        return { client: new LLMClient({ provider, apiKey, model, baseUrl: settings.baseUrl, timeout, quiet: true }), label: `${model}` };
     }
     const local = localConfigPath ? readLocalLlmSettings(localConfigPath) : {};
     const apiKey = process.env[API_KEY_ENV[provider]] || (local.provider === provider ? local.apiKey : null);
@@ -181,5 +200,5 @@ async function runLLMCheck(map, student, config, opts = {}) {
 
 export {
     runLLMCheck, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory,
-    PROVIDERS, SYSTEM_PROMPT, DEFAULT_MAX_CHARS,
+    defaultClientFactory, PROVIDERS, SYSTEM_PROMPT, DEFAULT_MAX_CHARS,
 };

@@ -16,7 +16,7 @@ import { mergeConfig } from './merge_config.js';
 
 // The providers llm_check rows may use (src/lib/llm_check.js); kept here rather than imported
 // so validation doesn't load the LLM client.
-const LLM_PROVIDERS = ['ollama', 'openrouter', 'anthropic'];
+const LLM_PROVIDERS = ['ollama', 'openrouter', 'anthropic', 'openai'];
 
 // Validate that a cell reference looks like "A1" or "AA23"
 function isValidCellRef(ref) {

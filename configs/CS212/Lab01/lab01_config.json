@@ -1,0 +1,130 @@
+{
+  "rubricName": "CS212_Lab01_Rubric.xlsm",
+  "titleText": "Lab01",
+  "titleCell": "A1",
+  "summaryCell": "A2",
+  "graderCell": "E1",
+  "language": "python",
+  "runtimeCheck": "build",
+  "mappings": [
+    {
+      "cell": "C6",
+      "commentCell": "E6",
+      "type": "code_review",
+      "maxScore": 2
+    },
+    {
+      "cell": "C9",
+      "commentCell": "E9",
+      "type": "developer_comments",
+      "maxScore": 1,
+      "requireAiDisclosure": false
+    },
+    {
+      "cell": "C10",
+      "commentCell": "E10",
+      "type": "test_check",
+      "maxScore": 5,
+      "testId": "part1"
+    },
+    {
+      "cell": "C11",
+      "commentCell": "E11",
+      "type": "llm_check",
+      "maxScore": 4,
+      "criterion": "Comprehensive test program",
+      "guidance": "Review test files for meaningful coverage of main functionality and suggest a score up to 4."
+    },
+    {
+      "cell": "C12",
+      "commentCell": "E12",
+      "type": "browser_check",
+      "maxScore": 3
+    },
+    {
+      "cell": "C13",
+      "commentCell": "E13",
+      "type": "llm_check",
+      "maxScore": 3,
+      "criterion": "Correct code syntax and logic",
+      "guidance": "Check for syntax errors, logic bugs, and incorrect control flow; suggest a score up to 3."
+    },
+    {
+      "cell": "C14",
+      "commentCell": "E14",
+      "type": "lint",
+      "maxScore": 2,
+      "severity": "warnings"
+    },
+    {
+      "cell": "C17",
+      "commentCell": "E17",
+      "type": "developer_comments",
+      "maxScore": 1,
+      "requireAiDisclosure": false
+    },
+    {
+      "cell": "C18",
+      "commentCell": "E18",
+      "type": "test_check",
+      "maxScore": 12,
+      "testId": "part2"
+    },
+    {
+      "cell": "C19",
+      "commentCell": "E19",
+      "type": "llm_check",
+      "maxScore": 8,
+      "criterion": "Comprehensive test program",
+      "guidance": "Review test files for meaningful coverage of main functionality and suggest a score up to 8."
+    },
+    {
+      "cell": "C20",
+      "commentCell": "E20",
+      "type": "browser_check",
+      "maxScore": 3
+    },
+    {
+      "cell": "C21",
+      "commentCell": "E21",
+      "type": "llm_check",
+      "maxScore": 4,
+      "criterion": "Correct code syntax and logic",
+      "guidance": "Check for syntax errors, logic bugs, and incorrect control flow; suggest a score up to 4."
+    },
+    {
+      "cell": "C22",
+      "commentCell": "E22",
+      "type": "lint",
+      "maxScore": 2,
+      "severity": "warnings"
+    }
+  ],
+  "variations": {
+    "A": {
+      "appName": "Shipping Cost"
+    },
+    "B": {
+      "appName": "RoomReservations"
+    },
+    "C": {
+      "appName": "CompatibilityChecker"
+    }
+  },
+  "canvas": {
+    "assignmentId": 154461
+  },
+  "testCheck": [
+    {
+      "id": "part1",
+      "mode": "script",
+      "entry": "grader_checks/driver_part1.py"
+    },
+    {
+      "id": "part2",
+      "mode": "script",
+      "entry": "grader_checks/driver_part2.py"
+    }
+  ],
+  "_nextTerm": "Placeholders: testCheck part1/part2 are the 'Has all functionality' rows (C10, C18) and report NEEDS MANUAL CHECK until drivers are wired in. Group A's drivers are in CS212-CourseMaterials/docs/Labs/Lab01-Python/GroupA/drivers (see its README); add per-group variations.<X>.overrides.testCheck entries with supportFiles {from: <that folder>, to: 'grader_checks'} and entries grader_checks/check_shipping.py and check_recommend.py. Fall 2026 ran Group A with these before they were unwired."
+}

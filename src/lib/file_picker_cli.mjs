@@ -15,6 +15,10 @@ import os from 'os';
 import path from 'path';
 import { fileSelector } from 'inquirer-file-selector';
 
+// The parent TUI's screen is still on the terminal when we start; clear it (and the cursor
+// position) so the picker isn't drawn over the previous prompt.
+if (process.stdout.isTTY) process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+
 function arg(name) {
     const i = process.argv.indexOf(`--${name}`);
     return i >= 0 ? process.argv[i + 1] : undefined;

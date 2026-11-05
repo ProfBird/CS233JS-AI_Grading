@@ -574,7 +574,9 @@ async function ensurePytest(project, config) {
  * need their own files around them). config.testCheck:
  *   mode:        "pytest" (default) or "script" — run a student's own test script (entry)
  *                and count its PASS/FAIL lines (see parseScriptTestOutput)
- *   entry:       the test script for "script" mode (path or bare filename, like runCheck.entry)
+ *   entry:       the test script for "script" mode (path or bare filename, like runCheck.entry);
+ *                a path inside one of testCheck.supportFiles' `to` folders is an instructor-written
+ *                checker, run as supplied (it can then test whatever the student built)
  *   passPattern / failPattern: regex sources for "script" mode's line counting
  *   timeoutMs:   default execution.timeoutMs, else 60 s
  * @param {object} execOptions - sandbox options from runtime_check.js (mode, support files, env)
@@ -589,6 +591,18 @@ async function runTests(project, config = {}, execOptions = {}) {
     };
 
     if (testCheck.mode === 'script') {
+        // An instructor-written checker (a testCheck.supportFiles script, e.g. "grader_checks/check.py")
+        // is added to the run copy by the sandbox, so it isn't in the student's project yet: run it
+        // by that path instead of looking for it among the student's files.
+        const entryPath = typeof testCheck.entry === 'string' ? testCheck.entry.replace(/\\/g, '/') : null;
+        const isSupplied = entryPath && (execOptions.supportFiles || []).some(({ to }) => {
+            const t = String(to).replace(/\\/g, '/').replace(/\/+$/, '');
+            return entryPath === t || entryPath.startsWith(t + '/');
+        });
+        if (isSupplied) {
+            const result = await runStudentArtifact([python, entryPath], sandboxOptions);
+            return parseScriptTestOutput(result, testCheck);
+        }
         const pyFiles = getAllFiles(project.dir).filter(f => f.toLowerCase().endsWith('.py'));
         const entry = resolveEntry(project.dir, pyFiles, testCheck.entry);
         // A missing test script may just be named differently — the grader should look.

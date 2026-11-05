@@ -10,5 +10,6 @@
     "urlPatterns": {
       "colab": "colab.research.google.com"
     }
-  }
+  },
+  "canvasCourseId": 3948
 }

@@ -88,6 +88,7 @@ class TUI {
                 let result = '';
                 try { result = JSON.parse(fs.readFileSync(outFile, 'utf8')).path || ''; } catch { /* cancelled / failed */ }
                 try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+                try { this.screen.realloc(); } catch { /* older blessed */ }   // full repaint over the picker's output
                 this.screen.render();
                 resolve(result);
             };

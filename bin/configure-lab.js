@@ -573,7 +573,7 @@ async function main() {
 
                 if (noRubricChoice === 'extract') {
                     const cfg = assembleConfig(null, { extractOnly: true });
-                    writeLab(labDir, cfg, null, null);
+                    writeLab(labDir, cfg);
                     summary = [
                         `\n=== Done! ===`,
                         `  Extract-only config written — repos will be cloned, no grading.`,
@@ -687,7 +687,7 @@ async function main() {
         mergeFeatureDefs(config, featureDefs);
 
         tui.print('\n--- Writing Config ---');
-        writeLab(labDir, config, null, null);
+        writeLab(labDir, config);
 
         const featureNote = featureDefs.length ? `, ${featureDefs.length} feature definition(s)` : '';
         summary = [

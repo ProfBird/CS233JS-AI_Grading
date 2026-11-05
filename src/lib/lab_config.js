@@ -662,16 +662,10 @@ function mergeFeatureDefs(config, featureDefs) {
     return config;
 }
 
-function writeLab(labDir, config, analyzerContent, analyzerName) {
+function writeLab(labDir, config) {
     const configPath = path.join(labDir, `${path.basename(labDir).toLowerCase()}_config.json`);
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
     console.log(`  Written: ${configPath}`);
-
-    if (analyzerContent && analyzerName) {
-        const analyzerPath = path.join(labDir, analyzerName);
-        fs.writeFileSync(analyzerPath, analyzerContent, 'utf8');
-        console.log(`  Written: ${analyzerPath}`);
-    }
 }
 
 export {

@@ -902,10 +902,8 @@ The default factory uses a local Ollama model (`llmCheck.model`, else the first 
 Wraps Ollama, OpenRouter, and Anthropic behind a single `chat(systemPrompt, userPrompt)` interface.
 
 - `LLMClient` — class with `chat()`, `_chatOpenAI()`, `_chatAnthropic()`, `_request()`
-- `loadLLMClient(localConfigPath)` — reads `llm` block from `local-config.json`; resolves API key from environment first, then stored value
-- `setupLLMInteractive(localConfigPath, driver)` — full guided provider/model/key setup; saves to `local-config.json`
-- `selectModel(localConfigPath, driver)` — simplified 4-option picker used by `configure_lab.js`; shows current selection as default
-- `detectOllamaModel(baseUrl = DEFAULTS.ollama.baseUrl)` — probes `{host}/api/tags` for a running model name (2s timeout); strips a trailing `/v1` off the given chat `baseUrl` first, since Ollama's tag-listing endpoint lives at the host root, not under `/v1`. Used by both `setupLLMInteractive`/`selectModel` and by `ollama_comments.js`'s `getAvailableModel` (a thin re-export).
+- (The model picker, `selectModel`, lives in `lib/llm_models.js`.)
+- `detectOllamaModel(baseUrl = DEFAULTS.ollama.baseUrl)` — probes `{host}/api/tags` for a running model name (2s timeout); strips a trailing `/v1` off the given chat `baseUrl` first, since Ollama's tag-listing endpoint lives at the host root, not under `/v1`. Used by `llm_models.js`'s `selectModel`, `llm_check.js`, and `ollama_comments.js`'s `getAvailableModel` (a thin re-export).
 - On HTTP 429, automatically retries with `fallbackModel` if configured; otherwise retries up to 3 times with exponential backoff
 - `DEFAULTS.ollama.baseUrl` is `http://localhost:11434/v1` — Ollama's OpenAI-compatible chat endpoint (`chat()` POSTs to `${baseUrl}/chat/completions`) lives under `/v1`, unlike its native `/api/*` endpoints
 - `new LLMClient({ ..., quiet: true })` suppresses this client's own `console.error` calls on failure/retry — for callers that already report failure themselves and don't want a duplicate line (e.g. `ollama_comments.js`, called once per student)

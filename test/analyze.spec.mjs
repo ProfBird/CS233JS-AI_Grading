@@ -77,28 +77,15 @@ describe('stripComments', () => {
 // ── normalizeDirName ─────────────────────────────────────────────────────
 
 describe('normalizeDirName', () => {
-    it('splits camelCase into words', () => {
-        expect(normalizeDirName('boneyardBluff')).toBe('boneyard bluff');
-    });
-
-    it('lowercases everything', () => {
-        expect(normalizeDirName('BoneYard')).toBe('bone yard');
-    });
-
-    it('replaces hyphens with spaces', () => {
-        expect(normalizeDirName('boneyard-bluff')).toBe('boneyard bluff');
-    });
-
-    it('replaces underscores with spaces', () => {
-        expect(normalizeDirName('boneyard_bluff')).toBe('boneyard bluff');
-    });
-
-    it('handles mixed separators', () => {
-        expect(normalizeDirName('BoneYard-Bluff_game')).toBe('bone yard bluff game');
-    });
-
-    it('handles dir names that are just a word', () => {
-        expect(normalizeDirName('game')).toBe('game');
+    it('splits camelCase, hyphens and underscores into lowercase words', () => {
+        for (const [name, words] of [
+            ['boneyardBluff', 'boneyard bluff'],
+            ['BoneYard', 'bone yard'],
+            ['boneyard-bluff', 'boneyard bluff'],
+            ['boneyard_bluff', 'boneyard bluff'],
+            ['BoneYard-Bluff_game', 'bone yard bluff game'],
+            ['game', 'game'],
+        ]) expect(normalizeDirName(name), name).toBe(words);
     });
 });
 
@@ -176,50 +163,31 @@ describe('applyCustomAnalyzer', () => {
     beforeEach(() => { warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {}); });
     afterEach(() => { warnSpy.mockRestore(); });
 
-    it('merges the analyzer return value into analysis', async () => {
-        const analysis = { features: { a: 1 } };
-        const analyzer = () => ({ features: { a: 1, b: 2 }, custom: 'x' });
-        await applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' });
-        expect(analysis.custom).toBe('x');
-        expect(analysis.features).toEqual({ a: 1, b: 2 });
-    });
-
-    it('awaits an async analyzer before merging its result', async () => {
-        const analysis = { features: {} };
-        const analyzer = async () => {
-            await new Promise(r => setTimeout(r, 5));
-            return { custom: 'async-x' };
-        };
-        await applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' });
-        expect(analysis.custom).toBe('async-x');
-    });
-
-    it('swallows a throwing analyzer and leaves analysis intact', async () => {
-        const analysis = { features: { a: 1 } };
-        const analyzer = () => { throw new Error('boom'); };
-        await expect(applyCustomAnalyzer(analyzer, [], analysis, {}, { name: 'S' })).resolves.not.toThrow();
-        expect(analysis).toEqual({ features: { a: 1 } });
-        expect(warnSpy).toHaveBeenCalled();
-    });
-
-    it('ignores a non-object return value', async () => {
-        const analysis = { features: {} };
-        await applyCustomAnalyzer(() => 42, [], analysis, {}, { name: 'S' });
-        expect(analysis).toEqual({ features: {} });
-    });
-
-    it('passes jsFiles, analysis, config, and student through to the analyzer', async () => {
+    it('awaits the analyzer, passes it the phase data, and merges its object result', async () => {
         const seen = {};
-        const analyzer = (jsFiles, _analysis, config, student) => { Object.assign(seen, { jsFiles, config, student }); };
-        await applyCustomAnalyzer(analyzer, ['a.js'], { features: {} }, { x: 1 }, { name: 'S' });
-        expect(seen.jsFiles).toEqual(['a.js']);
-        expect(seen.config).toEqual({ x: 1 });
-        expect(seen.student).toEqual({ name: 'S' });
+        const analysis = { features: { a: 1 } };
+        const analyzer = async (jsFiles, _analysis, config, student) => {
+            Object.assign(seen, { jsFiles, config, student });
+            await new Promise(r => setTimeout(r, 5));
+            return { features: { a: 1, b: 2 }, custom: 'x' };
+        };
+        await applyCustomAnalyzer(analyzer, ['a.js'], analysis, { x: 1 }, { name: 'S' });
+        expect(seen).toEqual({ jsFiles: ['a.js'], config: { x: 1 }, student: { name: 'S' } });
+        expect(analysis).toEqual({ features: { a: 1, b: 2 }, custom: 'x' });
+    });
+
+    it('leaves analysis intact when the analyzer throws (logged) or returns a non-object', async () => {
+        const analysis = { features: { a: 1 } };
+        await expect(applyCustomAnalyzer(() => { throw new Error('boom'); }, [], analysis, {}, { name: 'S' })).resolves.not.toThrow();
+        expect(warnSpy).toHaveBeenCalled();
+        await applyCustomAnalyzer(() => 42, [], analysis, {}, { name: 'S' });
+        expect(analysis).toEqual({ features: { a: 1 } });
     });
 });
 
 // ── hasDeveloperComments ─────────────────────────────────────────────────────
 
+// The phase-level flag; detection rules themselves are tested under checkDeveloperComments.
 describe('hasDeveloperComments', () => {
     let tmpDir;
 
@@ -238,20 +206,12 @@ describe('hasDeveloperComments', () => {
         return students[0].analysis.hasDeveloperComments;
     };
 
-    it('detects last name in a .js file', async () => {
-        expect(await runAnalysis(tmpDir, 'app.js', '/* Written by Zoey McKee */')).toBe(true);
-    });
-
     it('detects last name in a .mjs file', async () => {
         expect(await runAnalysis(tmpDir, 'app.mjs', '/* Code Written by Brian Bird, Modified by Zoey McKee */')).toBe(true);
     });
 
     it('returns false when no name is present in .mjs file', async () => {
         expect(await runAnalysis(tmpDir, 'app.mjs', 'export function foo() {}')).toBe(false);
-    });
-
-    it('is not fooled by name/date assignments in code (only comments count)', async () => {
-        expect(await runAnalysis(tmpDir, 'app.js', 'const name = prompt("Name?");\nconst obj = { date: new Date() };')).toBe(false);
     });
 
     it('scans a source file under a path containing "dist" as a substring (distance.js)', async () => {
@@ -540,5 +500,102 @@ describe('readGameNamesFromRubric', () => {
     it('returns [] silently when the rubric path does not exist (expected absence)', () => {
         expect(readGameNamesFromRubric(join(tmpDir, 'nope.xlsx'), 1)).toEqual([]);
         expect(warnSpy).not.toHaveBeenCalled();
+    });
+});
+
+// ── the whole analysis phase ─────────────────────────────────────────────────
+
+describe('analysis phase — one run over several students', () => {
+    let root;
+    beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'analyze-phase-')); vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+    afterEach(() => { rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks(); });
+
+    const project = (name, files) => {
+        const dir = join(root, name);
+        for (const [rel, content] of Object.entries(files)) {
+            mkdirSync(join(dir, rel, '..'), { recursive: true });
+            writeFileSync(join(dir, rel), content);
+        }
+        return dir;
+    };
+
+    const config = {
+        analysis: { features: [
+            { id: 'classes', fileRegex: '\\.js$', regex: '\\bclass\\s+\\w+' },
+            { id: 'fetches', fileRegex: '\\.js$', regex: '\\bfetch\\(' },
+        ] },
+        parts: [{ id: 'part1', folderPattern: '^part ?1$' }, { id: 'part2', folderPattern: '^part ?2$' }],
+        packageCheck: { dependencies: ['lodash'] },
+        repoHygiene: { excludedFromRepo: ['node_modules'] },
+        variations: {
+            // A group's features list replaces the lab's whole list (arrays replace), so it repeats every id.
+            A: { appName: 'Domino Duel', overrides: { analysis: { features: [
+                { id: 'classes', fileRegex: '\\.js$', regex: '\\bclass\\s+Domino\\b' },
+                { id: 'fetches', fileRegex: '\\.js$', regex: '\\bfetch\\(' },
+            ] } } },
+            B: { appName: 'Bingo Blitz' },
+        },
+    };
+
+    it('counts features whole-repo and per part, checks packages/hygiene/version, and writes the report', async () => {
+        const ana = project('ana', {
+            'README.md': '# Domino Duel',
+            'package.json': JSON.stringify({ name: 'domino-duel', dependencies: { lodash: '1' } }),
+            'Part1/game.js': "// Ana Lopez, Jan 2026\nimport _ from 'lodash';\nclass Domino {}\nclass Tile {}\n",
+            'Part2/api.js': 'fetch("/x"); fetch("/y");\n',
+            'node_modules/junk/index.js': 'class Junk {}',          // excluded from counts, flagged by hygiene
+            'review.txt': 'code review',
+        });
+        const students = [
+            { name: 'Ana Lopez', extractedDir: ana, urls: {}, group: { letter: 'A' } },
+            { name: 'Bo Wu', extractedDir: null, urls: {}, error: 'Failed to unzip ZIP file' },
+        ];
+        await analyzeCode(students, config, root);
+        const a = students[0].analysis;
+
+        // group A's override counts only the Domino class
+        expect(a.features).toEqual({ classes: 1, fetches: 2 });
+        expect(a.partFeatures.part1).toEqual({ classes: 1, fetches: 0 });
+        expect(a.partFeatures.part2).toEqual({ classes: 0, fetches: 2 });
+        expect(a.partPresence).toMatchObject({ part1: true, part2: true, allPresent: true });
+        expect(a.hasDeveloperComments).toBe(true);
+        expect(a.hasCodeReview).toBe(true);
+        expect(a.packageCheck.passed).toBe(true);
+        expect(a.npmPackages).toContain('lodash');
+        expect(a.repoHygiene).toEqual({ passed: false, foundDirs: ['node_modules'] });
+        expect(a.versionVariation.detected).toBe('A');
+
+        // a student with no code gets the zeroed shape plus the extraction error
+        const b = students[1].analysis;
+        expect(b.features).toEqual({ classes: 0, fetches: 0 });
+        expect(b.extractionError).toBe('Failed to unzip ZIP file');
+
+        const report = JSON.parse(readFileSync(join(root, 'analysis_report.json'), 'utf8'));
+        expect(report.map(r => r.student)).toEqual(['Ana Lopez', 'Bo Wu']);
+    });
+
+    it('marks a missing part folder as not found, and flags an undeclared/unused package', async () => {
+        const bo = project('bo', {
+            'part1/main.js': 'class A {}',
+            'package.json': JSON.stringify({ dependencies: { axios: '1' } }),
+        });
+        const students = [{ name: 'Bo Wu', extractedDir: bo, urls: {}, group: { letter: 'B' } }];
+        await analyzeCode(students, config, root);
+        const a = students[0].analysis;
+        expect(a.partFeatures.part2).toBeNull();
+        expect(a.partPresence.allPresent).toBe(false);
+        expect(a.packageCheck.passed).toBe(false);
+        expect(a.packageCheck.issues.join(' ')).toMatch(/lodash/);
+    });
+
+    it('loads a custom analyzer from the lab config folder and merges its result; warns when it is missing', async () => {
+        const dir = project('cfg', { 'my_analyzer.mjs': 'export default () => ({ customScore: 7 });' });
+        const code = project('s', { 'a.js': 'x' });
+        const students = [{ name: 'S', extractedDir: code, urls: {} }];
+        await analyzeCode(students, { analysis: { features: [], customAnalyzer: 'my_analyzer.mjs' } }, root, dir);
+        expect(students[0].analysis.customScore).toBe(7);
+
+        await analyzeCode(students, { analysis: { features: [], customAnalyzer: 'missing.mjs' } }, root, dir);
+        expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/Custom analyzer not found/));
     });
 });

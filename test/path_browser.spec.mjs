@@ -9,7 +9,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'fs'
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 import { mockDriver } from './helpers/mock_driver.mjs';
-import { askPath, listFolder, nearestExistingDir, expandHome } from '../src/lib/path_browser.js';
+import { askPath, listFolder, nearestExistingDir, expandHome, setRecentPathsFile, getRecentPaths } from '../src/lib/path_browser.js';
+import os from 'os';
+import fs from 'fs';
+import path from 'path';
 
 let root;
 beforeEach(() => {
@@ -83,5 +86,63 @@ describe('askPath — files', () => {
 
     it('listFolder reports an unreadable folder instead of throwing', () => {
         expect(listFolder(join(root, 'nope'), { kind: 'dir' }).error).toBeTruthy();
+    });
+});
+
+// ── the TUI's arrow-key picker (driver.pickPath) and recent paths ─────────────
+
+describe('askPath with the file picker', () => {
+    function pickerDriver(picks, answers = []) {
+        const d = mockDriver(answers, { strict: true });
+        const seen = [];
+        d.pickPath = async (opts) => { seen.push(opts); return picks.shift() ?? ''; };
+        return { d, seen };
+    }
+
+    it('askPath falls back to a typed path when the picker is cancelled', async () => {
+        const { d } = pickerDriver([''], ['/tmp/typed/place']);
+        expect(await askPath(d, { prompt: 'Code folder', kind: 'dir' })).toBe(path.resolve('/tmp/typed/place'));
+        const { d: d2 } = pickerDriver([''], ['']);
+        expect(await askPath(d2, { prompt: 'Code folder', kind: 'dir' })).toBe('');
+    });
+
+    describe('recent paths', () => {
+        let tmp, cfgFile, a, b;
+        beforeEach(() => {
+            tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'recent-'));
+            cfgFile = path.join(tmp, 'local-config.json');
+            fs.writeFileSync(cfgFile, JSON.stringify({ terms: { x: 1 } }));
+            a = path.join(tmp, 'a'); b = path.join(tmp, 'b');
+            fs.mkdirSync(a); fs.mkdirSync(b);
+            setRecentPathsFile(cfgFile);
+        });
+        afterEach(() => { setRecentPathsFile(null); fs.rmSync(tmp, { recursive: true, force: true }); });
+
+        it('remembers chosen paths (most recent first, no duplicates) and keeps other config', async () => {
+            await askPath(pickerDriver([a]).d, { prompt: 'Folder', kind: 'dir' });
+            await askPath(pickerDriver([b], ['2']).d, { prompt: 'Folder', kind: 'dir' });
+            expect(getRecentPaths('Folder', 'dir')).toEqual([b, a]);
+            expect(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).terms).toEqual({ x: 1 });
+        });
+
+        it('offers recent paths first and returns the one picked without browsing', async () => {
+            await askPath(pickerDriver([a]).d, { prompt: 'Folder', kind: 'dir' });
+            const { d, seen } = pickerDriver([], ['1']);
+            expect(await askPath(d, { prompt: 'Folder', kind: 'dir' })).toBe(a);
+            expect(seen).toHaveLength(0);
+        });
+
+        it('skips recent paths that no longer exist', async () => {
+            await askPath(pickerDriver([a]).d, { prompt: 'Folder', kind: 'dir' });
+            fs.rmSync(a, { recursive: true });
+            expect(getRecentPaths('Folder', 'dir')).toEqual([]);
+        });
+
+        it('returns to the recent list when browsing is cancelled', async () => {
+            await askPath(pickerDriver([a]).d, { prompt: 'Folder', kind: 'dir' });
+            // Browse -> picker Esc -> typed path blank -> back to list -> pick recent
+            const { d } = pickerDriver([''], ['2', '', '1']);
+            expect(await askPath(d, { prompt: 'Folder', kind: 'dir' })).toBe(a);
+        });
     });
 });

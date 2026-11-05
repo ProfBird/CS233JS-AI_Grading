@@ -7,7 +7,7 @@
  *   bin/configure_lab.js  — AI-assisted wizard helpers
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mockDriver } from './helpers/mock_driver.mjs';
@@ -40,27 +40,28 @@ const LAB04_RUBRIC = join(import.meta.dirname, '..', 'configs', 'CS233JS', 'Lab0
 
 // ── colLetter ───────────────────────────────────────────────────────────
 
-describe('colLetter', () => {
-    it('returns A for index 0', () => expect(colLetter(0)).toBe('A'));
-    it('returns Z for index 25', () => expect(colLetter(25)).toBe('Z'));
-    it('returns AA for index 26', () => expect(colLetter(26)).toBe('AA'));
-    it('returns AZ for index 51', () => expect(colLetter(51)).toBe('AZ'));
-    it('returns BA for index 52', () => expect(colLetter(52)).toBe('BA'));
-    it('returns ZZ for index 701', () => expect(colLetter(701)).toBe('ZZ'));
-    it('returns AAA for index 702', () => expect(colLetter(702)).toBe('AAA'));
-    it('returns empty string for negative index', () => expect(colLetter(-1)).toBe(''));
+describe('colLetter / excelCell', () => {
+    it('converts a column index to letters (A … Z, AA …; "" for negative)', () => {
+        for (const [i, letter] of [
+            [0, 'A'],
+            [25, 'Z'],
+            [26, 'AA'],
+            [51, 'AZ'],
+            [52, 'BA'],
+            [701, 'ZZ'],
+            [702, 'AAA'],
+            [-1, ''],
+        ]) expect(colLetter(i), String(i)).toBe(letter);
+    });
+
+    it('builds a cell reference from a column index and row', () => {
+        for (const [c, r, ref] of [
+            [0, 1, 'A1'],
+            [1, 3, 'B3'],
+            [26, 10, 'AA10'],
+        ]) expect(excelCell(c, r)).toBe(ref);
+    });
 });
-
-// ── excelCell ───────────────────────────────────────────────────────────
-
-describe('excelCell', () => {
-    // row arg is the actual spreadsheet row number (1-based), matching XLSX convention
-    it('returns A1 for col 0, row 1', () => expect(excelCell(0, 1)).toBe('A1'));
-    it('returns B3 for col 1, row 3', () => expect(excelCell(1, 3)).toBe('B3'));
-    it('returns AA10 for col 26, row 10', () => expect(excelCell(26, 10)).toBe('AA10'));
-});
-
-// ── normalizeAssignmentName ──────────────────────────────────────────────
 
 describe('normalizeAssignmentName', () => {
     it('converts a plain number to Lab-prefixed name', () => {
@@ -759,52 +760,12 @@ describe('buildMappingEntry', () => {
         expect(result.linkCell).toBeUndefined();
     });
 
-    it('builds generic entry for build_check', async () => {
-        const rl = mockDriver(['1']);
-        const result = await buildMappingEntry(rl, 'build_check', rubricRow);
-        expect(result).toEqual({
-            type: 'build_check',
-            cell: 'C8',
-            commentCell: 'E8',
-            maxScore: 1
-        });
-    });
-
-    it('builds generic entry for browser_check', async () => {
-        const rl = mockDriver(['1']);
-        const result = await buildMappingEntry(rl, 'browser_check', rubricRow);
-        expect(result.type).toBe('browser_check');
-        expect(result.cell).toBe('C8');
-        expect(result.maxScore).toBe(1);
-    });
-
-    it('builds generic entry for code_review', async () => {
-        const rl = mockDriver(['2']);
-        const result = await buildMappingEntry(rl, 'code_review', rubricRow);
-        expect(result).toEqual({
-            type: 'code_review',
-            cell: 'C8',
-            commentCell: 'E8',
-            maxScore: 2
-        });
-    });
-
-    it('builds generic entry for package_check', async () => {
-        const rl = mockDriver(['3']);
-        const result = await buildMappingEntry(rl, 'package_check', rubricRow);
-        expect(result).toEqual({
-            type: 'package_check',
-            cell: 'C8',
-            commentCell: 'E8',
-            maxScore: 3
-        });
-    });
-
-    it('builds generic entry for repo_hygiene', async () => {
-        const rl = mockDriver(['1']);
-        const result = await buildMappingEntry(rl, 'repo_hygiene', rubricRow);
-        expect(result.type).toBe('repo_hygiene');
-        expect(result.maxScore).toBe(1);
+    // Types with no extra fields: just the score/comment cells and maxScore.
+    it('builds the generic entry (cells + maxScore) for types with no extra fields', async () => {
+        for (const [type, max] of [['build_check', '1'], ['browser_check', '5'], ['code_review', '2'], ['package_check', '3'], ['repo_hygiene', '1']]) {
+            const result = await buildMappingEntry(mockDriver([max]), type, rubricRow);
+            expect(result, type).toEqual({ type, cell: 'C8', commentCell: 'E8', maxScore: Number(max) });
+        }
     });
 
     it('builds a developer_comments entry with the AI-disclosure toggle off by default', async () => {
@@ -819,29 +780,11 @@ describe('buildMappingEntry', () => {
         expect(result.requireAiDisclosure).toBe(true);
     });
 
-    it('builds generic entry for part_completed', async () => {
-        const rl = mockDriver(['10']);
-        const result = await buildMappingEntry(rl, 'part_completed', rubricRow);
-        expect(result.type).toBe('part_completed');
-        expect(result.maxScore).toBe(10);
-    });
-
-    it('builds generic entry for apps_in_repo', async () => {
-        const rl = mockDriver(['10']);
-        const result = await buildMappingEntry(rl, 'apps_in_repo', rubricRow);
-        expect(result.type).toBe('apps_in_repo');
-    });
-
-    it('builds generic entry for npm_package', async () => {
-        const rl = mockDriver(['3']);
-        const result = await buildMappingEntry(rl, 'npm_package', rubricRow);
-        expect(result.type).toBe('npm_package');
-    });
-
-    it('returns maxScore from numeric input', async () => {
-        const rl = mockDriver(['5']);
-        const result = await buildMappingEntry(rl, 'build_check', rubricRow);
-        expect(result.maxScore).toBe(5);
+    it('builds part_completed / apps_in_repo / npm_package entries', async () => {
+        for (const type of ['part_completed', 'apps_in_repo', 'npm_package']) {
+            const result = await buildMappingEntry(mockDriver(['10']), type, rubricRow);
+            expect(result, type).toMatchObject({ type, cell: 'C8', maxScore: 10 });
+        }
     });
 });
 
@@ -892,27 +835,11 @@ describe('writeLab', () => {
     it('writes a valid config JSON file', () => {
         const labDir = join(tmpDir, 'Lab99');
         const config = { rubricName: 'r.xlsm', mappings: [] };
-        writeLab(labDir, config, null, null);
+        writeLab(labDir, config);
         const written = JSON.parse(readFileSync(join(labDir, 'lab99_config.json'), 'utf8'));
         expect(written).toEqual(config);
     });
-
-    it('writes the analyzer file when analyzerContent is provided', () => {
-        const labDir = join(tmpDir, 'Lab99');
-        const config = { rubricName: 'r.xlsm', mappings: [] };
-        writeLab(labDir, config, 'module.exports = () => {};', 'lab99_analyzer.js');
-        const content = readFileSync(join(labDir, 'lab99_analyzer.js'), 'utf8');
-        expect(content).toBe('module.exports = () => {};');
-    });
-
-    it('does not write analyzer file when analyzerContent is null', () => {
-        const labDir = join(tmpDir, 'Lab99');
-        writeLab(labDir, { rubricName: 'r.xlsm', mappings: [] }, null, null);
-        expect(existsSync(join(labDir, 'lab99_analyzer.js'))).toBe(false);
-    });
 });
-
-// ── findSpreadsheets ────────────────────────────────────────────────────
 
 describe('findSpreadsheets', () => {
     let tmpDir;
@@ -1019,126 +946,53 @@ describe('keywordsToFolderPattern', () => {
 // ── guessMappingType ────────────────────────────────────────────────────
 
 describe('guessMappingType', () => {
-    it('guesses manual for generic labels', () => {
-        expect(guessMappingType('Professional looking')).toBe('manual');
-    });
-
-    it('guesses collaborator_check for collaborator rows', () => {
-        expect(guessMappingType('Collaborators added')).toBe('collaborator_check');
-    });
-
-    it('guesses lint for style/lint rows', () => {
-        expect(guessMappingType('Code style and best practices')).toBe('lint');
-        expect(guessMappingType('ESLint errors')).toBe('lint');
-        expect(guessMappingType('Lint check')).toBe('lint');
-    });
-
-    it('guesses html_validate for HTML rows', () => {
-        expect(guessMappingType('index.html')).toBe('html_validate');
-        expect(guessMappingType('One or more HTML pages')).toBe('html_validate');
-        expect(guessMappingType('HTML page(s) are free of errors')).toBe('html_validate');
-    });
-
-    it('guesses css_validate for CSS rows', () => {
-        expect(guessMappingType('css file')).toBe('css_validate');
-        expect(guessMappingType('One or more CSS files')).toBe('css_validate');
-        expect(guessMappingType('stylesheet is valid')).toBe('css_validate');
-    });
-
-    it('does not mistake "Code style" for css_validate (substring guard)', () => {
-        expect(guessMappingType('Code style and best practices')).toBe('lint');
-    });
-
-    it('guesses name_check for file/folder naming rows', () => {
-        expect(guessMappingType('Directory structure and file naming')).toBe('name_check');
-        expect(guessMappingType('Folder structure and file names')).toBe('name_check');
-        expect(guessMappingType('Appropriate naming conventions')).toBe('name_check');
-    });
-
-    it('guesses github_repo for GitHub repo rows', () => {
-        expect(guessMappingType('GitHub private repo')).toBe('github_repo');
-        expect(guessMappingType('github repo link')).toBe('github_repo');
-    });
-
-    it('guesses gitignore_check for .gitignore rows', () => {
-        expect(guessMappingType('.gitignore file')).toBe('gitignore_check');
-    });
-
-    it('guesses repo_hygiene for repo hygiene rows', () => {
-        expect(guessMappingType('repo hygiene check')).toBe('repo_hygiene');
-    });
-
-    it('guesses build_check for build / vite rows', () => {
-        expect(guessMappingType('vite build passes')).toBe('build_check');
-        expect(guessMappingType('npm run build')).toBe('build_check');
-        expect(guessMappingType('webpack bundle')).toBe('build_check');
-    });
-
-    it('guesses package_check for package.json rows', () => {
-        expect(guessMappingType('package.json scripts')).toBe('package_check');
-        expect(guessMappingType('npm package dependency')).toBe('package_check');
-    });
-
-    it('guesses deploy_check for deployment rows', () => {
-        expect(guessMappingType('deployed to citstudent')).toBe('deploy_check');
-        expect(guessMappingType('live site reachable')).toBe('deploy_check');
-    });
-
-    it('guesses code_review for review rows', () => {
-        expect(guessMappingType('code review submitted')).toBe('code_review');
-    });
-
-    it('guesses developer_comments for comment rows', () => {
-        expect(guessMappingType('developer comments present')).toBe('developer_comments');
-    });
-
-    it('is case-insensitive', () => {
-        expect(guessMappingType('GITHUB PRIVATE REPO')).toBe('github_repo');
-        expect(guessMappingType('LINT CHECK')).toBe('lint');
-    });
-
-    it('guesses apps_in_repo when "app" appears near "repo"', () => {
-        expect(guessMappingType('App in a private GitHub repository')).toBe('apps_in_repo');
-        expect(guessMappingType('Apps in private GitHub repo')).toBe('apps_in_repo');
-    });
-
-    it('still guesses github_repo when no "app" mention', () => {
-        expect(guessMappingType('GitHub private repo')).toBe('github_repo');
-        expect(guessMappingType('github repo link')).toBe('github_repo');
-    });
-
-    it('guesses manual for folder/file organization (not naming convention)', () => {
-        expect(guessMappingType('Folder and file organization and naming')).toBe('manual');
-        expect(guessMappingType('File organization')).toBe('manual');
-    });
-
-    it('still guesses name_check for naming convention rows', () => {
-        expect(guessMappingType('Directory structure and file naming')).toBe('name_check');
-        expect(guessMappingType('Folder structure and file names')).toBe('name_check');
-    });
-
-    it('guesses env_file_check for .env API key rows', () => {
-        expect(guessMappingType('API key stored in .env file')).toBe('env_file_check');
-        expect(guessMappingType('.env file exists with API key')).toBe('env_file_check');
-    });
-
-    it('guesses gitignore_check for .env excluded from repo rows', () => {
-        expect(guessMappingType('.env excluded from repo .gitignore')).toBe('gitignore_check');
-        expect(guessMappingType('.env in .gitignore')).toBe('gitignore_check');
-        // Must NOT fall into env_file_check — both mention ".env file" but intent is different
-        expect(guessMappingType('.env file excluded from repo (.gitignore)?')).toBe('gitignore_check');
-    });
-
-    it('guesses path_exists for "file exists at path" rows', () => {
-        expect(guessMappingType('File exists at functions/api/proxy.js')).toBe('path_exists');
-        expect(guessMappingType('Proxy file created at functions/')).toBe('path_exists');
-    });
-
-    it('guesses manual (not env_file_check) when label says "environment variable" but not ".env"', () => {
-        // Row 6: "Function reads API key from Cloudflare environment variable?" — no ".env" token
-        // Should fall through to manual because it requires runtime/human inspection
-        expect(guessMappingType('Function reads API key from Cloudflare environment variable?')).toBe('manual');
-        expect(guessMappingType('reads api key from environment')).toBe('manual');
+    // One table, one test: a failure names the label (expect's message argument).
+    it('pre-selects the mapping type for each kind of rubric label (case-insensitive)', () => {
+        const cases = [
+            ['Professional looking', 'manual'],
+            ['Collaborators added', 'collaborator_check'],
+            ['Code style and best practices', 'lint'],
+            ['ESLint errors', 'lint'],
+            ['Lint check', 'lint'],
+            ['index.html', 'html_validate'],
+            ['One or more HTML pages', 'html_validate'],
+            ['HTML page(s) are free of errors', 'html_validate'],
+            ['css file', 'css_validate'],
+            ['One or more CSS files', 'css_validate'],
+            ['stylesheet is valid', 'css_validate'],
+            ['Directory structure and file naming', 'name_check'],
+            ['Folder structure and file names', 'name_check'],
+            ['Appropriate naming conventions', 'name_check'],
+            ['GitHub private repo', 'github_repo'],
+            ['github repo link', 'github_repo'],
+            ['.gitignore file', 'gitignore_check'],
+            ['repo hygiene check', 'repo_hygiene'],
+            ['vite build passes', 'build_check'],
+            ['npm run build', 'build_check'],
+            ['webpack bundle', 'build_check'],
+            ['package.json scripts', 'package_check'],
+            ['npm package dependency', 'package_check'],
+            ['deployed to citstudent', 'deploy_check'],
+            ['live site reachable', 'deploy_check'],
+            ['code review submitted', 'code_review'],
+            ['developer comments present', 'developer_comments'],
+            ['GITHUB PRIVATE REPO', 'github_repo'],
+            ['LINT CHECK', 'lint'],
+            ['App in a private GitHub repository', 'apps_in_repo'],
+            ['Apps in private GitHub repo', 'apps_in_repo'],
+            ['Folder and file organization and naming', 'manual'],
+            ['File organization', 'manual'],
+            ['API key stored in .env file', 'env_file_check'],
+            ['.env file exists with API key', 'env_file_check'],
+            ['.env excluded from repo .gitignore', 'gitignore_check'],
+            ['.env in .gitignore', 'gitignore_check'],
+            ['.env file excluded from repo (.gitignore)?', 'gitignore_check'],
+            ['File exists at functions/api/proxy.js', 'path_exists'],
+            ['Proxy file created at functions/', 'path_exists'],
+            ['Function reads API key from Cloudflare environment variable?', 'manual'],
+            ['reads api key from environment', 'manual'],
+        ];
+        for (const [label, type] of cases) expect(guessMappingType(label), label).toBe(type);
     });
 });
 
@@ -1292,12 +1146,11 @@ describe('promptVariations', () => {
 
 // ── file picker (TUI driver.pickPath) ────────────────────────────────────
 
-import { askPath, setRecentPathsFile, getRecentPaths } from '../src/lib/path_browser.js';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
 
-describe('file picker integration', () => {
+describe('copyRubric with the file picker', () => {
     function pickerDriver(picks, answers = []) {
         const d = _variationDriver(answers, { strict: true });
         const seen = [];
@@ -1317,52 +1170,6 @@ describe('file picker integration', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('askPath falls back to a typed path when the picker is cancelled', async () => {
-        const { d } = pickerDriver([''], ['/tmp/typed/place']);
-        expect(await askPath(d, { prompt: 'Code folder', kind: 'dir' })).toBe(path.resolve('/tmp/typed/place'));
-        const { d: d2 } = pickerDriver([''], ['']);
-        expect(await askPath(d2, { prompt: 'Code folder', kind: 'dir' })).toBe('');
-    });
-
-    describe('recent paths', () => {
-        let tmp, cfgFile, a, b;
-        beforeEach(() => {
-            tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'recent-'));
-            cfgFile = path.join(tmp, 'local-config.json');
-            fs.writeFileSync(cfgFile, JSON.stringify({ terms: { x: 1 } }));
-            a = path.join(tmp, 'a'); b = path.join(tmp, 'b');
-            fs.mkdirSync(a); fs.mkdirSync(b);
-            setRecentPathsFile(cfgFile);
-        });
-        afterEach(() => { setRecentPathsFile(null); fs.rmSync(tmp, { recursive: true, force: true }); });
-
-        it('remembers chosen paths (most recent first, no duplicates) and keeps other config', async () => {
-            await askPath(pickerDriver([a]).d, { prompt: 'Folder', kind: 'dir' });
-            await askPath(pickerDriver([b], ['2']).d, { prompt: 'Folder', kind: 'dir' });
-            expect(getRecentPaths('Folder', 'dir')).toEqual([b, a]);
-            expect(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).terms).toEqual({ x: 1 });
-        });
-
-        it('offers recent paths first and returns the one picked without browsing', async () => {
-            await askPath(pickerDriver([a]).d, { prompt: 'Folder', kind: 'dir' });
-            const { d, seen } = pickerDriver([], ['1']);
-            expect(await askPath(d, { prompt: 'Folder', kind: 'dir' })).toBe(a);
-            expect(seen).toHaveLength(0);
-        });
-
-        it('skips recent paths that no longer exist', async () => {
-            await askPath(pickerDriver([a]).d, { prompt: 'Folder', kind: 'dir' });
-            fs.rmSync(a, { recursive: true });
-            expect(getRecentPaths('Folder', 'dir')).toEqual([]);
-        });
-
-        it('returns to the recent list when browsing is cancelled', async () => {
-            await askPath(pickerDriver([a]).d, { prompt: 'Folder', kind: 'dir' });
-            // Browse -> picker Esc -> typed path blank -> back to list -> pick recent
-            const { d } = pickerDriver([''], ['2', '', '1']);
-            expect(await askPath(d, { prompt: 'Folder', kind: 'dir' })).toBe(a);
-        });
-    });
 });
 
 // ── promptAiCheckSettings / promptSkipStudents / assembleConfig ──────────

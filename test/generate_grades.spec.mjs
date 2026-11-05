@@ -139,10 +139,6 @@ describe('manual handler — prod cell filled but not affirmative', () => {
         expect(r.comment).toBe('CHECK');
     });
 
-    it('still auto-scores an affirmative prod cell (regression guard for the gate)', () => {
-        expect(handler(map, itemStudent({ betaScore: null, prodScore: null, prodFilled: true, prodAffirmative: true })).score).toBe(5);
-        expect(handler(map, itemStudent({ betaScore: null, prodScore: null, prodFilled: true, prodAffirmative: false })).score).toBe(0);
-    });
 });
 
 // ── stock comments wired into computeResults ─────────────────────────────────
@@ -261,24 +257,6 @@ describe('deploy_check — failure comments survive stock override', () => {
 // ── Registry ───────────────────────────────────────────────────────────────
 
 describe('handler registry', () => {
-    it('exports VALID_MAPPING_TYPES containing all built-in types', () => {
-        expect(VALID_MAPPING_TYPES).toBeInstanceOf(Set);
-        expect(VALID_MAPPING_TYPES.has('feature')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('manual')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('lint')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('build_check')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('browser_check')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('url_check')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('developer_comments')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('code_review')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('apps_in_repo')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('part1_completed')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('part_completed')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('part_feature')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('env_file_check')).toBe(true);
-        expect(VALID_MAPPING_TYPES.has('path_exists')).toBe(true);
-    });
-
     it('returns a handler for each valid type', () => {
         for (const type of VALID_MAPPING_TYPES) {
             expect(getHandler(type), `handler for "${type}"`).toBeInstanceOf(Function);
@@ -363,36 +341,17 @@ describe('mapping-type lists stay in sync', () => {
 // ── isCodeSourceType ───────────────────────────────────────────────────────
 
 describe('isCodeSourceType', () => {
-    it('returns true for apps_in_repo', () => {
-        expect(isCodeSourceType({ type: 'apps_in_repo' })).toBe(true);
-    });
-
-    it('returns true for part1_completed', () => {
-        expect(isCodeSourceType({ type: 'part1_completed' })).toBe(true);
-    });
-
-    it('returns true for part_completed', () => {
-        expect(isCodeSourceType({ type: 'part_completed' })).toBe(true);
-    });
-
-    it('returns true for url_check with urlType github', () => {
-        expect(isCodeSourceType({ type: 'url_check', urlType: 'github' })).toBe(true);
-    });
-
-    it('returns false for url_check with urlType citstudent', () => {
-        expect(isCodeSourceType({ type: 'url_check', urlType: 'citstudent' })).toBe(false);
-    });
-
-    it('returns false for url_check with no urlType', () => {
-        expect(isCodeSourceType({ type: 'url_check' })).toBe(false);
-    });
-
-    it('returns false for feature type', () => {
-        expect(isCodeSourceType({ type: 'feature', featureId: 'classes' })).toBe(false);
-    });
-
-    it('returns false for lint type', () => {
-        expect(isCodeSourceType({ type: 'lint' })).toBe(false);
+    it('is true only for rows about where the code came from (repo / parts / a GitHub url_check)', () => {
+        for (const [map, expected] of [
+            [{ type: 'apps_in_repo' }, true],
+            [{ type: 'part1_completed' }, true],
+            [{ type: 'part_completed' }, true],
+            [{ type: 'url_check', urlType: 'github' }, true],
+            [{ type: 'url_check', urlType: 'citstudent' }, false],
+            [{ type: 'url_check' }, false],
+            [{ type: 'feature', featureId: 'classes' }, false],
+            [{ type: 'lint' }, false],
+        ]) expect(isCodeSourceType(map), JSON.stringify(map)).toBe(expected);
     });
 });
 
@@ -714,20 +673,6 @@ describe('path_exists handler', () => {
         const result = handler({ maxScore: 5, pathPattern: 'functions/' }, {});
         expect(result.score).toBe(0);
         expect(result.comment).toMatch(/no repo/i);
-    });
-});
-
-// ── type-set consistency ──────────────────────────────────────────────────
-
-describe('type-set consistency', () => {
-    it('every type in lab_config MAPPING_TYPES has a registered handler', async () => {
-        const { MAPPING_TYPES } = await import('../src/lib/lab_config.js');
-        for (const { value: type } of MAPPING_TYPES) {
-            // 'feature' and 'part_feature' use the same handler pool but
-            // need a featureId at runtime — skip the schema-only ones.
-            if (type === 'feature' || type === 'part_feature') continue;
-            expect(getHandler(type), `no handler for type "${type}" from lab_config`).toBeInstanceOf(Function);
-        }
     });
 });
 

@@ -2,7 +2,7 @@
  * llm_models.js — the model picker for configure-lab.js and its model/API manager.
  *
  * What is stored in configs/local-config.json (machine-local, gitignored, written 0600):
- *   llm           the model currently selected, in the shape loadLLMClient() reads
+ *   llm           the model currently selected
  *                 ({ provider, model, baseUrl?, apiKey? }) — unchanged, so
  *                 ollama_comments.js and friends keep working.
  *   llmEndpoints  { [name]: { type, baseUrl, apiKey? } } — the APIs ("endpoints") models

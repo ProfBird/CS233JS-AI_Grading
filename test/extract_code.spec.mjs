@@ -202,3 +202,98 @@ describe('extractStudentCode — config-driven urlPatterns', () => {
         expect(urls.citstudent).toBeUndefined(); // not in the configured pattern set
     });
 });
+
+// ── the whole phase over a Moodle download folder ─────────────────────────────
+
+const extractPhase = (await import('../src/pipeline/extract_code.js')).default;
+const { normalizeGithubUrl, applyGithubSubdir } = await import('../src/pipeline/extract_code.js');
+
+describe('extract phase — a Moodle download folder', () => {
+    let root, labDir, codeRoot;
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), 'moodle-'));
+        labDir = join(root, 'Lab03'); codeRoot = join(root, 'code');
+        mkdirSync(labDir);
+        vi.mocked(execFileSync).mockReset();
+    });
+    afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+    // One Moodle folder: "<Name>_<id>_assignsubmission_<file|onlinetext>"
+    const moodle = (name, kind, files) => {
+        const d = join(labDir, `${name}_123_assignsubmission_${kind}`);
+        mkdirSync(d, { recursive: true });
+        for (const [f, content] of Object.entries(files)) writeFileSync(join(d, f), content);
+        return d;
+    };
+    const zipWith = (entries) => { const z = new AdmZip(); for (const [f, c] of Object.entries(entries)) z.addFile(f, Buffer.from(c)); return z.toBuffer(); };
+
+    it("pairs each student's file and online-text folders, extracts into <codeRoot>/<Safe-Name>/, and reads their URLs", async () => {
+        moodle('Ana Lopez', 'file', { 'lab.zip': zipWith({ 'main.js': 'x' }) });
+        moodle('Ana Lopez', 'onlinetext', { 'onlinetext.html': '<a href="https://citstudent.lanecc.edu/~alopez/">site</a>' });
+        moodle('Bo Wu', 'file', { 'app.py': 'print(1)' });
+        mkdirSync(join(labDir, 'not a submission'));     // ignored
+        writeFileSync(join(labDir, 'grades.csv'), '');   // ignored
+
+        const students = await extractPhase(labDir, codeRoot);
+        const byName = Object.fromEntries(students.map(s => [s.name, s]));
+        expect(Object.keys(byName).sort()).toEqual(['Ana Lopez', 'Bo Wu']);
+
+        const ana = byName['Ana Lopez'];
+        expect(ana.gradeDir).toBe(join(codeRoot, 'Ana-Lopez'));
+        expect(ana.extractedDir).toBe(join(codeRoot, 'Ana-Lopez', 'extracted_code'));
+        expect(existsSync(join(ana.extractedDir, 'main.js'))).toBe(true);
+        expect(ana.urls.citstudent).toBe('https://citstudent.lanecc.edu/~alopez/');
+        expect(ana.urls.github).toBeNull();
+
+        expect(readdirSync(byName['Bo Wu'].extractedDir)).toEqual(['app.py']);   // loose upload
+        expect(execFileSync).not.toHaveBeenCalled();
+    });
+
+    it('reuses code already extracted at the old space-named folder instead of re-extracting', async () => {
+        moodle('Ana Lopez', 'file', { 'lab.zip': zipWith({ 'new.js': 'x' }) });
+        const legacy = join(codeRoot, 'Ana Lopez', 'extracted_code');
+        mkdirSync(legacy, { recursive: true });
+        writeFileSync(join(legacy, 'old.js'), 'x');
+        const [ana] = await extractPhase(labDir, codeRoot);
+        expect(ana.extractedDir).toBe(legacy);
+        expect(readdirSync(legacy)).toEqual(['old.js']);
+    });
+
+    it('clones a GitHub tree URL and grades the linked subfolder', async () => {
+        moodle('Ana Lopez', 'onlinetext', { 'onlinetext.html': '<a href="https://github.com/ana/labs/tree/main/Week%203/Lab%203">repo</a>' });
+        vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
+            const target = args[args.length - 1];
+            expect(args).toContain('https://github.com/ana/labs.git');
+            mkdirSync(join(target, 'Week 3', 'Lab 3'), { recursive: true });
+            writeFileSync(join(target, 'Week 3', 'Lab 3', 'main.js'), 'x');
+        });
+        const [ana] = await extractPhase(labDir, codeRoot);
+        expect(ana.extractedDir).toBe(join(codeRoot, 'Ana-Lopez', 'repo', 'Week 3', 'Lab 3'));
+    });
+
+    it('reports a code storage folder that cannot be created', async () => {
+        const blocker = join(root, 'file-not-folder');
+        writeFileSync(blocker, '');
+        await expect(extractPhase(labDir, join(blocker, 'code'))).rejects.toMatchObject({ code: 'CODE_STORAGE_ERROR' });
+    });
+});
+
+describe('GitHub links', () => {
+    it('normalizeGithubUrl turns any repo link into a clone URL, and rejects non-repo links', () => {
+        for (const [url, clone] of [
+            ['https://github.com/ana/labs', 'https://github.com/ana/labs.git'],
+            ['https://github.com/ana/labs.git', 'https://github.com/ana/labs.git'],
+            ['https://github.com/ana/my.labs/tree/main/Lab3', 'https://github.com/ana/my.labs.git'],
+            ['https://github.com/ana', null],
+            ['https://gitlab.com/ana/labs', null],
+        ]) expect(normalizeGithubUrl(url), url).toBe(clone);
+    });
+
+    it("applyGithubSubdir keeps the repo root when the tree URL's folder no longer exists", () => {
+        const dir = mkdtempSync(join(tmpdir(), 'subdir-'));
+        const student = { name: 'S', extractedDir: dir };
+        applyGithubSubdir(student, { github: 'https://github.com/a/b/tree/main/Gone' });
+        expect(student.extractedDir).toBe(dir);
+        rmSync(dir, { recursive: true, force: true });
+    });
+});

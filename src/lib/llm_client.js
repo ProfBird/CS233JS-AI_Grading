@@ -1,10 +1,8 @@
 // Unified LLM client supporting Ollama, OpenRouter, and Anthropic.
-// API key lookup: environment variable first, then local-config.json.
+// Model selection and API keys are handled by llm_models.js (configure-lab) and llm_check.js.
 
-import { writeLocalConfigFile } from './local_config_file.js';
 import http from 'http';
 import https from 'https';
-import fs from 'fs';
 
 const ENV_KEYS = { openrouter: 'OPENROUTER_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
 const DEFAULTS = {
@@ -12,12 +10,6 @@ const DEFAULTS = {
     openrouter:  { baseUrl: 'https://openrouter.ai/api/v1',    model: 'deepseek/deepseek-chat-v3-0324:free' },
     anthropic:   { baseUrl: 'https://api.anthropic.com/v1',    model: 'claude-haiku-4-5-20251001' },
 };
-
-const OPENROUTER_MODELS = [
-    { label: 'DeepSeek V4 Pro',          value: 'deepseek/deepseek-v4-pro',                desc: 'DeepSeek V4 Pro — MoE 1.6T params, 1M context (paid)' },
-    { label: 'DeepSeek Chat v3 (free)',  value: 'deepseek/deepseek-chat-v3-0324:free',    desc: 'DeepSeek V3 via OpenRouter — free tier' },
-    { label: 'LLaMA 3.3 70B (free)',    value: 'meta-llama/llama-3.3-70b-instruct:free', desc: 'Meta LLaMA 3.3 via OpenRouter — free tier' },
-];
 
 // OpenRouter's HTTP-Referer/X-Title headers are optional app-attribution metadata (shown
 // on OpenRouter's own dashboard) — generic defaults so this shared lib doesn't hardcode
@@ -141,21 +133,6 @@ class LLMClient {
     }
 }
 
-// Reads LLM config from local-config.json; resolves API key from env if not stored.
-// Returns an LLMClient or null if no LLM is configured.
-function loadLLMClient(localConfigPath) {
-    let cfg = {};
-    try { cfg = JSON.parse(fs.readFileSync(localConfigPath, 'utf8')); } catch (e) {}
-
-    const llm = cfg.llm;
-    if (!llm?.provider) return null;
-
-    const envVar = ENV_KEYS[llm.provider];
-    const apiKey = (envVar && process.env[envVar]) || llm.apiKey || null;
-
-    return new LLMClient({ provider: llm.provider, apiKey, model: llm.model, fallbackModel: llm.fallbackModel, baseUrl: llm.baseUrl });
-}
-
 // Probes Ollama for an available model name. `baseUrl` is the client-facing chat
 // baseUrl (e.g. "http://localhost:11434/v1", DEFAULTS.ollama.baseUrl by default) —
 // Ollama's tag-listing endpoint lives at the host root, not under /v1, so a
@@ -178,57 +155,4 @@ function detectOllamaModel(baseUrl = DEFAULTS.ollama.baseUrl) {
     });
 }
 
-// Interactive guided setup. Saves config to local-config.json.
-// rl helpers (ask, askBoolean, askOptions) are passed in to keep this module independent.
-async function setupLLMInteractive(localConfigPath, { ask, askBoolean, askOptions }) {
-    console.log('\n--- LLM Setup ---');
-
-    const provider = await askOptions('Which LLM provider?', [
-        { label: 'Ollama (local)', value: 'ollama',     desc: 'Running at localhost:11434 — no API key needed' },
-        { label: 'OpenRouter',     value: 'openrouter', desc: 'Cloud API, many free/cheap models' },
-        { label: 'Anthropic',      value: 'anthropic',  desc: 'Claude models (paid, best quality)' },
-    ]);
-
-    let model = '', apiKey = null, saveKey = false;
-
-    if (provider === 'ollama') {
-        const detected = await detectOllamaModel();
-        const raw = await ask(detected ? `  Model [${detected}]: ` : '  Model name: ');
-        model = raw || detected || '';
-        if (!model) { console.log('  No Ollama model found. Configure manually.'); return null; }
-    } else {
-        const envVar = ENV_KEYS[provider];
-        if (process.env[envVar]) {
-            console.log(`  Found ${envVar} in environment.`);
-            apiKey = process.env[envVar];
-        } else {
-            apiKey = await ask(`  API key (${envVar}): `);
-            if (!apiKey) { console.log('  No API key provided. Skipping LLM setup.'); return null; }
-            saveKey = await askBoolean('  Save key to local-config.json? (gitignored, plaintext on disk)', true);
-            if (!saveKey) {
-                console.log(`  To avoid re-entering: export ${envVar}="${apiKey}"`);
-            }
-        }
-        if (provider === 'openrouter') {
-            const currentDefault = DEFAULTS.openrouter.model;
-            const defIdx = Math.max(0, OPENROUTER_MODELS.findIndex(m => m.value === currentDefault));
-            model = await askOptions('Model', OPENROUTER_MODELS, defIdx);
-        } else {
-            const def = DEFAULTS[provider].model;
-            const raw = await ask(`  Model [${def}]: `);
-            model = raw || def;
-        }
-    }
-
-    // Persist config
-    let stored = {};
-    try { stored = JSON.parse(fs.readFileSync(localConfigPath, 'utf8')); } catch (e) {}
-    stored.llm = { provider, model };
-    if (saveKey && apiKey) stored.llm.apiKey = apiKey;
-    writeLocalConfigFile(localConfigPath, stored);
-    console.log('  LLM configuration saved.\n');
-
-    return new LLMClient({ provider, apiKey, model });
-}
-
-export { LLMClient, loadLLMClient, setupLLMInteractive, detectOllamaModel, ENV_KEYS, DEFAULTS };
+export { LLMClient, detectOllamaModel, ENV_KEYS, DEFAULTS };

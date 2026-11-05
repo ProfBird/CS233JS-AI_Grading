@@ -166,3 +166,53 @@ describe('detectOllamaModel', () => {
         expect(result).toBeNull();
     });
 });
+
+describe('LLMClient — cloud request shapes', () => {
+    let server;
+    afterEach(() => { if (server) server.close(); });
+
+    it('anthropic: POSTs to /messages with x-api-key, the system prompt separate, and reads content[0].text', async () => {
+        let seen;
+        server = await startServer(async (req, res) => {
+            seen = { url: req.url, headers: req.headers, body: JSON.parse(await readBody(req)) };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ content: [{ type: 'text', text: '  {"score": 2}  ' }] }));
+        });
+        const client = new LLMClient({ provider: 'anthropic', apiKey: 'k-1', model: 'm', baseUrl: `${server.url}/v1`, quiet: true });
+        expect(await client.chat('SYS', 'USER')).toBe('{"score": 2}');
+        expect(seen.url).toBe('/v1/messages');
+        expect(seen.headers['x-api-key']).toBe('k-1');
+        expect(seen.headers['anthropic-version']).toBeTruthy();
+        expect(seen.body).toMatchObject({ model: 'm', system: 'SYS', messages: [{ role: 'user', content: 'USER' }], temperature: 0 });
+    });
+
+    it('openrouter: sends a Bearer key and the attribution headers', async () => {
+        let headers;
+        server = await startServer(async (req, res) => {
+            headers = req.headers;
+            await readBody(req);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
+        });
+        const client = new LLMClient({ provider: 'openrouter', apiKey: 'or-key', baseUrl: server.url, appTitle: 'T', quiet: true });
+        expect(client.model).toBeTruthy();              // provider default model
+        expect(await client.chat(null, 'hi')).toBe('ok');
+        expect(headers.authorization).toBe('Bearer or-key');
+        expect(headers['x-title']).toBe('T');
+        expect(headers['http-referer']).toBeTruthy();
+    });
+
+    it('a non-429 HTTP error is retried, then gives null (no fallback model involved)', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true, advanceTimeDelta: 500 });
+        let calls = 0;
+        server = await startServer(async (req, res) => {
+            calls++;
+            await readBody(req);
+            res.writeHead(500); res.end('boom');
+        });
+        const client = new LLMClient({ provider: 'openai', apiKey: 'k', model: 'm', fallbackModel: 'f', baseUrl: server.url, quiet: true });
+        expect(await client.chat(null, 'x')).toBeNull();
+        expect(calls).toBe(3);
+        vi.useRealTimers();
+    });
+});

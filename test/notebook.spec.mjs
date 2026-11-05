@@ -105,6 +105,9 @@ describe('Colab links', () => {
         const fetchImpl = respond(NOTEBOOK);
         expect(await acquireColabNotebook({ extractedDir: '/x' }, root, { colab: 'https://colab.research.google.com/drive/1FBrABO2L1DFKRn1v0zRknHS57eiktzgm' }, fetchImpl)).toBe(false);
         expect(await acquireColabNotebook({}, root, { colab: null }, fetchImpl)).toBe(false);
+        const noId = {};
+        expect(await acquireColabNotebook(noId, root, { colab: 'https://colab.research.google.com/' }, fetchImpl)).toBe(false);
+        expect(noId.error).toMatch(/notebook id/);
         expect(fetchImpl).not.toHaveBeenCalled();
     });
 

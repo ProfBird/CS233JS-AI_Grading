@@ -292,23 +292,6 @@ export async function resolveGradeSetup(driver, {
     labRoot = terms[activeTermId].labRoot;
     codeRoot = terms[activeTermId].codeRoot;
 
-    // --- Submission source (plain interactive menu only) ---
-    // The --canvas flag has always been the CLI way to force a Canvas download; give
-    // the plain menu the same power right after the term is chosen. The default keeps
-    // each assignment's configured source: the Moodle download folder, or Canvas for a
-    // lab whose config already has canvas.assignmentId. Choosing Canvas here behaves
-    // exactly like --canvas (runs the interactive Canvas setup, letting you set up a
-    // lab for the first time or re-select its Canvas assignment).
-    if (isPlainMenu && !canvasFlag) {
-        const sourceOpts = [
-            { label: "Assignment's configured source", value: 'configured', desc: 'Moodle download folder, or Canvas if already set up' },
-            { label: 'Download from Canvas', value: 'canvas', desc: 'First-time setup, or re-select the Canvas assignment' },
-        ];
-        const sourceChoice = await driver.askOptions('Submission source', sourceOpts, 0);
-        if (sourceChoice === 'canvas') canvasFlag = true;
-        driver.print(canvasFlag ? '  Source: Canvas download' : '  Source: configured (Moodle folder by default)');
-    }
-
     labName = positional[0];
 
     const labs = fs.readdirSync(courseConfigsDir)
@@ -332,16 +315,36 @@ export async function resolveGradeSetup(driver, {
         })
         .sort();
 
+    // Nothing to grade yet: say so before asking anything else (the submission-source
+    // prompt below would offer a Canvas download for an assignment that has no config).
+    // Lab configs are term-agnostic, so one made for an earlier term is reused as-is.
+    if (!labName && labs.length === 0) {
+        throw new SetupError([
+            `ERROR: Course "${course.courseName}" has no assignments configured yet.`,
+            `  Set one up first (configs are shared by all terms):`,
+            `    node bin/configure-lab.js`,
+            `  then choose "${course.courseName}" and the assignment to configure.`,
+        ]);
+    }
+
+    // --- Submission source (plain interactive menu only) ---
+    // The --canvas flag has always been the CLI way to force a Canvas download; give
+    // the plain menu the same power right after the term is chosen. The default keeps
+    // each assignment's configured source: the Moodle download folder, or Canvas for a
+    // lab whose config already has canvas.assignmentId. Choosing Canvas here behaves
+    // exactly like --canvas (runs the interactive Canvas setup, letting you set up a
+    // lab for the first time or re-select its Canvas assignment).
+    if (isPlainMenu && !canvasFlag) {
+        const sourceOpts = [
+            { label: "Assignment's configured source", value: 'configured', desc: 'Moodle download folder, or Canvas if already set up' },
+            { label: 'Download from Canvas', value: 'canvas', desc: 'First-time setup, or re-select the Canvas assignment' },
+        ];
+        const sourceChoice = await driver.askOptions('Submission source', sourceOpts, 0);
+        if (sourceChoice === 'canvas') canvasFlag = true;
+        driver.print(canvasFlag ? '  Source: Canvas download' : '  Source: configured (Moodle folder by default)');
+    }
+
     if (!labName) {
-        // A course created but not yet given any assignment configs (e.g. via "Add new
-        // course" just now) has nothing to pick — say what to do instead of showing an
-        // empty picker.
-        if (labs.length === 0) {
-            throw new SetupError([
-                `ERROR: Course "${course.courseName}" has no assignments configured yet.`,
-                `  Add one with: node bin/configure-lab.js`,
-            ]);
-        }
         driver.banner(`${course.courseCode} AI Grader v1.0`);
         driver.print('  (Run with --help to see all command-line options)');
 

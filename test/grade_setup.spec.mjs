@@ -165,10 +165,12 @@ describe('resolveGradeSetup — course defaults', () => {
         writeCourseConfig('CS212');
         writeLocalConfig(oneTermConfig());
 
-        // Plain menu: course picker -> CS212; term picker -> the one term; source -> configured.
-        const driver = mockDriver(['CS212', '', ''], { strict: true });
+        // Plain menu: course picker -> CS212; term picker -> the one term. The error comes
+        // before the submission-source prompt (no point offering a Canvas download).
+        const driver = mockDriver(['CS212', ''], { strict: true });
         await expect(resolveGradeSetup(driver, opts({ argv: [] })))
             .rejects.toThrow(/has no assignments configured yet/);
+        expect(driver.calls.some(c => c.prompt === 'Submission source')).toBe(false);
     });
 
     it('throws SetupError when defaults set a per-assignment key', async () => {

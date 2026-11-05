@@ -16,7 +16,7 @@ import { readTemplateColumns, openRubricTemplate, writeGradeWorkbook, readGradeC
 import { walk, toPosix } from '../lib/file_walker.js';
 import { registerHandler, getHandler, VALID_MAPPING_TYPES } from '../lib/handler_registry.js';
 import { groupUnknownWithOverrides, mappingDependsOnGroup } from '../lib/student_group.js';
-import { runLLMCheck } from '../lib/llm_check.js';
+import { runLLMCheck, prefetchLLMChecks } from '../lib/llm_check.js';
 
 // --- Cell helpers ---
 
@@ -1140,6 +1140,9 @@ export default async function(students, config, labDir, opts = {}) {
             console.log(`  AI comments: using model "${aiModel}" (${source}).`);
         }
     }
+
+    // Ask the AI model for every llm_check row now, several at once; the loop below collects the answers.
+    await prefetchLLMChecks(students.filter(st => st.gradeDir && !(st.analysis && st.analysis.extractionError)), config);
 
     // --- Text report path ---
     if (opts.textReport) {

@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-    runLLMCheck, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory, defaultClientFactory, SYSTEM_PROMPT,
+    runLLMCheck, prefetchLLMChecks, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory, defaultClientFactory, SYSTEM_PROMPT,
 } from '../src/lib/llm_check.js';
 import { computeResults, getHandler } from '../src/pipeline/generate_grades.js';
 import { validateConfig } from '../src/lib/config_validation.js';
@@ -279,5 +279,23 @@ describe('openai-compatible provider (e.g. DeepSeek)', () => {
         expect((await defaultClientFactory({ llmCheck: { provider: 'openai', baseUrl: 'https://nope.example.com', model: 'm' } }, { localConfigPath: p })).error).toMatch(/no API key/);
         expect((await defaultClientFactory({ llmCheck: { provider: 'openai', baseUrl: 'https://other.example.com' } }, { localConfigPath: p })).error).toMatch(/no model/);
         expect((await defaultClientFactory({ llmCheck: { provider: 'openai' } }, { localConfigPath: p })).error).toMatch(/baseUrl is required/);
+    });
+});
+
+describe('prefetchLLMChecks', () => {
+    it('answers every row with limited concurrency and reuses the answers', async () => {
+        let running = 0, peak = 0, calls = 0;
+        setLLMCheckClientFactory(async () => ({
+            label: 'fake',
+            client: { chat: async () => { calls++; running++; peak = Math.max(peak, running); await new Promise(r => setTimeout(r, 20)); running--; return '{"score": 1, "reason": "ok"}'; } },
+        }));
+        const students = [1, 2, 3, 4].map(i => { write(dir, `s${i}/a.py`, 'x = 1\n'); return { name: `S${i}`, extractedDir: join(dir, `s${i}`) }; });
+        const config = { language: 'python', llmCheck: { concurrency: 2 }, mappings: [rulesMap(), { ...rulesMap(), criterion: 'Other' }] };
+        await prefetchLLMChecks(students, config);
+        expect(calls).toBe(8);
+        expect(peak).toBe(2);
+        const r = await runLLMCheck(config.mappings[0], students[0], config);
+        expect(r.score).toBe(1);
+        expect(calls).toBe(8);
     });
 });

@@ -267,17 +267,21 @@ async function lint(files, cwd, configOverride, config) {
     if (configOverride) args.push('--config', configOverride);
     args.push(...files);
 
-    let stdout;
-    try {
-        const result = await execFileAsync(pythonBin(config), args, { cwd, timeout: 20000 });
-        stdout = result.stdout;
-    } catch (err) {
-        // ruff exits non-zero when it finds issues — that's success, not failure; the
-        // diagnostics are still on stdout. A genuine invocation failure has no JSON stdout.
-        stdout = err.stdout;
-        if (!stdout) {
-            return { errors: 0, warnings: 0, messages: ['ruff not installed or failed to run'], errorMessages: [], warningMessages: [], ruleCounts: {}, toolError: 'ruff not installed or failed to run' };
+    // ruff runs as `python -m ruff` when installed into that interpreter, else as a standalone
+    // `ruff` executable on PATH (how `uv tool install ruff` / pipx install it).
+    const runRuff = async (cmd, cmdArgs) => {
+        try {
+            return (await execFileAsync(cmd, cmdArgs, { cwd, timeout: 20000 })).stdout;
+        } catch (err) {
+            // ruff exits non-zero when it finds issues — that's success, not failure; the
+            // diagnostics are still on stdout. A genuine invocation failure has no JSON stdout.
+            return err.stdout || null;
         }
+    };
+    let stdout = await runRuff(pythonBin(config), args);
+    if (!stdout) stdout = await runRuff('ruff', args.slice(2));
+    if (!stdout) {
+        return { errors: 0, warnings: 0, messages: ['ruff not installed or failed to run'], errorMessages: [], warningMessages: [], ruleCounts: {}, toolError: 'ruff not installed or failed to run' };
     }
 
     let issues;

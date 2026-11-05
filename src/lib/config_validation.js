@@ -286,7 +286,7 @@ function configErrors(config) {
         else {
             if (lc.provider !== undefined && !LLM_PROVIDERS.includes(lc.provider)) errors.push(`llmCheck.provider: "${lc.provider}" must be one of ${LLM_PROVIDERS.join(', ')}`);
             for (const k of ['model', 'baseUrl']) if (lc[k] !== undefined && !isNonEmptyString(lc[k])) errors.push(`llmCheck.${k}: must be text`);
-            for (const k of ['maxChars', 'timeoutMs']) if (lc[k] !== undefined && !isPosInt(lc[k])) errors.push(`llmCheck.${k}: must be a positive whole number`);
+            for (const k of ['maxChars', 'timeoutMs', 'concurrency']) if (lc[k] !== undefined && !isPosInt(lc[k])) errors.push(`llmCheck.${k}: must be a positive whole number`);
         }
     }
 

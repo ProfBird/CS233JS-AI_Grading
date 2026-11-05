@@ -19,7 +19,7 @@
  *     guidance  — what full / partial / no credit look like (optional, improves consistency)
  *     files     — regex on the file's project-relative path choosing what the model reads
  *                 (default: the language's source files, notebooks included)
- *   lab: llmCheck: { provider, model, baseUrl, maxChars, timeoutMs }
+ *   lab: llmCheck: { provider, model, baseUrl, maxChars, timeoutMs, concurrency }
  */
 
 import fs from 'fs';
@@ -174,7 +174,7 @@ function clientFor(config, opts) {
  * Scores one llm_check row for one student.
  * @returns {Promise<{score: number, comment: string, keepComment: true}>}
  */
-async function runLLMCheck(map, student, config, opts = {}) {
+async function runLLMCheckNow(map, student, config, opts = {}) {
     const unavailable = why => ({ score: 0, comment: `NEEDS MANUAL CHECK: AI check unavailable (${why})`, keepComment: true });
     if (!student.extractedDir || !fs.existsSync(student.extractedDir)) return unavailable('no code to review');
 
@@ -198,7 +198,52 @@ async function runLLMCheck(map, student, config, opts = {}) {
     };
 }
 
+// ---------- running the rows in parallel ----------
+// The model is the slow part (seconds per call), so a lab's rows are requested up front,
+// several at a time, and the grading loop then just collects each finished answer.
+
+const DEFAULT_CONCURRENCY = 4;
+const prefetched = new WeakMap(); // student -> Map(mapping -> Promise<result>)
+
+/** Scores one llm_check row for one student (reusing an answer requested by prefetchLLMChecks). */
+function runLLMCheck(map, student, config, opts = {}) {
+    const hit = prefetched.get(student) && prefetched.get(student).get(map);
+    return hit || runLLMCheckNow(map, student, config, opts);
+}
+
+/**
+ * Starts every student's llm_check rows now, at most `llmCheck.concurrency` (default 4) model
+ * calls at a time. Resolves when all are answered; later runLLMCheck calls return the stored
+ * answers. Harmless to call when the lab has no llm_check rows.
+ */
+async function prefetchLLMChecks(students, config, opts = {}) {
+    const maps = (config.mappings || []).filter(m => m.type === 'llm_check' && m.criterion);
+    if (maps.length === 0) return;
+    const limit = Math.max(1, Number((config.llmCheck || {}).concurrency) || DEFAULT_CONCURRENCY);
+    const jobs = [];
+    for (const student of students) {
+        if (!student.extractedDir) continue;
+        const byMap = new Map();
+        prefetched.set(student, byMap);
+        for (const map of maps) jobs.push({ map, student, byMap });
+    }
+    let next = 0;
+    let done = 0;
+    const worker = async () => {
+        while (next < jobs.length) {
+            const { map, student, byMap } = jobs[next++];
+            const p = runLLMCheckNow(map, student, config, opts);
+            byMap.set(map, p);
+            await p;
+            done++;
+            if (done % 10 === 0 || done === jobs.length) console.log(`  AI checks: ${done}/${jobs.length}`);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, jobs.length) }, worker));
+}
+
 export {
+    prefetchLLMChecks,
     runLLMCheck, collectCode, buildPrompt, parseVerdict, setLLMCheckClientFactory,
     defaultClientFactory, PROVIDERS, SYSTEM_PROMPT, DEFAULT_MAX_CHARS,
 };

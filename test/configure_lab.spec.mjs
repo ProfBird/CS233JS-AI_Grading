@@ -1297,7 +1297,7 @@ describe('file picker integration', () => {
 
     it('askPath falls back to a typed path when the picker is cancelled', async () => {
         const { d } = pickerDriver([''], ['/tmp/typed/place']);
-        expect(await askPath(d, { prompt: 'Code folder', kind: 'dir' })).toBe('/tmp/typed/place');
+        expect(await askPath(d, { prompt: 'Code folder', kind: 'dir' })).toBe(path.resolve('/tmp/typed/place'));
         const { d: d2 } = pickerDriver([''], ['']);
         expect(await askPath(d2, { prompt: 'Code folder', kind: 'dir' })).toBe('');
     });

@@ -1223,3 +1223,47 @@ describe('printDraftTable', () => {
         ])).not.toThrow();
     });
 });
+
+// ── promptVariations / assembleConfig variations ─────────────────────────
+
+import { promptVariations } from '../src/lib/config_prompts.js';
+import { mockDriver as _variationDriver } from './helpers/mock_driver.mjs';
+
+describe('promptVariations', () => {
+    it('returns undefined (leave untouched) when there are no versions', async () => {
+        const d = _variationDriver(['n'], { strict: true });
+        expect(await promptVariations(d, undefined)).toBeUndefined();
+    });
+
+    it('collects letters and app names', async () => {
+        const d = _variationDriver(['y', '', 'Schedule sections', 'y', '', 'Flights', 'n'], { strict: true });
+        expect(await promptVariations(d, undefined)).toEqual({
+            A: { appName: 'Schedule sections' },
+            B: { appName: 'Flights' },
+        });
+    });
+
+    it('shows existing values as defaults and keeps each group\'s overrides', async () => {
+        const existing = { A: { appName: 'Old A', overrides: { runCheck: { entry: 'a.py' } } } };
+        const d = _variationDriver(['y', '', 'New A', 'n'], { strict: true });
+        const r = await promptVariations(d, existing);
+        expect(r).toEqual({ A: { appName: 'New A', overrides: { runCheck: { entry: 'a.py' } } } });
+        const asks = d.calls.filter(c => c.method === 'ask');
+        expect(asks[0].def).toBe('A');
+        expect(asks[1].def).toBe('Old A');
+    });
+
+    it('answering no on a lab with versions keeps them unless removal is confirmed', async () => {
+        const existing = { A: { appName: 'A' } };
+        expect(await promptVariations(_variationDriver(['n', 'n'], { strict: true }), existing)).toBeUndefined();
+        expect(await promptVariations(_variationDriver(['n', 'y'], { strict: true }), existing)).toBeNull();
+    });
+
+    it('assembleConfig sets, removes or leaves variations', () => {
+        const base = { rubricName: 'r.xlsx', runtimeCheck: 'none', mappings: [] };
+        const ex = { variations: { A: { appName: 'a' } } };
+        expect(assembleConfig(ex, { ...base }).variations).toEqual(ex.variations);
+        expect(assembleConfig(ex, { ...base, variations: null }).variations).toBeUndefined();
+        expect(assembleConfig(null, { ...base, variations: { B: { appName: 'b' } } }).variations).toEqual({ B: { appName: 'b' } });
+    });
+});

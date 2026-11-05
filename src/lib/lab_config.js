@@ -635,6 +635,11 @@ function assembleConfig(existingConfig, responses) {
     setOrDelete(config, 'language', responses.language && responses.language !== 'javascript' ? responses.language : '');
     config.runtimeCheck = responses.runtimeCheck;
     config.mappings     = responses.mappings;
+    // variations: undefined = the wizard didn't ask (leave whatever is there), null =
+    // remove the section, object = the new lab groups (promptVariations keeps each
+    // surviving group's hand-edited `overrides`).
+    if (responses.variations === null) delete config.variations;
+    else if (responses.variations) config.variations = responses.variations;
 
     return config;
 }

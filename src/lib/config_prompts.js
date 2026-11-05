@@ -274,4 +274,42 @@ async function buildMappingEntry(driver, type, rubricRow, currentValues = {}) {
     return m;
 }
 
-export { promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry, buildFeatureEntry, extensionsToFileRegex };
+/**
+ * Ask whether the assignment has versions (lab groups A/B/C…, each building something
+ * different) and, if so, each group's letter and app name. Returns the new `variations`
+ * object, `null` to remove an existing section, or `undefined` to leave it untouched.
+ * A group that already exists keeps its hand-edited `overrides`; its app name is the
+ * default. Per-group overrides (run settings, tests, features) are not prompted for —
+ * they vary too much; the summary tells the user to add them to the config file.
+ */
+async function promptVariations(driver, existing) {
+    const has = existing && Object.keys(existing).length > 0;
+    const yes = await driver.askBoolean(
+        'Does this assignment have versions (groups A, B, C… that each build something different)?', !!has);
+    if (!yes) {
+        if (!has) return undefined;
+        return (await driver.askBoolean('Remove the existing versions from the config?', false)) ? null : undefined;
+    }
+    const result = {};
+    const letters = Object.keys(existing || {});
+    let i = 0;
+    while (true) {
+        const defLetter = letters[i] || String.fromCharCode(65 + Object.keys(result).length);
+        let letter;
+        while (true) {
+            letter = (await driver.ask('Version letter (e.g. A)', defLetter)).trim().toUpperCase();
+            if (!/^[A-Z0-9]{1,3}$/.test(letter)) { driver.print('  Use 1-3 letters or digits.'); continue; }
+            if (result[letter]) { driver.print(`  Version ${letter} is already entered.`); continue; }
+            break;
+        }
+        const old = existing?.[letter] || {};
+        const appName = (await driver.ask(`Version ${letter}: app name (used to detect it from the student's code)`, old.appName || '')).trim();
+        result[letter] = { ...old, ...(appName ? { appName } : {}) };
+        i++;
+        const more = i < letters.length || await driver.askBoolean('Add another version?', false);
+        if (!more) break;
+    }
+    return result;
+}
+
+export { promptVariations, promptRubricRows, promptRubricCriteria, copyRubric, promptFields, buildMappingEntry, buildFeatureEntry, extensionsToFileRegex };

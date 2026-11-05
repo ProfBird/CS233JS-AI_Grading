@@ -16,7 +16,7 @@ import {
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
 } from '../src/lib/lab_config.js';
 
-import { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry }
+import { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry, promptVariations }
     from '../src/lib/config_prompts.js';
 
 import { selectModel } from '../src/lib/llm_models.js';
@@ -433,8 +433,9 @@ async function main() {
                     status: a.hasConfig ? 'has config' : 'no config yet',
                 })),
                 { label: 'Add new assignment', value: '__new__',
-                  color: 'green', desc: 'Create a brand-new assignment configuration' },
+                  color: 'green', desc: 'Create a brand-new assignment configuration (you will be asked about versions too)' },
             ];
+            tui.print('  Note: you will also be asked whether the assignment has versions (groups A, B, C…).');
             const choice = await tui.askOptions('Select an assignment to configure', options, 0);
             if (choice === '__new__') {
                 while (true) {
@@ -647,6 +648,7 @@ async function main() {
         const summaryCell  = await tui.ask('Summary cell (e.g. A2, or blank)', ex.summaryCell || '');
         const graderCell   = await tui.ask('Grader cell (e.g. E1, or blank)',  ex.graderCell  || '');
         const titleCell    = await tui.ask('Title cell (e.g. A1, or blank)',   ex.titleCell   || '');
+        const variations   = await promptVariations(tui, ex.variations);
 
         // 9. Build and write
         // Feature mappings carry a `_featureDef` (their analysis.features[] definition);
@@ -669,6 +671,7 @@ async function main() {
             runtimeCheck,
             mappings,
             optional: { titleCell, summaryCell, graderCell },
+            variations,
         });
         // Merge any feature definitions the user built (creates analysis.features if needed,
         // replaces same-id entries, preserves the rest).
@@ -683,6 +686,7 @@ async function main() {
             `  ${mappings.length} mappings configured${featureNote}.`,
             `  Config: ${configPath}`,
             ...stepHint,
+            ...(variations ? [`  Versions: ${Object.keys(variations).join(', ')} — add each version's settings (runCheck, testCheck, analysis, …) under "variations.<letter>.overrides" in ${path.basename(configPath)}.`] : []),
             `  To verify: node bin/rubric-to-md.js ${JSON.stringify(rubricPath)}`,
         ];
 

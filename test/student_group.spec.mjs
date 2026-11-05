@@ -34,6 +34,16 @@ describe('resolveStudentGroup', () => {
         expect(g).toMatchObject({ letter: 'A', source: 'codeReview', conflict: false });
     });
 
+    it('lets the instructor assign a group by name, over the review form or no form at all', () => {
+        const manual = { 'Ann Lee': 'A', 'Bo Kim': 'B', 'Cy Doe': 'Z' };
+        expect(resolveStudentGroup({ name: 'Ann Lee', extractedDir: dir }, base, manual))
+            .toMatchObject({ letter: 'A', source: 'instructor', conflict: false });
+        expect(resolveStudentGroup({ name: 'Bo Kim', codeReview: { group: 'A' }, extractedDir: dir }, base, manual))
+            .toMatchObject({ letter: 'B', source: 'instructor', formLetter: 'A', conflict: true });
+        // a letter the lab doesn't define is ignored
+        expect(resolveStudentGroup({ name: 'Cy Doe', extractedDir: dir }, base, manual).letter).toBe(null);
+    });
+
     it('keeps the form letter but reports a conflict when the code looks like another group', () => {
         flightCode();
         const g = resolveStudentGroup({ codeReview: { group: 'A' }, extractedDir: dir }, base);

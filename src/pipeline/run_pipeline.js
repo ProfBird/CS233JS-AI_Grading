@@ -45,6 +45,12 @@ const WEB_LANGUAGES = new Set(['javascript', 'typescript']);
 const isWebLab = config => WEB_LANGUAGES.has(config.language || 'javascript');
 const usesMapping = (config, type) => (config.mappings || []).some(m => m.type === type);
 
+// group_overrides.json in the Artifacts folder: { "Student Name": "A" } — the instructor's word
+// on a student's group when the review form is missing or wrong (see student_group.js).
+function readManualGroups(artifactsDir) {
+    try { return JSON.parse(fs.readFileSync(path.join(artifactsDir, 'group_overrides.json'), 'utf8')); } catch { return {}; }
+}
+
 const PHASES = [
     {
         name: 'readCodeReview',
@@ -53,7 +59,7 @@ const PHASES = [
     },
     {
         name: 'resolveGroups',
-        run: (students, config) => resolveGroups(students, config),
+        run: (students, config, dirs) => resolveGroups(students, config, readManualGroups(dirs.artifactsDir)),
         when: () => true,
     },
     {

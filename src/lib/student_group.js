@@ -16,7 +16,9 @@
  * The group comes from the student's code review form ("Developer's lab version (A, B, or C)",
  * read by read_code_review.js), falling back to keyword detection of the variation's appName
  * in the code (variation_detect.js). When neither yields a group the lab defines, the group is
- * unknown: grading flags every rubric row that depends on group-specific settings for manual
+ * unknown. The instructor can also assign groups by hand for one term's run: a
+ * `group_overrides.json` in the lab's Artifacts folder, `{ "Student Name": "A" }`, wins over both.
+ * When the group is unknown: grading flags every rubric row that depends on group-specific settings for manual
  * review instead of scoring it with the wrong group's settings (see generate_grades.js).
  */
 
@@ -59,12 +61,12 @@ function overriddenKeys(config) {
 
 /**
  * Works out which group a student is in.
- * @returns {{ letter: string|null, source: 'codeReview'|'detected'|null,
+ * @returns {{ letter: string|null, source: 'instructor'|'codeReview'|'detected'|null,
  *             detected?: string|null, conflict?: boolean, reason?: string }}
  *   letter is null when unknown; then `reason` says why. `conflict` is true when the review
  *   form and the code disagree (the form wins — the student declared their version there).
  */
-function resolveStudentGroup(student, config) {
+function resolveStudentGroup(student, config, manualGroups = {}) {
     const formLetter = (student.codeReview && student.codeReview.group) || null;
     const variations = config.variations;
     if (!variations) return { letter: formLetter, source: formLetter ? 'codeReview' : null };
@@ -76,6 +78,10 @@ function resolveStudentGroup(student, config) {
         detected = checkVersionVariation(student.extractedDir, variations, config.variationExcludeNamePatterns).detected;
     }
 
+    const manual = manualGroups && manualGroups[student.name];
+    if (known(manual)) {
+        return { letter: manual, source: 'instructor', detected, formLetter, conflict: !!formLetter && formLetter !== manual };
+    }
     if (known(formLetter)) {
         return { letter: formLetter, source: 'codeReview', detected, conflict: !!detected && detected !== formLetter };
     }
@@ -92,18 +98,19 @@ function resolveStudentGroup(student, config) {
  * Pipeline phase: sets `student.group` for every student (after read_code_review.js, before
  * the runtime check, which may need group-specific settings).
  */
-function resolveGroups(students, config) {
+function resolveGroups(students, config, manualGroups = {}) {
     // Only labs with per-group settings get a log section — for labs whose variations are just
     // app names (most CS233JS labs), the group changes nothing about how a student is checked.
     if (!hasGroupOverrides(config)) {
-        for (const s of students) s.group = resolveStudentGroup(s, config);
+        for (const s of students) s.group = resolveStudentGroup(s, config, manualGroups);
         return;
     }
     console.log('--- Lab Group Resolution ---');
     for (const s of students) {
-        s.group = resolveStudentGroup(s, config);
+        s.group = resolveStudentGroup(s, config, manualGroups);
         const g = s.group;
         if (!g.letter) console.log(`  ${s.name}: group UNKNOWN — ${g.reason}`);
+        else if (g.source === 'instructor') console.log(`  ${s.name}: group ${g.letter} (set by instructor${g.conflict ? `; the review form says ${g.formLetter}` : ''})`);
         else if (g.conflict) console.log(`  ${s.name}: group ${g.letter} (from review form; the code looks like group ${g.detected})`);
         else console.log(`  ${s.name}: group ${g.letter} (${g.source === 'codeReview' ? 'review form' : 'detected from code'})`);
     }

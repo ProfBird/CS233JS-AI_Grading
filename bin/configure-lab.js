@@ -19,7 +19,7 @@ import {
 import { promptRubricRows, promptRubricCriteria, copyRubric, buildMappingEntry }
     from '../src/lib/config_prompts.js';
 
-import { selectModel } from '../src/lib/llm_client.js';
+import { selectModel } from '../src/lib/llm_models.js';
 import { TUI } from '../src/lib/tui.js';
 
 const CONFIGS_DIR       = path.join(import.meta.dirname, '..', 'configs');

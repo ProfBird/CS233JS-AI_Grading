@@ -634,15 +634,30 @@ async function preflight(config = {}) {
     } catch (e) {
         return { available: false, hint: `Python interpreter not found (tried "${pythonBin(config)}"). Set config.toolchains.python to the correct command.` };
     }
+    const warnings = [];
+    // Newer syntax (match statements, 3.12 f-strings) is a false "syntax error" on an old interpreter.
+    try {
+        const { stdout, stderr } = await execFileAsync(pythonBin(config), ['--version'], { timeout: 5000 });
+        const m = /Python (\d+)\.(\d+)/.exec(`${stdout}${stderr}`);
+        if (m && (Number(m[1]) < 3 || (Number(m[1]) === 3 && Number(m[2]) < 12))) {
+            warnings.push(`Python ${m[1]}.${m[2]} is older than 3.12 — students' newer syntax (match, new f-strings) will show as false syntax errors. Point toolchains.python at a newer interpreter (e.g. one installed by uv).`);
+        }
+    } catch (e) { /* the check above already reported a missing interpreter */ }
+    if ((config.mappings || []).some(m => m.type === 'lint')) {
+        const ruffOk = async (cmd, args) => { try { await execFileAsync(cmd, args, { timeout: 8000 }); return true; } catch (e) { return false; } };
+        if (!await ruffOk(pythonBin(config), ['-m', 'ruff', '--version']) && !await ruffOk('ruff', ['--version'])) {
+            warnings.push('ruff not found — lint rows will say NEEDS MANUAL CHECK. Install it (uv tool install ruff, or pip install ruff).');
+        }
+    }
     const runsCode = config.runtimeCheck === 'run_check' || (config.mappings || []).some(m => m.type === 'test_check');
     if (runsCode) {
         try {
             await execFileAsync(uvBin(config), ['--version'], { timeout: 5000 });
         } catch (e) {
-            return { available: true, hint: '', warning: `uv not found (tried "${uvBin(config)}") — uv projects (pyproject.toml) can't be run or tested. Install uv (https://docs.astral.sh/uv/) or set toolchains.uv.` };
+            warnings.push(`uv not found (tried "${uvBin(config)}") — uv projects (pyproject.toml) can't be run or tested. Install uv (https://docs.astral.sh/uv/) or set toolchains.uv.`);
         }
     }
-    return { available: true, hint: '' };
+    return warnings.length > 0 ? { available: true, hint: '', warning: warnings.join('\n  WARNING: ') } : { available: true, hint: '' };
 }
 
 export default {

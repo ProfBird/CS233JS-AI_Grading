@@ -139,6 +139,16 @@ async function runPreflight(config) {
 async function runPipeline(students, config, dirs, options) {
     await runPreflight(config);
 
+    // config.skipStudents: names to leave out entirely (placeholder/test accounts, withdrawn students).
+    const skip = new Set((config.skipStudents || []).map(n => String(n).trim().toLowerCase()));
+    if (skip.size > 0) {
+        const skipped = students.filter(st => skip.has(String(st.name).trim().toLowerCase()));
+        if (skipped.length > 0) {
+            console.log(`  Skipping ${skipped.length} student(s) listed in skipStudents: ${skipped.map(st => st.name).join(', ')}\n`);
+            students = students.filter(st => !skipped.includes(st));
+        }
+    }
+
     const { toGrade, alreadyDone } = filterAlreadyGraded(students, config, options);
     if (alreadyDone.length > 0) {
         console.log(`  Skipping ${alreadyDone.length} already-graded: ${alreadyDone.join(', ')}\n`);
@@ -149,7 +159,10 @@ async function runPipeline(students, config, dirs, options) {
     const phaseDirs = { ...dirs, labName: options.labName, stepName: options.stepName };
     for (const phase of PHASES) {
         if (!phase.when(config)) continue;
+        const started = Date.now();
         await phase.run(toGrade, config, phaseDirs);
+        const seconds = Math.round((Date.now() - started) / 1000);
+        if (seconds >= 10) console.log(`  (${phase.name} took ${seconds}s)`);
     }
 
     let generateSummary;

@@ -476,6 +476,7 @@ describe('preflight', () => {
         expect(runs.available).toBe(true);
         expect(runs.warning).toMatch(/uv not found/);
         const lintOnly = await pyAdapter.preflight({ toolchains, runtimeCheck: 'none', mappings: [{ type: 'lint' }] });
-        expect(lintOnly).toEqual({ available: true, hint: '' });
+        expect(lintOnly.available).toBe(true);
+        expect(lintOnly.warning || '').not.toMatch(/uv not found/);
     }, 30000);   // two interpreter/tool start-ups — over the 5 s default on a cold Windows runner
 });

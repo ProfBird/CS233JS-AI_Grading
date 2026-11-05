@@ -1371,6 +1371,12 @@ describe('test_check handler', () => {
         expect(handler(map, student)).toEqual({ score: 0, comment: 'No tests found', keepComment: true });
     });
 
+    it('flags a very low pass rate for review (the program may follow a different spec)', () => {
+        const result = handler({ maxScore: 12 }, { testCheck: { total: 15, passed: 2, failures: ['a'] } });
+        expect(result.comment).toMatch(/2\/15 tests passed.*REVIEW: low pass rate/);
+        expect(handler({ maxScore: 12 }, { testCheck: { total: 4, passed: 2, failures: ['a'] } }).comment).not.toMatch(/REVIEW/);
+    });
+
     it('scores 0 and flags for manual check when testCheck is absent', () => {
         expect(handler(map, {})).toEqual({ score: 0, comment: 'NEEDS MANUAL CHECK (no test check data)', keepComment: true });
     });

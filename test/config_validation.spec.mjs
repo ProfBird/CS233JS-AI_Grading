@@ -43,6 +43,14 @@ describe('validateConfig', () => {
         expect(() => validateConfig(config, 'Lab03')).toThrow(/rubricName/);
     });
 
+    it('checks skipStudents is a list of names', () => {
+        const config = validBaseConfig();
+        config.skipStudents = ['Test Student'];
+        expect(() => validateConfig(config, 'Lab03')).not.toThrow();
+        config.skipStudents = 'Test Student';
+        expect(() => validateConfig(config, 'Lab03')).toThrow(/skipStudents/);
+    });
+
     it('throws when runtimeCheck is missing', () => {
         const config = validBaseConfig();
         delete config.runtimeCheck;

@@ -407,6 +407,8 @@ AI_Grading/   ← repo root (ESM; "type": "module")
 
 ### Config schema (configs/{Course}/{AssignmentName}/{assignmentname}_config.json)
 
+  - skipStudents: string[] (optional) — student names (any letter case) left out of grading entirely, e.g. a placeholder "Test Student" or a withdrawn student; `run_pipeline.js` drops them before any phase.
+
   - extractOnly: boolean (optional) — when `true`, only the extraction phase runs; no runtime check, analysis, lint, or grade generation. Useful for previewing what was submitted before configuring the full rubric.
 
   - textReport: boolean (optional) — when `true`, this lab always produces per-student `.txt` grade reports (same effect as passing `--text-report` every run) and `rubricName` becomes optional. Used by courses with no rubric spreadsheets (all CIS195 labs).

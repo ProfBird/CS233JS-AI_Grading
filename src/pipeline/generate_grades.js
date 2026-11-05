@@ -782,9 +782,12 @@ registerHandler('test_check', (map, student) => {
 
     const failureList = (tc.failures || []).slice(0, 5).join(', ');
     const score = Math.round(map.maxScore * tc.passed / tc.total);
+    // A very low pass rate more often means the program follows a different spec than the
+    // checks assume (other inputs, other wording) than that it is badly written: flag it.
+    const lowNote = tc.passed / tc.total < 0.5 ? ' — REVIEW: low pass rate; the program may follow a different spec than the checks expect' : '';
     return {
         score,
-        comment: `${tc.passed}/${tc.total} tests passed${failureList ? ` (failing: ${failureList})` : ''}`,
+        comment: `${tc.passed}/${tc.total} tests passed${failureList ? ` (failing: ${failureList})` : ''}${lowNote}`,
         keepComment: true,
     };
 });

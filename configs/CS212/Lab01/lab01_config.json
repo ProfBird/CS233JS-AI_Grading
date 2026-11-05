@@ -5,6 +5,7 @@
   "summaryCell": "A2",
   "graderCell": "E1",
   "language": "python",
+  "skipStudents": ["Test Student"],
   "runtimeCheck": "build",
   "mappings": [
     {

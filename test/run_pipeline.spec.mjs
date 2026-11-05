@@ -162,4 +162,16 @@ describe('runPipeline — orchestration with no extracted code', () => {
             expect(existsSync(join(artifactsDir, report)), report).toBe(true);
         }
     });
+
+    it('leaves out students listed in skipStudents (any letter case)', async () => {
+        const students = [{ name: 'Test Student', error: 'boom' }, { name: 'Real One', error: 'bad zip' }];
+        const config = { runtimeCheck: 'build', mappings: [], skipStudents: ['test student'] };
+        const result = await runPipeline(
+            students, config, { artifactsDir, labConfigDir },
+            { regrade: true, skipRubric: true, textReport: false, labName: 'TestLab', modeLabel: 'NORMAL' }
+        );
+        const issues = result.errors.map(e => e.student);
+        expect(issues).toContain('Real One');
+        expect(issues).not.toContain('Test Student');
+    });
 });

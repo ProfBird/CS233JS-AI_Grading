@@ -279,6 +279,12 @@ function configErrors(config) {
         });
     }
 
+    // --- skipStudents (names left out of grading) ---
+    if (config.skipStudents !== undefined
+        && !(Array.isArray(config.skipStudents) && config.skipStudents.every(isNonEmptyString))) {
+        errors.push('skipStudents: must be an array of student names');
+    }
+
     // --- llmCheck (llm_check rows' AI model) ---
     if (config.llmCheck !== undefined) {
         const lc = config.llmCheck;

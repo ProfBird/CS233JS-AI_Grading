@@ -274,7 +274,7 @@ configs/{Course}/{AssignmentName}/
 - `rubricName` in each step config is the filename only (e.g. `"CS233JS_DevEnvAndStaticSite_Rubric.xlsm"`), resolved relative to that step's subdirectory.
 - Run: `node bin/grade.js TermProject DevEnvAndStaticSite` (or just `node bin/grade.js TermProject` for an interactive step picker).
 - If the labRoot has a matching step subdirectory (e.g. `<labRoot>/{Course}/TermProject/DevEnvAndStaticSite/`), submissions are read from there. If not, submissions are read from `<labRoot>/{Course}/TermProject/` directly — the labRoot step layout is optional.
-- `configure-lab.js` asks "Will there be multiple sets of submissions for this lab?" when creating a brand-new lab; run it once per step to set up each step's config.
+- `configure-lab.js` asks "Is this assignment turned in in more than one stage (e.g. Beta and Production)?" when creating a brand-new lab; run it once per step to set up each step's config.
 
 **Converting a flat lab to multi-step:**
 1. `mkdir configs/{Course}/{Lab}/{StepName}`

@@ -478,11 +478,13 @@ async function main() {
             }
         } else if (!fs.existsSync(labTopDir)) {
             // Brand-new lab — ask upfront
+            tui.print('\n  Some assignments are turned in in stages, each graded on its own rubric');
+            tui.print('  (e.g. Proposal, Beta, then Production). Each stage is a "step" with its own config.');
             const multi = await tui.askBoolean(
-                'Will there be multiple sets of submissions for this lab?', false);
+                'Is this assignment turned in in more than one stage (e.g. Beta and Production)?', false);
             if (multi) {
                 while (true) {
-                    const raw = (await tui.ask('Step name (e.g. TermProjectProposal)')).trim();
+                    const raw = (await tui.ask('Name of the first stage to set up (e.g. Beta, Production, Proposal)')).trim();
                     if (!raw) { tui.print('  Step name is required.'); continue; }
                     if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(raw)) {
                         tui.print('  Invalid name. Use letters, numbers, underscores, or hyphens.');
@@ -491,6 +493,7 @@ async function main() {
                     stepName = raw;
                     break;
                 }
+                tui.print('  (Run this wizard again for each other stage.)');
             }
         }
 

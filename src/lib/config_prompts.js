@@ -282,8 +282,8 @@ async function buildMappingEntry(driver, type, rubricRow, currentValues = {}) {
  * Ask whether the assignment has versions (lab groups A/B/C…, each building something
  * different) and, if so, each group's letter and app name. Returns the new `variations`
  * object, `null` to remove an existing section, or `undefined` to leave it untouched.
- * A group that already exists keeps its hand-edited `overrides`; its app name is the
- * default. Per-group overrides (run settings, tests, features) are not prompted for —
+ * Each existing group is offered first ("Keep version C?" — no drops it and its overrides);
+ * a kept group keeps its hand-edited `overrides`, with its app name as the default. Per-group overrides (run settings, tests, features) are not prompted for —
  * they vary too much; the summary tells the user to add them to the config file.
  */
 async function promptVariations(driver, existing) {
@@ -296,9 +296,29 @@ async function promptVariations(driver, existing) {
     }
     const result = {};
     const letters = Object.keys(existing || {});
+    const removed = new Set();
     let i = 0;
     while (true) {
-        const defLetter = letters[i] || String.fromCharCode(65 + Object.keys(result).length);
+        // An existing version can be dropped (e.g. group C isn't offered this term).
+        if (i < letters.length) {
+            const old = existing[letters[i]] || {};
+            const keep = await driver.askBoolean(`Keep version ${letters[i]}${old.appName ? ` (${old.appName})` : ''}?`, true);
+            if (!keep) {
+                driver.print(`  Version ${letters[i]} removed (its overrides too).`);
+                removed.add(letters[i]);
+                i++;
+                const more = i < letters.length || await driver.askBoolean('Add another version?', false);
+                if (!more) break;
+                continue;
+            }
+        }
+        let defLetter = letters[i];
+        if (!defLetter) {
+            // The next letter not already used (A, B, C … skipping ones kept above).
+            let code = 65;
+            while (result[String.fromCharCode(code)]) code++;
+            defLetter = String.fromCharCode(code);
+        }
         let letter;
         while (true) {
             letter = (await driver.ask('Version letter (e.g. A)', defLetter)).trim().toUpperCase();
@@ -306,14 +326,16 @@ async function promptVariations(driver, existing) {
             if (result[letter]) { driver.print(`  Version ${letter} is already entered.`); continue; }
             break;
         }
-        const old = existing?.[letter] || {};
+        // A removed version re-entered under its old letter starts fresh (no old overrides).
+        const old = (!removed.has(letter) && existing?.[letter]) || {};
         const appName = (await driver.ask(`Version ${letter}: app name (used to detect it from the student's code)`, old.appName || '')).trim();
         result[letter] = { ...old, ...(appName ? { appName } : {}) };
         i++;
         const more = i < letters.length || await driver.askBoolean('Add another version?', false);
         if (!more) break;
     }
-    return result;
+    // Every version removed: drop the section.
+    return Object.keys(result).length > 0 ? result : null;
 }
 
 /**

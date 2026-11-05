@@ -48,8 +48,12 @@ const COMMENT_GRAMMAR = {
     ],
 };
 const stripComments = makeCommentStripper(COMMENT_GRAMMAR);
-// Docstrings count as comment text for comments-only checks (file-header "Author:" blocks).
-const extractComments = makeCommentExtractor({ ...COMMENT_GRAMMAR, docPatterns: [COMMENT_GRAMMAR.protectPatterns[0]] });
+// The MODULE docstring (the file's first statement — only blank lines, comments, a shebang or
+// encoding line may come before it) counts as comment text for comments-only checks: it's where
+// a file-header "Author: … Date: …" block conventionally lives. Function/class docstrings don't
+// count — a Google-style "Args: name: … date: …" section would otherwise pass as a name and date.
+const MODULE_DOCSTRING_RE = /^\uFEFF?(?:[ \t]*(?:#[^\n]*)?\r?\n)*[ \t]*[rRuU]?("""[\s\S]*?"""|'''[\s\S]*?''')/g;
+const extractComments = makeCommentExtractor({ ...COMMENT_GRAMMAR, docPatterns: [MODULE_DOCSTRING_RE] });
 
 // ---------- File collection ----------
 function getAllFiles(dirPath, exclusions = DEFAULT_EXCLUSIONS) {

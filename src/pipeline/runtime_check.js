@@ -405,6 +405,22 @@ async function checkStudentScripts(extractedDir, scriptNames, adapter = resolveA
 
 // ========== Test check (delegates to the language adapter's test runner) ==========
 
+// The config tests use to find the project: its `runCheck.entry` names the program files
+// (detectProject places a loose project's folder at the entry it finds). With runCheck as a
+// list of runs there is no single entry, which left the folder to a guess (main.py, else the
+// shallowest .py) — so look for any run's entry, then the test script itself ("script" mode).
+// If none of them is found, the project is the whole submission.
+function testDetectionConfig(config) {
+    const runs = [].concat(config.runCheck || []);
+    const tc = Array.isArray(config.testCheck) ? {} : (config.testCheck || {});
+    const entries = [
+        ...runs.flatMap(r => [].concat((r && r.entry) || [])),
+        ...(tc.mode === 'script' ? [].concat(tc.entry || []) : []),
+    ];
+    if (entries.length === 0) return config;   // nothing names a file: detectProject's default
+    return { ...config, runCheck: { ...(Array.isArray(config.runCheck) ? {} : config.runCheck), entry: entries } };
+}
+
 // Runs when at least one test_check mapping is configured and the adapter supports
 // running tests (pytest/dotnet test/CTest — wired up per-language in later phases).
 // Dependencies are installed first (a cached environment makes this free after run_check),
@@ -432,7 +448,7 @@ async function checkStudentTests(extractedDir, adapter, config = {}, ctx = {}) {
         return { ...combined, runs };
     }
     if (!adapter.runTests) return { error: `Test running is not supported for the "${adapter.language}" language yet` };
-    const projects = adapter.detectProject(extractedDir, config);
+    const projects = adapter.detectProject(extractedDir, testDetectionConfig(config));
     if (projects.length === 0) return { error: 'No project found' };
     const project = projects[0];
     const installErrors = await installIfNeeded(adapter, project, config);
@@ -643,5 +659,5 @@ export default async function(students, config, labDir, configDir = null) {
 
 export {
     findAllIndexHtmlDirs, findDistIndexHtmlDirs, findPackageJsonDirs, runNpmScript, checkStudentScripts,
-    registerCheckStrategy, getCheckStrategy, VALID_RUNTIME_MODES, checkStudentTests,
+    registerCheckStrategy, getCheckStrategy, VALID_RUNTIME_MODES, checkStudentTests, testDetectionConfig,
 };

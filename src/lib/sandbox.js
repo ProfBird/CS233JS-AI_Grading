@@ -102,7 +102,8 @@ function overlaySupportFiles(supportFiles, runDir) {
 // The grader's own credentials (Canvas token, LLM API keys) must not be readable by student
 // code through its environment. Removes them; everything else (PATH, HOME, locale, …) is kept
 // so interpreters and toolchains still work.
-const SECRET_ENV_RE = /(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|CREDENTIALS?)$/i;
+// Also any *_KEY (DEEPSEEK_KEY, OPENAI_KEY, SSH_KEY …) and *_PAT (a GitHub personal access token).
+const SECRET_ENV_RE = /(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|CREDENTIALS?|_KEY|_PAT)$/i;
 function scrubEnv(env) {
     const out = {};
     for (const [k, v] of Object.entries(env)) {

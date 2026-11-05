@@ -444,13 +444,16 @@ export async function resolveGradeSetup(driver, {
         if (canvasFlag || !assignmentId) {
             driver.print('\n--- Canvas Setup ---');
             let canvasCourse = null;
-            // A course ID saved on the course (from an earlier lab) is reused without
-            // asking: just fetch the course to confirm it still resolves. Only if that
-            // fails do we fall through to the prompt below.
+            // A course ID saved on the course (from an earlier lab) is offered first: fetch it
+            // and confirm with one yes/no (default yes). Canvas makes a new course each term and
+            // last term's course still loads, so it must never be reused silently. "No", or a
+            // course that won't load, falls through to the prompt below.
             if (courseId) {
                 try {
-                    canvasCourse = await canvasClient.getCourse(courseId, canvasConfig);
-                    driver.print(`  Canvas course: "${canvasCourse.name}" (id ${canvasCourse.id}, saved for ${course.courseName})`);
+                    const saved = await canvasClient.getCourse(courseId, canvasConfig);
+                    driver.print(`  Saved Canvas course for ${course.courseName}: "${saved.name}" (id ${saved.id})`);
+                    if (await driver.askBoolean('Use this Canvas course?', true)) canvasCourse = saved;
+                    else driver.print('  Okay — enter the Canvas course ID to use (e.g. this term\'s course).');
                 } catch (e) {
                     driver.print(`  Saved Canvas course ${courseId} could not be loaded: ${canvasClient.sanitize(e.message, canvasConfig.token).slice(0, 200)}`);
                     canvasCourse = null;

@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { runStudentArtifact } from '../src/lib/sandbox.js';
+import { runStudentArtifact, scrubEnv } from '../src/lib/sandbox.js';
 
 describe('runStudentArtifact — direct mode', () => {
     it('captures stdout and a zero exit code on success', async () => {
@@ -153,5 +153,16 @@ describe('runStudentArtifact — project copy, support files, environment', asyn
         } finally {
             for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         }
+    });
+});
+
+describe('scrubEnv', () => {
+    it('removes token/key/secret-style variables and keeps the rest', () => {
+        const env = {
+            PATH: '/bin', HOME: '/h', LANG: 'C', PYTHONPATH: 'x',
+            CANVAS_URL: 'u', GITHUB_TOKEN: 't', OPENAI_API_KEY: 'k', LLM_API_KEY: 'k',
+            DEEPSEEK_KEY: 'k', OPENAI_KEY: 'k', GH_PAT: 'p', AWS_SECRET_ACCESS_KEY: 's', DB_PASSWORD: 'p',
+        };
+        expect(Object.keys(scrubEnv(env)).sort()).toEqual(['HOME', 'LANG', 'PATH', 'PYTHONPATH']);
     });
 });

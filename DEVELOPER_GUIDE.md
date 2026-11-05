@@ -374,7 +374,7 @@ every current and future build/run/test strategy must go through.
   **only where the student has no file** at that path; a missing source returns
   `{ setupError: true }` instead of running.
 - **Environment:** the child gets `scrubEnv(process.env)` — the grader's environment minus
-  anything matching `/(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|CREDENTIALS?)$/i` or
+  anything matching `/(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|CREDENTIALS?|_KEY|_PAT)$/i` or
   starting `CANVAS_` — plus `execConfig.env`. Student code can't read the grader's Canvas
   token or LLM keys.
 - Configured via `config.execution: { mode, timeoutMs, cwd }` (plus `envCacheDir` /
@@ -663,7 +663,7 @@ Regex-based analysis of student source files, driven by the resolved language ad
 - `getAllFiles()` — recursive directory walk (skips symlinks to prevent infinite loops from circular references)
 - `countFeatures(files, features, adapter)` — counts regex matches per feature. Each feature is filtered to matching files via its `fileRegex` field, defaulting to the resolved adapter's `sourceExtensions` (`.js`/`.mjs` for JS, `.py` for Python, etc. — no longer hardcoded to `.js`). Source files (per `sourceExtensions`) have comments stripped via `adapter.stripComments()` before matching; other file types are searched as-is. The `adapter` parameter defaults to the JS adapter, so existing 2-arg callers (and tests) are unaffected.
 - `findPartDir()` — multi-pass search for part subdirectories (game name matching, folder pattern fallback)
-- `checkDeveloperComments(files, studentName, adapter, baseDir, { ignoreCommentsBy })` — for each non-empty source file (per `sourceExtensions`), reads **comment text only** via `adapter.extractComments` (Python docstrings count) and records `{ path, name, date, ai }`: `name` = an author/name keyword or the student's first/last name as a whole word; `date` = a date keyword or an actual date (`1/5/2026`, `2026-01-05`, `Jan 5`, `Fall 2025`); `ai` = an AI-use disclosure in the file's first 40 lines. Comment lines containing an `ignoreCommentsBy` string (collected from the lab's `developer_comments` mappings) are dropped unless they also name the student. Stored as `analysis.developerComments` (`{ filesChecked, filesWith, missing[], files[] }`); `analysis.hasDeveloperComments` = any file with a name or date.
+- `checkDeveloperComments(files, studentName, adapter, baseDir, { ignoreCommentsBy })` — for each non-empty source file (per `sourceExtensions`), reads **comment text only** via `adapter.extractComments` (a Python module docstring counts; function/class docstrings don't) and records `{ path, name, date, ai }`: `name` = an author/name keyword or the student's first/last name as a whole word; `date` = a date keyword or an actual date (`1/5/2026`, `2026-01-05`, `Jan 5`, `Fall 2025`); `ai` = an AI-use disclosure in the file's first 40 lines. Comment lines containing an `ignoreCommentsBy` string (collected from the lab's `developer_comments` mappings) are dropped unless they also name the student. Stored as `analysis.developerComments` (`{ filesChecked, filesWith, missing[], files[] }`); `analysis.hasDeveloperComments` = any file with a name or date.
 - Excludes `.venv`/`venv`/`__pycache__` (as well as `node_modules`/`dist`/`.git`) from analysis by path segment
 - Reads source files through `lib/notebook.js`'s `readSourceFile()`, so a Jupyter/Colab notebook (`.ipynb`, one of the Python adapter's `sourceExtensions`) is analyzed as a Python script — feature regexes (use a `fileRegex` like `\\.(py|ipynb)$`), developer comments (markdown cells count as comments) and import scanning all see its cells
 - Checks for code review documents
@@ -780,7 +780,7 @@ tool (`lint`, `install`, `build`, `runTests`, `preflight`) accept an optional tr
 
 Every adapter also exports `extractComments` — the inverse of `stripComments`, built from
 the same grammar options (`src/lib/comment_stripper.js`'s `makeCommentExtractor`; Python
-also counts docstrings) — so comment-only checks like `developer_comments` see exactly what
+also counts the module docstring) — so comment-only checks like `developer_comments` see exactly what
 stripping removes. `runTests(project, config, execOptions)` receives the sandbox options
 `runtime_check.js` uses for `run_check`; an adapter that executes student code should pass
 them to `runStudentArtifact`.
@@ -1055,7 +1055,7 @@ which case every field below defaults to the directory name.
 | `courseName` | Display name shown in `bin/grade.js`'s course-selection menu and assignment-list header |
 | `courseCode` | Shown in the interactive banner title (`{courseCode} AI Grader v1.0`) |
 | `rubricPrefix` | Used when suggesting or auto-generating a rubric filename (`{rubricPrefix}_{Lab}_Rubric.xlsm`) — `copyRubric()` (`lib/config_prompts.js`) and `bin/configure-lab.js`'s auto-copy path both take it as a parameter now, replacing what used to be a hardcoded `"CS233JS_"` literal |
-| `canvasCourseId` | The course's Canvas course ID, resolved once via `--canvas`'s interactive setup (`getCourse` + name confirmation) and written here by `writeCourseConfig()` so every lab in the course reuses it without re-prompting; an individual lab's config only stores its own `canvas.assignmentId`. `writeCourseConfig()` merges into the existing file, so this write keeps `defaults` and any other fields |
+| `canvasCourseId` | The course's Canvas course ID, resolved once via `--canvas`'s interactive setup (`getCourse` + name confirmation) and written here by `writeCourseConfig()` so every lab in the course offers it first (`Use this Canvas course?`, default yes — Canvas makes a new course each term and last term's still loads, so it is never reused silently); an individual lab's config only stores its own `canvas.assignmentId`. `writeCourseConfig()` merges into the existing file, so this write keeps `defaults` and any other fields |
 | `defaults` | Course-wide lab-config settings — `applyCourseDefaults(labConfig, courseConfig)` (`lab_config.js`), called by `grade_setup.js` right after reading a lab/step config and before toolchain merging, handler-module loading and validation. Settings the lab config doesn't set come from here; the lab wins where both do; nested plain objects merge recursively (`mergeConfig`), arrays and scalars from the lab replace the course's. In memory only — every write-back to a lab config (`canvas.assignmentId`, `rubricName`) re-reads the file from disk. May not contain `COURSE_DEFAULTS_FORBIDDEN_KEYS` (`mappings`, `rubricName`, `canvas`, `handlerModules`) — `applyCourseDefaults` throws, surfaced as a `SetupError`. CS212 sets `language` and `execution.cwd` here |
 
 A course can also carry a course-wide lint ruleset next to `course_config.json` —

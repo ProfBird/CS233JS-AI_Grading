@@ -55,8 +55,9 @@ function makeCommentStripper({ blockComment = null, lineComment = null, protectP
  *
  * @param {Object} opts - same as makeCommentStripper, plus:
  * @param {RegExp[]} [opts.docPatterns] - literal grammars whose text also counts as comment
- *        text (global flag) — e.g. Python's triple-quoted docstrings, where file-header
- *        "Author: ..." blocks conventionally live. Collected before protectPatterns run.
+ *        text (global flag; when it has a capture group, group 1 is the text) — e.g. Python's
+ *        module docstring, where file-header "Author: ..." blocks conventionally live.
+ *        Collected before protectPatterns run.
  * @returns {(code: string) => string}
  */
 function makeCommentExtractor({ blockComment = null, lineComment = null, protectPatterns = [], docPatterns = [] } = {}) {
@@ -64,7 +65,9 @@ function makeCommentExtractor({ blockComment = null, lineComment = null, protect
         const comments = [];
         if (blockComment) code = code.replace(blockComment, m => { comments.push(m); return ''; });
         for (const re of docPatterns) {
-            for (const m of code.matchAll(re)) comments.push(m[0]);
+            // A pattern with a capture group contributes just that group (e.g. the docstring
+            // itself, without the lines a start-of-file pattern had to skip to reach it).
+            for (const m of code.matchAll(re)) comments.push(m[1] ?? m[0]);
         }
         const strings = [];
         for (const re of protectPatterns) {

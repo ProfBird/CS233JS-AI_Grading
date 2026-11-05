@@ -1245,12 +1245,34 @@ describe('promptVariations', () => {
 
     it('shows existing values as defaults and keeps each group\'s overrides', async () => {
         const existing = { A: { appName: 'Old A', overrides: { runCheck: { entry: 'a.py' } } } };
-        const d = _variationDriver(['y', '', 'New A', 'n'], { strict: true });
+        const d = _variationDriver(['y', '', '', 'New A', 'n'], { strict: true });   // has versions, keep A, letter, app name, add another
         const r = await promptVariations(d, existing);
         expect(r).toEqual({ A: { appName: 'New A', overrides: { runCheck: { entry: 'a.py' } } } });
         const asks = d.calls.filter(c => c.method === 'ask');
         expect(asks[0].def).toBe('A');
         expect(asks[1].def).toBe('Old A');
+    });
+
+    it('can drop one existing version and keep the others', async () => {
+        const existing = {
+            A: { appName: 'Sections', overrides: { runCheck: { entry: 'a.py' } } },
+            B: { appName: 'Flights' },
+            C: { appName: 'Vans', overrides: { runCheck: { entry: 'c.py' } } },
+        };
+        // has versions; keep A (letter, name); drop B; keep C (letter, name); add another: no
+        const d = _variationDriver(['y', '', '', '', 'n', '', '', '', 'n'], { strict: true });
+        expect(await promptVariations(d, existing)).toEqual({
+            A: { appName: 'Sections', overrides: { runCheck: { entry: 'a.py' } } },
+            C: { appName: 'Vans', overrides: { runCheck: { entry: 'c.py' } } },
+        });
+    });
+
+    it('dropping every existing version removes the section; a re-added letter starts fresh', async () => {
+        const existing = { A: { appName: 'Old', overrides: { runCheck: { entry: 'a.py' } } } };
+        expect(await promptVariations(_variationDriver(['y', 'n', 'n'], { strict: true }), existing)).toBeNull();
+        // drop A, add another: yes, letter A, new name, add another: no
+        expect(await promptVariations(_variationDriver(['y', 'n', 'y', 'A', 'New', 'n'], { strict: true }), existing))
+            .toEqual({ A: { appName: 'New' } });
     });
 
     it('answering no on a lab with versions keeps them unless removal is confirmed', async () => {

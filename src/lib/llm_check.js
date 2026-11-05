@@ -107,12 +107,20 @@ function parseVerdict(text, maxScore) {
 /** The text with the student's full name and each name part (3+ letters) replaced by [STUDENT]; also e-mail addresses ([EMAIL]), the account in a GitHub/GitLab URL ([USER]) and any extra terms. */
 function redactNames(text, name, extraTerms = []) {
     const escape = v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const parts = String(name || '').split(/[\s,]+/).filter(p => p.replace(/[^A-Za-z]/g, '').length >= 3);
-    const patterns = [];
-    if (parts.length > 1) patterns.push(parts.map(escape).join('\\s+'));
-    for (const p of parts) {
-        patterns.push(escape(p));
-        for (const q of p.split(/[-']/)) if (q.length >= 3 && q !== p) patterns.push(escape(q));
+    // Letters in any script count (José, Zoë, Ñúñez) — JS's \b only knows A-Z, so word edges are
+    // Unicode-aware lookarounds, as in analyze_code.js's student-name check.
+    const letters = p => (p.match(/\p{L}/gu) || []).length;
+    const allParts = String(name || '').split(/[\s,]+/).filter(p => letters(p) > 0);
+    const patterns = [];   // matched case-insensitively
+    const exact = [];      // short parts ("Li", "Bo"): only as capitalized in the name, so code like `li`/`bo` survives
+    // The full name always, built from every part — "Bo Wu" has no part long enough on its own.
+    if (allParts.length > 1) patterns.push(allParts.map(escape).join('\\s+'));
+    for (const p of allParts) {
+        (letters(p) >= 3 ? patterns : exact).push(escape(p));
+        for (const q of p.split(/[-']/)) {
+            if (q === p || letters(q) === 0) continue;
+            (letters(q) >= 3 ? patterns : exact).push(escape(q));
+        }
     }
     // Anything else that identifies a person: e-mail addresses, the account in a GitHub/GitLab URL,
     // and any names the instructor lists in llmCheck.redactTerms (a lab partner, a nickname).
@@ -120,9 +128,11 @@ function redactNames(text, name, extraTerms = []) {
     let out = text
         .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]')
         .replace(/\b((?:github|gitlab)\.com\/)[A-Za-z0-9-]+/gi, '$1[USER]');
+    const edge = pat => `(?<![\\p{L}\\p{N}_])(?:${pat})(?![\\p{L}\\p{N}_])`;
     for (const pat of patterns.sort((x, y) => y.length - x.length)) {
-        out = out.replace(new RegExp(`\\b${pat}\\b`, 'gi'), '[STUDENT]');
+        out = out.replace(new RegExp(edge(pat), 'giu'), '[STUDENT]');
     }
+    for (const pat of exact) out = out.replace(new RegExp(edge(pat), 'gu'), '[STUDENT]');
     return out;
 }
 

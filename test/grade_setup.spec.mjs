@@ -479,12 +479,34 @@ describe('resolveGradeSetup — Canvas course ID reuse', () => {
             ? json([{ id: 77, name: 'Lab03', published: true, submission_types: ['online_upload'] }])
             : json({ id: 3878, name: 'CIS 195 Fall 2026', workflow_state: 'available' })));
 
-        const driver = mockDriver(['', ''], { strict: true });   // assignment pick, grading options
+        const driver = mockDriver(['', '', ''], { strict: true });   // use saved course (yes), assignment pick, grading options
         const setup = await resolveGradeSetup(driver, opts({ argv: ['Lab03', '--canvas'] }));
 
         const asked = driver.calls.filter(c => c.method === 'ask').map(c => c.prompt);
         expect(asked).not.toContain('Canvas course ID');
+        expect(driver.calls.some(c => c.method === 'askBoolean' && c.question === 'Use this Canvas course?')).toBe(true);
         expect(setup.courseId).toBe(3878);
         expect(setup.assignmentId).toBe(77);
+    });
+
+    it('lets the instructor switch to another course instead of the saved one (a new term)', async () => {
+        writeCourseConfig('CIS195', { courseName: 'CIS195', courseCode: 'CIS195', rubricPrefix: 'CIS195', canvasCourseId: 3878 });
+        writeLab('CIS195', 'Lab03');
+        writeLocalConfig({ ...oneTermConfig(), canvas: { url: 'https://canvas.example.edu', token: 'tok' } });
+
+        const json = (body) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => body, text: async () => '' });
+        vi.stubGlobal('fetch', vi.fn(async (url) => {
+            const u = String(url);
+            if (u.includes('/assignments')) return json([{ id: 88, name: 'Lab03', published: true, submission_types: ['online_upload'] }]);
+            return u.includes('/courses/4000')
+                ? json({ id: 4000, name: 'CIS 195 Winter 2027', workflow_state: 'available' })
+                : json({ id: 3878, name: 'CIS 195 Fall 2026', workflow_state: 'available' });
+        }));
+
+        // no to the saved course, new ID, yes it's right, assignment pick, grading options
+        const driver = mockDriver(['n', '4000', 'y', '', ''], { strict: true });
+        const setup = await resolveGradeSetup(driver, opts({ argv: ['Lab03', '--canvas'] }));
+        expect(setup.courseId).toBe(4000);
+        expect(setup.assignmentId).toBe(88);
     });
 });

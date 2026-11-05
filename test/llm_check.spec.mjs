@@ -309,6 +309,14 @@ describe('redactNames and the answer cache', () => {
         expect(redactNames('print("hi")', 'Al Bo')).toBe('print("hi")');   // too-short parts are left alone
     });
 
+    it('handles accented names and short name parts', () => {
+        expect(redactNames('# by José, file by García', 'José García')).toBe('# by [STUDENT], file by [STUDENT]');
+        expect(redactNames('# Author: Zoë Li', 'Zoë Li')).toBe('# Author: [STUDENT]');
+        // Short parts are hidden only as capitalized words, so lowercase code identifiers survive.
+        expect(redactNames('# by Wu, Bo Wu\nli = [1]', 'Bo Wu')).toBe('# by [STUDENT], [STUDENT]\nli = [1]');
+        expect(redactNames('# Li wrote this\nfor li in items: pass', 'Mei Li')).toBe('# [STUDENT] wrote this\nfor li in items: pass');
+    });
+
     it('sends no student name to a cloud model, and asks again only when something changed', async () => {
         const gradeDir = join(dir, 'grade'); mkdirSync(gradeDir, { recursive: true });
         write(dir, 'code/a.py', '# Ana Lopez\nx = 1\n');

@@ -276,6 +276,14 @@ describe('checkDeveloperComments', () => {
         const a = write('a.py', '# Ana Ruiz, 1/12/2026\nx = 1\n');
         const b = write('b.py', '"""Rule loader.\nAuthor: Ana Ruiz\n"""\nimport csv\n');
         expect(checkDeveloperComments([a, b], 'Ana Ruiz', py, dir).filesWith).toBe(2);
+        // The module docstring may follow a shebang / comment lines.
+        const c = write('c2.py', '#!/usr/bin/env python3\n\n"""Author: Ana Ruiz"""\n');
+        expect(checkDeveloperComments([c], 'Ana Ruiz', py, dir).files[0].name).toBe(true);
+    });
+
+    it('Python: a function docstring\'s "name:" / "date:" parameters are not a developer header', () => {
+        const f = write('rec.py', 'import csv\n\ndef make(name, date):\n    """Make a record.\n\n    Args:\n        name: the person\n        date: when\n    """\n    return 1\n');
+        expect(checkDeveloperComments([f], 'Ana Ruiz', py, dir).files[0]).toMatchObject({ name: false, date: false });
     });
 
     it('matches the student name as a whole word only', () => {

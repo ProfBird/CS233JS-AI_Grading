@@ -5,7 +5,9 @@
   "summaryCell": "A2",
   "graderCell": "E1",
   "language": "python",
-  "skipStudents": ["Test Student"],
+  "skipStudents": [
+    "Test Student"
+  ],
   "runtimeCheck": "build",
   "mappings": [
     {
@@ -40,7 +42,7 @@
       "cell": "C11",
       "commentCell": "E11",
       "type": "llm_check",
-      "maxScore": 4,
+      "maxScore": 3,
       "criterion": "Comprehensive test program",
       "guidance": "A test program may be a separate test file, or code in the program file that calls the functions with chosen inputs and compares or prints the expected and actual results. Full credit: covers every row of the decision table and the boundary values, with expected results stated. Partial credit: some rows or no boundaries. 0: no tests of the student's own. Suggest a score up to 4."
     },
@@ -48,7 +50,7 @@
       "cell": "C12",
       "commentCell": "E12",
       "type": "build_check",
-      "maxScore": 3,
+      "maxScore": 2,
       "stockComments": {
         "full": "No syntax errors (every file compiles; the functionality checks also run the program)"
       }
@@ -57,7 +59,7 @@
       "cell": "C13",
       "commentCell": "E13",
       "type": "llm_check",
-      "maxScore": 3,
+      "maxScore": 2,
       "criterion": "Correct code syntax and logic",
       "guidance": "Check for syntax errors, logic bugs, and incorrect control flow; suggest a score up to 3."
     },
@@ -87,14 +89,14 @@
       "cell": "C18",
       "commentCell": "E18",
       "type": "test_check",
-      "maxScore": 12,
+      "maxScore": 10,
       "testId": "part2"
     },
     {
       "cell": "C19",
       "commentCell": "E19",
       "type": "llm_check",
-      "maxScore": 8,
+      "maxScore": 5,
       "criterion": "Comprehensive test program",
       "guidance": "A test program may be a separate test file, or code in the program file that calls the functions with chosen inputs and compares or prints the expected and actual results. Full credit: covers every row of the decision table and the boundary values, with expected results stated. Partial credit: some rows or no boundaries. 0: no tests of the student's own. Suggest a score up to 8."
     },
@@ -102,7 +104,7 @@
       "cell": "C20",
       "commentCell": "E20",
       "type": "build_check",
-      "maxScore": 3,
+      "maxScore": 2,
       "stockComments": {
         "full": "No syntax errors (every file compiles; the functionality checks also run the program)"
       }
@@ -111,7 +113,7 @@
       "cell": "C21",
       "commentCell": "E21",
       "type": "llm_check",
-      "maxScore": 4,
+      "maxScore": 3,
       "criterion": "Correct code syntax and logic",
       "guidance": "Check for syntax errors, logic bugs, and incorrect control flow; suggest a score up to 4."
     },

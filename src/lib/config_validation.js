@@ -238,6 +238,10 @@ function configErrors(config) {
                 && typeof map.requireAiDisclosure !== 'boolean') {
                 errors.push(`${prefix}.requireAiDisclosure: must be true or false`);
             }
+            if (map.type === 'developer_comments' && map.namePartialCredit !== undefined
+                && !(typeof map.namePartialCredit === 'number' && map.namePartialCredit > 0 && map.namePartialCredit < 1)) {
+                errors.push(`${prefix}.namePartialCredit: must be a number between 0 and 1 (exclusive)`);
+            }
             if (map.type === 'developer_comments' && map.ignoreCommentsBy !== undefined
                 && !(Array.isArray(map.ignoreCommentsBy) && map.ignoreCommentsBy.every(v => typeof v === 'string' && v.trim()))) {
                 errors.push(`${prefix}.ignoreCommentsBy: must be an array of non-empty strings`);

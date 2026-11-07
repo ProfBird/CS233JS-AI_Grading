@@ -679,6 +679,24 @@ describe('path_exists handler', () => {
 describe('developer_comments handler', () => {
     const handler = getHandler('developer_comments');
 
+    describe('namePartialCredit', () => {
+        const map = { maxScore: 1, scope: 'each', require: ['name', 'date'], namePartialCredit: 0.5 };
+        const student = files => ({ analysis: { developerComments: { filesChecked: files.length, files } } });
+        it('gives partial credit when every file has a name but a date is missing', () => {
+            const r = handler(map, student([{ path: 'a.py', name: true, date: false }, { path: 'b.py', name: true, date: true }]));
+            expect(r.score).toBe(0.5);
+            expect(r.comment).toMatch(/name present in every file, but date missing in 1 of 2/);
+        });
+        it('gives 0 when any file lacks the name', () => {
+            expect(handler(map, student([{ path: 'a.py', name: false, date: false }, { path: 'b.py', name: true, date: true }])).score).toBe(0);
+        });
+        it('gives full credit when nothing is missing, and 0 without the option', () => {
+            expect(handler(map, student([{ path: 'a.py', name: true, date: true }])).score).toBe(1);
+            const { namePartialCredit, ...plain } = map;
+            expect(handler(plain, student([{ path: 'a.py', name: true, date: false }])).score).toBe(0);
+        });
+    });
+
     it('returns maxScore when comments found', () => {
         const map = { maxScore: 1 };
         expect(handler(map, { analysis: { hasDeveloperComments: true } })).toEqual({ score: 1, comment: 'Yes' });

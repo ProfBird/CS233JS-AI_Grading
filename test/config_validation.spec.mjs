@@ -122,6 +122,8 @@ describe('validateConfig', () => {
         expect(() => validateConfig(withDev({ require: 'name' }), 'Lab01')).toThrow(/require/);
         expect(() => validateConfig(withDev({ requireAiDisclosure: true }), 'Lab01')).not.toThrow();
         expect(() => validateConfig(withDev({ requireAiDisclosure: 'yes' }), 'Lab01')).toThrow(/requireAiDisclosure/);
+        expect(() => validateConfig(withDev({ namePartialCredit: 0.5 }), 'Lab01')).not.toThrow();
+        expect(() => validateConfig(withDev({ namePartialCredit: 1.5 }), 'Lab01')).toThrow(/namePartialCredit/);
         expect(() => validateConfig(withDev({ ignoreCommentsBy: ['Brian Bird'] }), 'Lab01')).not.toThrow();
         expect(() => validateConfig(withDev({ ignoreCommentsBy: 'Brian Bird' }), 'Lab01')).toThrow(/ignoreCommentsBy/);
     });

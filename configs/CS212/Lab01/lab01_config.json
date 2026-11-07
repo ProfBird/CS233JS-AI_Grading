@@ -24,6 +24,7 @@
         "date"
       ],
       "scope": "each",
+      "namePartialCredit": 0.5,
       "ignoreCommentsBy": [
         "Brian Bird"
       ]
@@ -77,6 +78,7 @@
         "date"
       ],
       "scope": "each",
+      "namePartialCredit": 0.5,
       "ignoreCommentsBy": [
         "Brian Bird"
       ]

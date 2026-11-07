@@ -136,6 +136,9 @@ function devHeaderChecks(map) {
 //   scope:               "any" (default) — at least one source file passes; "each" — every
 //                        non-empty source file must pass (for rubrics that say "in each file"),
 //                        and the comment lists the files that don't, with what each is missing.
+//   namePartialCredit:   optional fraction (0-1) of maxScore given when every file has the
+//                        student's name (when `require` includes "name") but some other
+//                        required element (e.g. the date) is missing. Default: no partial credit.
 registerHandler('developer_comments', (map, student) => {
     const a = student.analysis || {};
     const checks = devHeaderChecks(map);
@@ -156,6 +159,17 @@ registerHandler('developer_comments', (map, student) => {
 
     if (map.scope === 'each') {
         if (failing.length === 0) return { score: map.maxScore, comment: 'Yes' };
+        const frac = map.namePartialCredit;
+        const nameCheck = checks.find(c => c.key === 'name');
+        const namePresentEverywhere = nameCheck && dc.files.every(f => nameCheck.test(f));
+        if (frac > 0 && namePresentEverywhere) {
+            const lacking = [...new Set(failing.flatMap(x => x.gaps))].join('/');
+            return {
+                score: map.maxScore * frac,
+                comment: `Partial credit: name present in every file, but ${lacking} missing in ${failing.length} of ${dc.filesChecked} files`,
+                keepComment: true,
+            };
+        }
         const shown = failing.slice(0, 5).map(x => `${x.path} (${x.gaps.join(', ')})`).join('; ')
             + (failing.length > 5 ? `; +${failing.length - 5} more` : '');
         return {

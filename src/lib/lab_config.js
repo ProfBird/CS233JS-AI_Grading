@@ -662,6 +662,22 @@ function mergeFeatureDefs(config, featureDefs) {
     return config;
 }
 
+// Builds the wizard's review-table draft from a lab's SAVED mappings instead of asking a model,
+// so an existing configuration can be revised row by row. One draft entry per scoring row, in
+// rubric order: the saved mapping whose `cell` is that row's score cell (first one wins), or a
+// "skipped" entry when none. Saved mappings that match no row (another sheet's cell, a second
+// mapping on the same cell) come back as `orphans` so the caller can write them back unchanged.
+function draftFromExistingMappings(scoringRows, mappings) {
+    const remaining = [...(mappings || [])];
+    const draft = scoringRows.map(row => {
+        const i = remaining.findIndex(m => m && m.cell === row.scoreCell);
+        if (i < 0) return { _label: row.label, cell: row.scoreCell, _skip: true };
+        const [m] = remaining.splice(i, 1);
+        return { ...m, _label: row.label };
+    });
+    return { draft, orphans: remaining };
+}
+
 function writeLab(labDir, config) {
     const configPath = path.join(labDir, `${path.basename(labDir).toLowerCase()}_config.json`);
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
@@ -680,5 +696,5 @@ export {
     applyCourseDefaults, COURSE_DEFAULTS_FORBIDDEN_KEYS,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA,
     guessMappingType,
-    assembleConfig, mergeFeatureDefs, writeLab,
+    assembleConfig, mergeFeatureDefs, writeLab, draftFromExistingMappings,
 };

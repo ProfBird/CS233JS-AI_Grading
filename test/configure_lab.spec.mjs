@@ -14,7 +14,7 @@ import { mockDriver } from './helpers/mock_driver.mjs';
 
 const {
     colLetter, excelCell, normalizeAssignmentName, cellText, isBlankRow,
-    readRubricRows, readRubricCriteria, assembleConfig, mergeFeatureDefs, writeLab,
+    readRubricRows, readRubricCriteria, assembleConfig, mergeFeatureDefs, writeLab, draftFromExistingMappings,
     findSpreadsheets, keywordsToFolderPattern, guessMappingType,
     getExistingSteps,
 } = await import('../src/lib/lab_config.js');
@@ -346,6 +346,31 @@ describe('promptFields', () => {
         const driver = mockDriver(['']);
         const result = await promptFields(driver, fields, { msg: 'Existing note' });
         expect(result).toEqual({ msg: 'Existing note' });
+    });
+});
+
+describe('draftFromExistingMappings', () => {
+    const rows = [
+        { label: 'Header', scoreCell: 'C2' },
+        { label: 'Comments', scoreCell: 'C3' },
+        { label: 'By hand', scoreCell: 'C4' },
+    ];
+    it('matches saved mappings to rubric rows by score cell, keeping every setting', () => {
+        const saved = [
+            { cell: 'C3', type: 'developer_comments', maxScore: 1, namePartialCredit: 0.5 },
+            { cell: 'C2', type: 'manual', maxScore: 2 },
+        ];
+        const { draft, orphans } = draftFromExistingMappings(rows, saved);
+        expect(draft[0]).toMatchObject({ _label: 'Header', type: 'manual' });
+        expect(draft[1]).toMatchObject({ _label: 'Comments', type: 'developer_comments', namePartialCredit: 0.5 });
+        expect(draft[2]).toEqual({ _label: 'By hand', cell: 'C4', _skip: true });
+        expect(orphans).toEqual([]);
+    });
+    it('returns mappings that match no row (or repeat a cell) as orphans', () => {
+        const saved = [{ cell: 'C2', type: 'manual' }, { cell: 'C2', type: 'lint' }, { cell: 'Z9', type: 'manual' }];
+        const { draft, orphans } = draftFromExistingMappings(rows, saved);
+        expect(draft[0].type).toBe('manual');
+        expect(orphans.map(m => m.cell)).toEqual(['C2', 'Z9']);
     });
 });
 

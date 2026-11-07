@@ -32,6 +32,25 @@ import { resolveGroups } from '../lib/student_group.js';
 
 const LOG_FILE = 'grading_log.txt';
 
+/**
+ * Log lines naming the lab config file and rubric template this run used, so a log shows
+ * which configuration produced the grades. Mirrors the lookup in grade_setup.js (config is
+ * `<labConfigDir>/<folder name lowercased>_config.json`; the rubric is `config.rubricName`
+ * beside it).
+ */
+function configLocationLines(config, labConfigDir) {
+    if (!labConfigDir) return [];
+    const lines = ['', 'Configuration files:'];
+    lines.push(` - Lab config: ${path.join(labConfigDir, `${path.basename(labConfigDir).toLowerCase()}_config.json`)}`);
+    if (config && config.rubricName) {
+        const rubric = path.join(labConfigDir, config.rubricName);
+        lines.push(` - Rubric template: ${rubric}${fs.existsSync(rubric) ? '' : ' (not found)'}`);
+    } else {
+        lines.push(' - Rubric template: none (text reports)');
+    }
+    return lines;
+}
+
 // Each phase: { name, run(students, config, dirs), when(config) }. `when` defaults to
 // always-on; a future per-language config key (e.g. skipping markup validation for a
 // non-web language) can gate a phase here without touching the loop below.
@@ -184,6 +203,7 @@ async function runPipeline(students, config, dirs, options) {
     logLines.push(`Grading Summary for ${options.labName} [${options.modeLabel}]`);
     logLines.push(`Date: ${new Date().toISOString()}`);
     logLines.push(`===================================`);
+    logLines.push(...configLocationLines(config, dirs.labConfigDir));
 
     const errors = [];
     if (generateSummary && generateSummary.errors) {
@@ -221,4 +241,4 @@ async function runPipeline(students, config, dirs, options) {
     return { successful: successfulStudents, errors };
 }
 
-export { runPipeline, filterAlreadyGraded, runPreflight, PHASES };
+export { configLocationLines, runPipeline, filterAlreadyGraded, runPreflight, PHASES };

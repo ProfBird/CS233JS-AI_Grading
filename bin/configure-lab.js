@@ -12,7 +12,7 @@ import {
     findSpreadsheets,
     getExistingAssignments, getExistingSteps,
     getExistingCourses, writeCourseConfig,
-    assembleConfig, mergeFeatureDefs, writeLab,
+    assembleConfig, mergeFeatureDefs, writeLab, draftFromExistingMappings,
     MAPPING_TYPES, MAPPING_TYPE_SCHEMA, GENERIC_MAPPING_SCHEMA, guessMappingType,
 } from '../src/lib/lab_config.js';
 
@@ -319,6 +319,8 @@ async function editRowTUI(idx, draft, scoringRows, tui) {
     const newEntry = await buildMappingEntry(tui, newType, rr, current);
     if (newEntry) {
         draft[idx] = { ...newEntry, _label: rr.label };
+        // A score cell the user changed by hand in the table survives re-editing the type.
+        if (current.cell && current.cell !== rr.scoreCell) draft[idx].cell = current.cell;
         if (rr.stockComments) draft[idx].stockComments = rr.stockComments;
         return true;
     }
@@ -327,26 +329,55 @@ async function editRowTUI(idx, draft, scoringRows, tui) {
 
 // ── Review + edit loop ────────────────────────────────────────────────────
 
-async function reviewDraft(tui, draft, rubricRows) {
+const TABLE_COLUMNS = [
+    { name: '#', editable: false },
+    { name: 'Label', editable: false },   // comes from the rubric
+    { name: 'Cell' },
+    { name: 'Type' },
+    { name: 'Max' },
+    { name: 'Notes' },
+];
+
+// Edits one value of one row. Type and Notes open the full mapping editor (the notes hold the
+// type-specific settings); Cell and Max change just that value.
+async function editCellTUI(idx, colName, draft, scoringRows, tui) {
+    const entry = draft[idx];
+    if (colName === 'Cell') {
+        while (true) {
+            const raw = (await tui.ask('Score cell (e.g. C9)', entry.cell || '')).trim().toUpperCase();
+            if (/^[A-Z]{1,3}[1-9]\d*$/.test(raw)) { entry.cell = raw; return true; }
+            tui.print('  Not a cell reference — use a column letter and row number, like C9.');
+        }
+    }
+    if (colName === 'Max') {
+        if (entry._skip) { tui.print('  This row is graded by hand — choose a Type first.'); return false; }
+        while (true) {
+            const raw = (await tui.ask('Max score', String(entry.maxScore ?? 0))).trim();
+            const n = Number(raw);
+            if (raw !== '' && Number.isFinite(n) && n >= 0) { entry.maxScore = n; return true; }
+            tui.print('  Enter a number, like 1 or 0.5.');
+        }
+    }
+    return editRowTUI(idx, draft, scoringRows, tui);
+}
+
+async function reviewDraft(tui, draft, rubricRows, { canSave = false } = {}) {
     const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
 
-    const makeItems = () => {
-        const maxLabel = Math.min(28, Math.max(5, ...draft.map(e => (e._label || '').length)));
-        const maxType  = Math.max(6, ...draft.map(e => (e._skip ? '(skip)' : (e.type || '')).length));
-        return draft.map((e, i) => {
-            const num  = String(i + 1).padStart(3);
-            const lbl  = (e._label || '').slice(0, maxLabel).padEnd(maxLabel);
-            const cell = (e.cell || '').padEnd(5);
-            const type = (e._skip ? '(skip)' : (e.type || '')).padEnd(maxType);
-            const max  = String(e._skip ? '' : (e.maxScore ?? 0)).padStart(3);
-            const note = e._skip ? 'manual' : summaryNotes(e);
-            return ` ${num} │ ${lbl} │ ${cell} │ ${type} │ ${max} │ ${note}`;
-        });
-    };
+    const getRows = () => draft.map((e, i) => [
+        String(i + 1),
+        e._label || '',
+        e.cell || '',
+        e._skip ? '(skip)' : (e.type || ''),
+        e._skip ? '' : String(e.maxScore ?? 0),
+        e._skip ? 'manual' : summaryNotes(e),
+    ]);
 
-    await tui.reviewTable(makeItems, idx => editRowTUI(idx, draft, scoringRows, tui));
+    const result = await tui.reviewTable(TABLE_COLUMNS, getRows,
+        (idx, col) => editCellTUI(idx, TABLE_COLUMNS[col].name, draft, scoringRows, tui),
+        { canSave });
 
-    return draft;
+    return { draft, saveNow: result === 'save' };
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────
@@ -365,9 +396,13 @@ async function main() {
         tui.print('\nWelcome! This wizard reads a rubric spreadsheet, uses AI to draft a');
         tui.print('mapping configuration, then lets you review and edit before saving.\n');
 
-        // 1. LLM model selection — always shown, pre-selects current model
-        const llm = await selectModel(LOCAL_CONFIG_PATH, makeHelpers(tui));
-        if (!llm) tui.print('  Proceeding with heuristic mapping (no AI).\n');
+        // 1. LLM model selection — pre-selects the current model. Asked lazily (below), because
+        //    revising an existing configuration's mappings needs no model.
+        const chooseLlm = async () => {
+            const model = await selectModel(LOCAL_CONFIG_PATH, makeHelpers(tui));
+            if (!model) tui.print('  Proceeding with heuristic mapping (no AI).\n');
+            return model;
+        };
 
         // 2. Course — selection menu or create new. Runs before the assignment step since
         // getExistingAssignments/getExistingSteps below need to be scoped to the course dir.
@@ -617,45 +652,84 @@ async function main() {
         const scoringRows = rubricRows.filter(r => !r.isSectionHeader);
         tui.print(`  ${scoringRows.length} scoring rows, ${rubricRows.length - scoringRows.length} section headers.`);
 
-        // 5. Criteria for LLM context
-        tui.print('\n--- Rubric Criteria Sheet ---');
-        const criteria = await promptRubricCriteria(tui, rubricPath);
-
-        // 6. Generate draft
-        tui.print('\n--- Generating Draft ---');
-        let draft = await generateDraft(tui, llm, labName, rubricRows, criteria, knownFeatureIds);
+        // 5-6. Draft: revise the saved mappings, or generate a new draft from the rubric.
+        let draft;
+        let orphanMappings = [];
+        let reviseExisting = false;
+        if (Array.isArray(existingConfig?.mappings) && existingConfig.mappings.length > 0) {
+            const mode = await tui.askOptions(
+                `${path.basename(configPath)} already has ${existingConfig.mappings.length} mappings. What now?`,
+                [
+                    { label: 'Revise existing mappings', value: 'revise', color: 'green',
+                      desc: 'Open the saved mappings in the review table and edit rows (no AI draft)' },
+                    { label: 'Regenerate from the rubric', value: 'regenerate',
+                      desc: 'Draft all mappings again from the rubric, replacing the saved ones' },
+                ], 0);
+            reviseExisting = mode === 'revise';
+        }
+        if (reviseExisting) {
+            const loaded = draftFromExistingMappings(scoringRows, existingConfig.mappings);
+            draft = loaded.draft;
+            orphanMappings = loaded.orphans;
+            if (orphanMappings.length > 0) {
+                tui.print(`  ${orphanMappings.length} saved mapping(s) match no rubric row (cells: ${orphanMappings.map(m => m.cell || '?').join(', ')}); they are kept unchanged.`);
+            }
+        } else {
+            const llm = await chooseLlm();
+            tui.print('\n--- Rubric Criteria Sheet ---');
+            const criteria = await promptRubricCriteria(tui, rubricPath);
+            tui.print('\n--- Generating Draft ---');
+            draft = await generateDraft(tui, llm, labName, rubricRows, criteria, knownFeatureIds);
+        }
 
         // 7. Review + edit
         tui.print('\n--- Review Draft (use arrow keys to navigate, Enter to edit, a to accept) ---');
-        draft = await reviewDraft(tui, draft, rubricRows);
+        // When revising a saved config, `s` in the table saves right away and skips the
+        // assignment-settings questions (the saved settings are kept as they are).
+        const canSave = reviseExisting && !!existingConfig?.runtimeCheck;
+        const reviewed = await reviewDraft(tui, draft, rubricRows, { canSave });
+        draft = reviewed.draft;
+        const saveNow = reviewed.saveNow;
 
-        // 8. Global config questions
-        tui.print('\n--- Assignment Settings ---');
-        const ex           = existingConfig || {};
-        const titleText    = await tui.ask('Assignment title', ex.titleText || labName);
-        const languageOpts = [
-            { label: 'javascript', value: 'javascript', desc: 'ESLint + npm install/build (default)' },
-            { label: 'typescript', value: 'typescript', desc: 'typescript-eslint + tsc --noEmit' },
-            { label: 'python',     value: 'python',     desc: 'ruff + py_compile + pytest' },
-            { label: 'cpp',        value: 'cpp',        desc: 'g++/clang compiler diagnostics' },
-            { label: 'csharp',     value: 'csharp',     desc: 'dotnet build/test' },
-        ];
-        const langIdx      = Math.max(0, languageOpts.findIndex(o => o.value === (ex.language || 'javascript')));
-        const language     = await tui.askOptions('Language', languageOpts, langIdx);
-        const runtimeOpts  = [
-            { label: 'browser',   value: 'browser',   desc: 'Puppeteer headless browser' },
-            { label: 'build',     value: 'build',     desc: 'Install + build (npm/tsc/py_compile/g++/dotnet, per language)' },
-            { label: 'both',      value: 'both',       desc: 'Browser + build' },
-            { label: 'run_check', value: 'run_check', desc: 'Build (if needed) then run the program directly, checking stdout' },
-        ];
-        const rtIdx        = Math.max(0, runtimeOpts.findIndex(o => o.value === ex.runtimeCheck));
-        const runtimeCheck = await tui.askOptions('Runtime check mode', runtimeOpts, rtIdx);
-        const summaryCell  = await tui.ask('Summary cell (e.g. A2, or blank)', ex.summaryCell || '');
-        const graderCell   = await tui.ask('Grader cell (e.g. E1, or blank)',  ex.graderCell  || '');
-        const titleCell    = await tui.ask('Title cell (e.g. A1, or blank)',   ex.titleCell   || '');
-        const variations   = await promptVariations(tui, ex.variations);
-        const llmCheck     = await promptAiCheckSettings(tui, ex.llmCheck, draft.some(e => !e._skip && e.type === 'llm_check'));
-        const skipStudents = await promptSkipStudents(tui, ex.skipStudents);
+        // 8. Global config questions (skipped on save & quit: the saved settings stay)
+        const ex = existingConfig || {};
+        let titleText, language, runtimeCheck, summaryCell, graderCell, titleCell;
+        let variations, llmCheck, skipStudents;
+        if (saveNow) {
+            tui.print('\n  Saving without the assignment-settings questions (existing settings kept).');
+            titleText    = ex.titleText || labName;
+            language     = ex.language || 'javascript';
+            runtimeCheck = ex.runtimeCheck;
+            summaryCell  = ex.summaryCell || '';
+            graderCell   = ex.graderCell || '';
+            titleCell    = ex.titleCell || '';
+        } else {
+            tui.print('\n--- Assignment Settings ---');
+            titleText    = await tui.ask('Assignment title', ex.titleText || labName);
+            const languageOpts = [
+                { label: 'javascript', value: 'javascript', desc: 'ESLint + npm install/build (default)' },
+                { label: 'typescript', value: 'typescript', desc: 'typescript-eslint + tsc --noEmit' },
+                { label: 'python',     value: 'python',     desc: 'ruff + py_compile + pytest' },
+                { label: 'cpp',        value: 'cpp',        desc: 'g++/clang compiler diagnostics' },
+                { label: 'csharp',     value: 'csharp',     desc: 'dotnet build/test' },
+            ];
+            const langIdx      = Math.max(0, languageOpts.findIndex(o => o.value === (ex.language || 'javascript')));
+            language     = await tui.askOptions('Language', languageOpts, langIdx);
+            const runtimeOpts  = [
+                { label: 'browser',   value: 'browser',   desc: 'Puppeteer headless browser' },
+                { label: 'build',     value: 'build',     desc: 'Install + build (npm/tsc/py_compile/g++/dotnet, per language)' },
+                { label: 'both',      value: 'both',       desc: 'Browser + build' },
+                { label: 'run_check', value: 'run_check', desc: 'Build (if needed) then run the program directly, checking stdout' },
+            ];
+            const rtIdx        = Math.max(0, runtimeOpts.findIndex(o => o.value === ex.runtimeCheck));
+            runtimeCheck = await tui.askOptions('Runtime check mode', runtimeOpts, rtIdx);
+            summaryCell  = await tui.ask('Summary cell (e.g. A2, or blank)', ex.summaryCell || '');
+            graderCell   = await tui.ask('Grader cell (e.g. E1, or blank)',  ex.graderCell  || '');
+            titleCell    = await tui.ask('Title cell (e.g. A1, or blank)',   ex.titleCell   || '');
+            variations   = await promptVariations(tui, ex.variations);
+            llmCheck     = await promptAiCheckSettings(tui, ex.llmCheck, draft.some(e => !e._skip && e.type === 'llm_check'));
+            skipStudents = await promptSkipStudents(tui, ex.skipStudents);
+        }
 
         // 9. Build and write
         // Feature mappings carry a `_featureDef` (their analysis.features[] definition);
@@ -665,7 +739,8 @@ async function main() {
             .map(e => e._featureDef);
         const mappings = draft
             .filter(e => !e._skip)
-            .map(({ _label, _skip, _featureDef, ...rest }) => rest);
+            .map(({ _label, _skip, _featureDef, ...rest }) => rest)
+            .concat(orphanMappings);
 
         // assembleConfig deep-clones existingConfig and overwrites only the keys the
         // wizard owns, so a re-run preserves customAnalyzer, validate, nameCheck,

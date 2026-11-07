@@ -149,6 +149,18 @@ describe('runPipeline — orchestration with no extracted code', () => {
         expect(logContent).toContain('Extracted: Extraction: Failed to clone GitHub repository');
     });
 
+    it('lists the lab config and rubric template locations in the log', async () => {
+        const config = { runtimeCheck: 'build', mappings: [], rubricName: 'Rubric.xlsm' };
+        await runPipeline(
+            [{ name: 'S', error: 'x' }], config,
+            { artifactsDir, labConfigDir },
+            { regrade: true, skipRubric: true, textReport: false, labName: 'TestLab', modeLabel: 'NORMAL' }
+        );
+        const log = readFileSync(join(artifactsDir, 'grading_log.txt'), 'utf8');
+        expect(log).toContain(`Lab config: ${join(labConfigDir, 'config_config.json')}`);
+        expect(log).toContain(`Rubric template: ${join(labConfigDir, 'Rubric.xlsm')} (not found)`);
+    });
+
     it('writes per-phase artifact reports into artifactsDir', async () => {
         const students = [{ name: 'NoCode' }];
         const config = { runtimeCheck: 'build', mappings: [] };

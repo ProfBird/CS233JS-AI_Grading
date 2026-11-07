@@ -20,7 +20,7 @@ import { pathToFileURL } from 'url';
 import { spawnSync } from 'child_process';
 import extractCode, { CODE_DIR, REPO_DIR } from '../src/pipeline/extract_code.js';
 import importFromCanvas from '../src/pipeline/extract_code_canvas.js';
-import { runPipeline } from '../src/pipeline/run_pipeline.js';
+import { runPipeline, configLocationLines } from '../src/pipeline/run_pipeline.js';
 import { resolveGradeSetup, SetupError } from '../src/lib/grade_setup.js';
 import { createDriver } from '../src/lib/prompt_driver.js';
 import { setRecentPathsFile } from '../src/lib/path_browser.js';
@@ -186,6 +186,7 @@ async function main() {
         logLines.push(`Extraction Summary for ${labName} [${modeLabel}]`);
         logLines.push(`Date: ${new Date().toISOString()}`);
         logLines.push(`===================================`);
+        logLines.push(...configLocationLines(config, labConfigDir));
         logLines.push(`\nExtracted (${extracted.length}):`);
         extracted.forEach(s => logLines.push(` - ${s.name}`));
         const extractErrors = students.filter(s => s.error);

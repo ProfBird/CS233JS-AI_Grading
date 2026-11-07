@@ -280,14 +280,21 @@ class TUI {
     //
     // The loop repeats until the user presses A (accept all).
 
-    async reviewTable(makeItems, editRow) {
+    /**
+     * Full-screen review table. ↑↓ pick a row, ←→ pick a column, Enter edits the selected
+     * value, `a` accepts. `columns` is [{ name, editable? }]; `getRows()` returns one array of
+     * cell strings per row (re-called after each edit); `editCell(rowIdx, colIdx)` resolves
+     * true when something changed. With `opts.canSave`, `s` also closes the table. Resolves
+     * 'accept' (a) or 'save' (s: the caller should write the config now and skip further questions).
+     */
+    async reviewTable(columns, getRows, editCell, opts = {}) {
         while (true) {
-            const done = await this._tableView(makeItems, editRow);
-            if (done) break;
+            const done = await this._tableView(columns, getRows, editCell, opts);
+            if (done) return done;
         }
     }
 
-    _tableView(makeItems, editRow) {
+    _tableView(columns, getRows, editCell, opts = {}) {
         return new Promise(resolve => {
             const overlay = blessed.box({
                 parent: this.screen,
@@ -297,25 +304,55 @@ class TUI {
                 style: { border: { fg: 'cyan' } },
             });
 
+            let col = Math.max(0, columns.findIndex(c => c.editable !== false));
+            const esc = t => String(t).replace(/[{}]/g, ch => (ch === '{' ? '{open}' : '{close}'));
+
+            // Cells are padded to the widest value in their column; the selected cell of the
+            // selected row is highlighted (yellow) inside the row's own cyan selection bar.
+            const render = () => {
+                const rows = getRows();
+                const widths = columns.map((c, i) => Math.min(34, Math.max(c.name.length, ...rows.map(r => String(r[i] ?? '').length))));
+                const fit = (v, i) => esc(String(v ?? '').slice(0, widths[i]).padEnd(widths[i]));
+                const items = rows.map((r, ri) => r.map((v, i) =>
+                    (ri === sel && i === col) ? `{yellow-bg}{black-fg}${fit(v, i)}{/}` : fit(v, i)).join(' │ '));
+                header.setContent(columns.map((c, i) => (i === col ? `{yellow-fg}${esc(c.name.padEnd(widths[i]))}{/}` : esc(c.name.padEnd(widths[i])))).join(' │ '));
+                return items;
+            };
+            let sel = 0;
+
+            const header = blessed.text({
+                parent: overlay, top: 0, left: 1, height: 1, width: '100%-4', tags: true, content: '',
+                style: { fg: 'white', bold: true },
+            });
             const list = blessed.list({
                 parent: overlay,
                 top: 1, left: 1, width: '100%-4', height: '100%-5',
-                keys: true, vi: true, mouse: false,
-                items: makeItems(),
-                style: {
-                    selected: { bg: 'cyan', fg: 'black', bold: true },
-                },
+                keys: true, vi: true, mouse: false, tags: true,
+                items: [],
+                style: { selected: { bg: 'cyan', fg: 'black', bold: true } },
                 scrollbar: { ch: '│' },
             });
 
             blessed.text({
                 parent: overlay,
                 bottom: 1, left: 2, height: 1, width: '100%-4',
-                content: '  a: accept all   Enter: edit selected row   ^C: exit',
+                content: `  ←→: pick value   ↑↓: pick row   Enter: edit value   a: accept all${opts.canSave ? '   s: save & quit' : ''}   ^C: exit`,
                 style: { fg: 'cyan' },
             });
 
-            this.setStatus('Review draft — a: accept all  Enter: edit  ↑↓/j/k: navigate');
+            this.setStatus(`Review draft — ←→ value  ↑↓ row  Enter: edit  a: accept all${opts.canSave ? '  s: save & quit' : ''}`);
+
+            // setItems/select fire 'select item' themselves, so ignore those while refreshing.
+            let refreshing = false;
+            const refresh = () => {
+                refreshing = true;
+                try {
+                    const items = render();
+                    list.setItems(items);
+                    list.select(sel);
+                } finally { refreshing = false; }
+                this.screen.render();
+            };
 
             const close = accepted => {
                 overlay.detach();
@@ -324,17 +361,35 @@ class TUI {
                 resolve(accepted);
             };
 
-            list.key(['a', 'A'], () => close(true));
+            const moveCol = step => {
+                // Skip non-editable columns (the row number) so the cursor always lands on a value.
+                let next = col;
+                for (let n = 0; n < columns.length; n++) {
+                    next = (next + step + columns.length) % columns.length;
+                    if (columns[next].editable !== false) break;
+                }
+                col = next;
+                refresh();
+            };
+
+            list.key(['left', 'h'], () => moveCol(-1));
+            list.key(['right', 'l'], () => moveCol(1));
+            list.on('select item', (_, idx) => {
+                if (!refreshing && idx !== sel) { sel = idx; refresh(); }
+            });
+            list.key(['a', 'A'], () => close('accept'));
+            if (opts.canSave) list.key(['s', 'S'], () => close('save'));
             list.key(['C-c'], () => this.exit(130));
 
             list.on('select', (_, idx) => {
-                editRow(idx).then(changed => {
-                    if (changed) list.setItems(makeItems());
+                sel = idx;
+                editCell(idx, col).then(() => {
+                    refresh();
                     list.focus();
-                    this.screen.render();
                 });
             });
 
+            refresh();
             list.focus();
             this.screen.render();
         });
